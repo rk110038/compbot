@@ -1,5 +1,6 @@
 {% macro badge(value, label=None) -%}
-<span class="badge b-{{ value }}">{{ (label or value or '').replace('_', ' ') }}</span>
+{%- set labels = {'dry_run_ok': 'dry run – NOT submitted', 'dry_run': 'dry run', 'unverified': 'submitted – unconfirmed'} -%}
+<span class="badge b-{{ value }}">{{ (label or labels.get(value) or value or '').replace('_', ' ') }}</span>
 {%- endmacro %}
 
 {% macro comp_row(c) -%}

@@ -616,7 +616,7 @@ class Browser:
                     ok = _apply(frame, f, a)
                     details["fields"].append({"label": f.human_label, "action": a.kind, "source": a.source,
                                               "note": a.note, "ok": ok,
-                                              "value": a.value if a.source in ("answer", "llm") else None})
+                                              "value": a.value if a.source in ("answer", "llm", "email", "email_confirm") else None})
                     if not ok and (f.required or a.source == "answer"):
                         failed.append(f.human_label)
                     done_idx.add(f.idx)
