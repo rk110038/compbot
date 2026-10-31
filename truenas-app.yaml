@@ -3,8 +3,7 @@
 #
 # Before installing:
 #   1. Create a dataset, e.g. /mnt/tank/apps/compbot, owned by the "apps" user (568:568).
-#   2. The image is built by GitHub Actions on every push to main and published to GHCR.
-#      Make the package public once (github.com/rk110038 -> Packages -> compbot -> Package settings -> Public).
+#   2. The image is built by GitHub Actions on every push to main and published (public) to GHCR.
 #      To update: push to main, wait for the Action to go green, then in TrueNAS stop/start the app (it re-pulls).
 #      (Alternative: build on the NAS with `docker build -t compbot:latest .`, set image: compbot:latest
 #       and pull_policy: never.)

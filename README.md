@@ -35,7 +35,7 @@ In **Datasets**, create e.g. `tank/apps/compbot` (the "Apps" preset is fine). It
 
 **Option A: GitHub Container Registry (default in `truenas-app.yaml`)**
 
-Every push to `main` runs `.github/workflows/docker.yml` on GitHub's free hosted runners (no self-hosted runner needed). It runs the tests, then publishes `ghcr.io/rk110038/compbot:latest`. After the first successful run, make the package public once: **github.com/rk110038 → Packages → compbot → Package settings → Change visibility → Public**. It contains no secrets, and being public lets TrueNAS pull it without credentials. To update, push, wait for the Action to go green, then stop and start the app in TrueNAS so it re-pulls the image.
+Every push to `main` runs `.github/workflows/docker.yml` on GitHub's free hosted runners (no self-hosted runner needed). It runs the tests, then publishes `ghcr.io/rk110038/compbot:latest`. Because the repo is public, the package is public too, so TrueNAS can pull it without credentials. (If you ever make the repo private, either make the package public under **github.com/rk110038 → Packages → compbot → Package settings**, or add a GHCR credential in TrueNAS.) To update, push, wait for the Action to go green, then stop and start the app in TrueNAS so it re-pulls the image.
 
 **Option B: build on the NAS**
 
