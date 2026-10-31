@@ -1,10 +1,14 @@
-# Plain Docker Compose (any Linux host). For TrueNAS use truenas-app.yaml instead.
-#   cp .env.example .env   # fill it in
-#   docker compose up -d --build
+# Plain Docker Compose (e.g. from the TrueNAS shell, or any Linux host).
+#   1. Put this file and .env (copy of .env.example, filled in) in a folder, e.g. /mnt/appspool/compbot
+#   2. sudo mkdir -p data && sudo chown -R 568:568 data     # container runs as UID/GID 568 (TrueNAS "apps")
+#   3. sudo docker compose up -d                              # pulls ghcr.io/rk110038/compbot:latest
+#   Update later:  sudo docker compose pull && sudo docker compose up -d
 services:
   compbot:
-    build: .
-    image: compbot:latest
+    image: ghcr.io/rk110038/compbot:latest
+    pull_policy: always
+    # To build from a source checkout instead of pulling, comment out pull_policy and uncomment:
+    # build: .
     container_name: compbot
     restart: unless-stopped
     init: true
