@@ -1,0 +1,29 @@
+{% macro badge(value, label=None) -%}
+<span class="badge b-{{ value }}">{{ (label or value or '').replace('_', ' ') }}</span>
+{%- endmacro %}
+
+{% macro comp_row(c) -%}
+<tr>
+  <td class="nowrap small muted">{{ c.posted_at | local('%d %b') }}</td>
+  <td class="title"><a href="/competitions/{{ c.id }}">{{ c.prize or c.title }}</a>
+    {% if c.is_daily %}<span class="badge">daily</span>{% endif %}
+    {% if c.is_multi %}<span class="badge">{{ c.entry_urls|length }} sites</span>{% endif %}
+    {% if c.needs_review %}<span class="badge b-warn">check entry</span>{% endif %}
+    <div class="small muted">{{ c.status_reason[:140] }}</div></td>
+  <td class="nowrap">{{ c.closes_label }}<div class="small muted">{{ c.closes_on | days_left }}</div></td>
+  <td>{{ badge(c.method) }}</td>
+  <td>{{ badge(c.status) }}</td>
+  <td>{% if c.status == 'entered' or c.entry_count %}{{ badge(c.outcome) }}{% endif %}</td>
+  <td class="nowrap">{% if c.prize_value %}£{{ '{:,.0f}'.format(c.prize_value) }}{% endif %}</td>
+</tr>
+{%- endmacro %}
+
+{% macro pager(page, pages) -%}
+{% if pages > 1 %}
+<div class="pager">
+  {% if page > 1 %}<a class="btn small" href="{{ qs(request, page=page-1) }}">‹ Prev</a>{% endif %}
+  <span class="muted">Page {{ page }} of {{ pages }}</span>
+  {% if page < pages %}<a class="btn small" href="{{ qs(request, page=page+1) }}">Next ›</a>{% endif %}
+</div>
+{% endif %}
+{%- endmacro %}

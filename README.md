@@ -1,0 +1,146 @@
+# compbot 🏆
+
+A self-hosted competition assistant for TrueNAS SCALE (or any Docker host). Every day it:
+
+![compbot dashboard](docs/dashboard.png)
+
+1. **Discovers** new competitions posted in MoneySavingExpert's [Competitions Time](https://forums.moneysavingexpert.com/categories/competitions-time) forum (via the forum's public API).
+2. **Triages** each one: web form, email entry, Instagram/Facebook/X, Gleam, app/account-only, purchase-required, magazine puzzles. It pulls out the closing date, entry link(s), the answer posted by other members, and "daily" / multi-site (MD) flags.
+3. **Enters** the ones it can, using your saved details: it fills web forms in a headless Chromium (Playwright) and sends email entries from your competition Gmail. It takes screenshots before and after every submission.
+4. **Checks your competition Gmail** (Inbox and Spam) for wins among the noise. It scores each email, matches it to a competition you entered, clicks "confirm your entry" links, flags likely scams, and alerts you on a possible win.
+5. **Logs everything** in a SQLite database with a web GUI covering the dashboard, every competition and attempt, a manual queue, an inbox triage view, wins and an activity log.
+
+## What it deliberately won't do
+
+* **Solve CAPTCHAs or dodge bot detection.** If a form has reCAPTCHA, hCaptcha or Turnstile, or the site blocks automation, the comp goes to your **manual queue** with a screenshot.
+* **Ignore the rules.** Many UK T&Cs say *"entries made using a script, macro or automated means will be void"*. compbot reads the page and its T&Cs and, by default, sends those comps to the manual queue with the exact clause quoted. An automated entry there could cost you the prize.
+* **Use your social media accounts.** Instagram/Facebook/X comps are skipped, or queued for you if you prefer.
+* **Spend money.** Purchase-required comps are skipped.
+
+Expect roughly a third to a half of web-form comps to be enterable automatically. The rest land in the manual queue with everything you need: the link, the answer and click-to-copy details.
+
+## Install on TrueNAS SCALE (24.10 Electric Eel or later)
+
+### 1. Prepare a Gmail account for competitions
+
+1. Turn on **2-Step Verification** for the Google account.
+2. Create an **App password** at <https://myaccount.google.com/apppasswords>, named e.g. "compbot".
+3. IMAP is on by default for Gmail. compbot only reads mail (it never deletes or marks it as read).
+
+### 2. Create a dataset
+
+In **Datasets**, create e.g. `tank/apps/compbot` (the "Apps" preset is fine). It must be writable by the **apps** user (UID/GID 568), which is the user the container runs as. The database and screenshots live here, so include it in your snapshots and backups.
+
+### 3. Get the image onto the NAS
+
+**Option A: GitHub Container Registry (default in `truenas-app.yaml`)**
+
+Every push to `main` runs `.github/workflows/docker.yml` on GitHub's free hosted runners (no self-hosted runner needed). It runs the tests, then publishes `ghcr.io/rk110038/compbot:latest`. After the first successful run, make the package public once: **github.com/rk110038 → Packages → compbot → Package settings → Change visibility → Public**. It contains no secrets, and being public lets TrueNAS pull it without credentials. To update, push, wait for the Action to go green, then stop and start the app in TrueNAS so it re-pulls the image.
+
+**Option B: build on the NAS**
+
+Copy this folder to the NAS (for example into `/mnt/tank/apps/compbot-src` over SMB), then in **System → Shell**:
+
+```bash
+sudo docker build -t compbot:latest /mnt/tank/apps/compbot-src
+```
+
+Then set `image: compbot:latest` and `pull_policy: never` in the YAML.
+
+### 4. Install the app
+
+**Apps → Discover Apps → ⋮ → Install via YAML**. Paste [`truenas-app.yaml`](truenas-app.yaml), change every `CHANGE_ME` (dataset path, GUI password, Gmail address and app password), and save.
+
+### 5. First run
+
+1. Open `http://<truenas-ip>:8085` and sign in.
+2. **Settings**: fill in your details (name, email, address, date of birth, phone). Leave **Entry mode = Dry run** for now.
+3. **Dashboard → Discover → Run now.** The first run imports threads from the last 14 days (configurable).
+4. **Dashboard → Enter competitions → Run now.** In dry-run mode it fills each form, screenshots it and *doesn't* submit. Open a few competitions and check the screenshots and the field-by-field table.
+5. Happy? **Settings → Entry mode = Auto.** From then on it runs on schedule.
+
+Default schedule (Europe/London): discover 07:00, enter 07:30, inbox 08:00 and 20:00, maintenance 03:00. Change these with the `*_CRON` variables.
+
+## Using it
+
+| Page | What it's for |
+|---|---|
+| **Dashboard** | Totals (entered, won, lost, win rate), entries per day, jobs with **Run now**, comps closing soon, recent activity |
+| **Competitions** | Every thread found, filterable by status, method and outcome, with CSV export. Each comp has a detail page with the original post, every attempt with screenshots, related emails and buttons to enter, dry-run, mark won/lost, skip, edit the answer or link |
+| **Manual queue** | Comps that need you. Click-to-copy answers and personal details, **Open ↗**, then **I've entered it**. Marking manual entries matters, because it lets the inbox checker match a win email to them |
+| **Inbox** | Classified emails (possible win, loss, confirm, entry acknowledgement, scam suspect, promo). Confirm or reject wins and link emails to competitions |
+| **Wins** | Confirmed and possible wins with total stated prize value |
+| **Log** | Everything compbot and you did, plus job run history |
+
+Statuses: `queued` (will be auto-entered) → `entered` (or `manual`, `skipped`, `expired`). Outcomes: `pending` → `possible_win` → `won` / `lost`. Entered comps are marked **lost** automatically 60 days after closing if no win email arrived (most promoters only contact winners).
+
+**Daily comps** (tagged "Daily") are re-entered every day until they close. **(MD) threads** list the same prize on several magazine sites, and compbot enters each one (configurable).
+
+## Configuration
+
+Secrets and infrastructure go in environment variables (in the YAML). Everything else is under **Settings** in the GUI.
+
+| Variable | Default | Notes |
+|---|---|---|
+| `WEB_USER` / `WEB_PASSWORD` | `admin` / — | HTTP Basic auth for the GUI. **Set a password.** |
+| `GMAIL_ADDRESS` / `GMAIL_APP_PASSWORD` | — | Competition Gmail. Used for IMAP (reading) and SMTP (email entries, notifications) |
+| `IMAP_FOLDERS` | `INBOX,[Gmail]/Spam` | Winner emails often land in Spam |
+| `NOTIFY_EMAIL` | — | Where to send "possible win" alerts |
+| `NTFY_URL` | — | e.g. `https://ntfy.sh/<secret-topic>` for phone push alerts |
+| `DISCOVER_CRON`, `ENTER_CRON`, `INBOX_CRON`, `MAINTENANCE_CRON` | see above | Standard 5-field cron |
+| `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY` | — | Optional OpenAI-compatible endpoint (see below) |
+| `TZ` | `Europe/London` | |
+| `DATA_DIR` | `/data` | |
+
+GUI settings include the daily entry cap (default 25), delays between entries, retries, how to treat social and Gleam comps, skip keywords (e.g. `Glasgow, Leeds` for local-only prizes), minimum prize value, marketing opt-ins (newsletter comps always opt in, because that *is* the entry; third-party marketing is never ticked unless required), T&C respect, and auto-confirm links.
+
+### Optional AI helper
+
+compbot works without an LLM. If you point it at an OpenAI-compatible endpoint (the **Ollama** app from the TrueNAS catalogue works, as do OpenAI and Azure OpenAI), it will also:
+
+* read posts the rules couldn't parse (finding the entry link and answer),
+* map form fields the heuristics don't recognise (it gets field **labels only** and replies with profile *keys*; your personal details are filled in locally and never sent),
+* optionally double-check possible-win emails (off by default, because that sends the subject and a snippet; best with a local model).
+
+## Privacy & safety
+
+* Your details live only in the SQLite database on your dataset.
+* The GUI requires a password. POSTs are checked for same-origin. Screenshots are only served to signed-in users.
+* Win emails are never auto-confirmed as wins: you confirm them. Emails that ask for fees, bank details or crypto are flagged as **scam suspect**. Genuine promoters never charge you to claim a prize.
+* compbot polls the MSE API once a day with a 1.5 s pause between pages, and spaces out entries (20–60 s by default).
+* Links from forum posts and emails are untrusted. The browser, T&C fetches and confirmation clicks refuse private/LAN/loopback addresses, so a malicious link can't reach your NAS or home network.
+* Entries that were submitted but showed no confirmation message are flagged **check entry**, with before/after screenshots, rather than silently counted.
+
+## Local development
+
+```powershell
+python -m venv .venv; .\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt pytest
+python -m playwright install chromium
+$env:DATA_DIR = "$PWD\data"; $env:WEB_PASSWORD = "dev"
+python -m pytest -q                       # parser, form mapper, inbox classifier, and browser tests against local fixtures
+python -m uvicorn app.main:app --port 8765
+```
+
+Project layout:
+
+```
+app/
+  sources/mse.py     MSE forum API client
+  analyse.py         title/post parsing and triage rules
+  entry/forms.py     form-field → profile/answer heuristics, T&C clause detector (pure, unit-tested)
+  entry/browser.py   Playwright engine: cookies, CAPTCHA/bot-block detection, form choice, fill, submit, verify
+  entry/emailer.py   email entries + notifications (Gmail SMTP)
+  inbox.py           Gmail IMAP fetch + win/loss/confirm/scam classifier + comp matching
+  jobs.py            discover / enter / inbox / maintenance jobs
+  main.py            FastAPI GUI, auth, scheduler
+  llm.py             optional OpenAI-compatible client
+```
+
+## Troubleshooting
+
+* **Lots of `blocked` / `captcha` results.** That's the sites saying no to bots. They're in the manual queue.
+* **`needs_input`.** A required field compbot couldn't map (often a tie-breaker or an unknown answer). Add the answer on the competition page and click **Re-queue**, or enter it yourself.
+* **Inbox shows nothing.** Check the Gmail app password and that `GMAIL_ADDRESS` matches the account. Look in **Log** for IMAP errors.
+* **Chromium crashes.** Make sure `shm_size: 1gb` is in the YAML and the app has at least 1–2 GB RAM.
+* **Permission denied on /data.** The dataset must be writable by UID/GID 568 (the TrueNAS *apps* user).

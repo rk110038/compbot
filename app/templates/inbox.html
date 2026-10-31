@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge, pager with context %}
+{% block title %}Inbox{% endblock %}
+{% block content %}
+<h1>Inbox</h1>
+<p class="muted">Emails from your competition Gmail, classified automatically. <b>Possible wins</b> need your review: genuine promoters never ask for a fee or bank details.</p>
+<div class="tabs">
+  {% for cat in cats %}<a href="/inbox?category={{ cat }}" class="{{ 'active' if category == cat }}">{{ cat.replace('_', ' ') }} ({{ counts.get(cat, 0) }})</a>{% endfor %}
+  <a href="/inbox?category=" class="{{ 'active' if not category }}">all</a>
+</div>
+<div class="card" style="padding:0">
+<table>
+  <tr><th>Received</th><th>From / subject</th><th>Class</th><th>Competition</th><th></th></tr>
+  {% for e in rows %}
+  {% set c = comps.get(e.competition_id) if e.competition_id else None %}
+  <tr>
+    <td class="nowrap small">{{ e.received_at | local }}<div class="muted">{{ e.folder }}</div></td>
+    <td><b>{{ e.subject }}</b><div class="small muted">{{ e.from_name }} &lt;{{ e.from_addr }}&gt;</div>
+      <details><summary class="small">Preview & signals (score {{ e.score }})</summary>
+        <div class="post small">{{ e.snippet[:1200] }}</div>
+        <div class="small muted">{{ e.signals | join(' · ') }}</div>
+        {% if e.action %}<div class="small">Action: {{ e.action }}</div>{% endif %}
+      </details></td>
+    <td>{{ badge(e.category) }}{% if e.reviewed %}<div class="small muted">reviewed</div>{% endif %}</td>
+    <td class="small">{% if c %}<a href="/competitions/{{ c.id }}">{{ (c.prize or c.title)[:60] }}</a>{% else %}<span class="muted">not matched</span>{% endif %}</td>
+    <td>
+      <form method="post" action="/inbox/{{ e.id }}/action" class="actions">
+        <select name="competition_id" style="max-width:200px">
+          <option value="">{{ 'Keep match' if c else 'Link to…' }}</option>
+          {% for rc in recent %}<option value="{{ rc.id }}">{{ (rc.prize or rc.title)[:60] }}</option>{% endfor %}
+        </select>
+        <button class="btn small green" name="action" value="confirm_win">🏆 It's a win</button>
+        <button class="btn small" name="action" value="not_win">Not a win</button>
+        <button class="btn small" name="action" value="loss">Loss</button>
+        <button class="btn small" name="action" value="link">Link</button>
+      </form>
+    </td>
+  </tr>
+  {% else %}<tr><td colspan="5" class="muted">No emails in this category{% if not cfg.mail_enabled %} (Gmail isn't configured){% endif %}.</td></tr>{% endfor %}
+</table>
+</div>
+{{ pager(page, pages) }}
+{% endblock %}

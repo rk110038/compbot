@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge with context %}
+{% block title %}{{ c.prize or c.title }}{% endblock %}
+{% block content %}
+<p class="small"><a href="/competitions">‹ All competitions</a></p>
+<h1>{{ c.title }}</h1>
+<div class="actions" style="margin-bottom:14px">
+  {{ badge(c.method) }} {{ badge(c.status) }} {% if c.status == 'entered' or c.entry_count %}{{ badge(c.outcome) }}{% endif %}
+  {% for t in c.tags %}<span class="badge">{{ t }}</span>{% endfor %}
+  <span class="muted">· {{ c.status_reason }}</span>
+</div>
+{% if c.needs_review %}
+<div class="banner warn actions">⚠️ compbot submitted this entry but didn't see a confirmation message. Check the "after submit" screenshot below.
+  <form class="inline" method="post" action="/competitions/{{ c.id }}/action"><input type="hidden" name="action" value="confirm_entry"><button class="btn small green">Looks entered</button></form>
+  <form class="inline" method="post" action="/competitions/{{ c.id }}/action"><input type="hidden" name="action" value="requeue"><button class="btn small">Try again</button></form>
+</div>
+{% endif %}
+
+<div class="grid three">
+  <div class="grid">
+    <div class="card">
+      <h2>Actions</h2>
+      <div class="actions">
+        {% for e in c.entry_urls %}<a class="btn" href="{{ e }}" target="_blank" rel="noopener noreferrer">Open entry page{% if c.entry_urls|length > 1 %} {{ loop.index }}{% endif %} ↗</a>{% endfor %}
+        <a class="btn" href="{{ c.thread_url }}" target="_blank" rel="noopener noreferrer">MSE thread ↗</a>
+        {% set btns = [('enter_now', 'Enter automatically now', 'primary')] if settings.entry_mode == 'auto' else [] %}
+        {% for a, label, cls in btns + [('dry_run_now', 'Dry-run now', ''), ('mark_entered', "I've entered it", 'green')] %}
+        <form class="inline" method="post" action="/competitions/{{ c.id }}/action"><input type="hidden" name="action" value="{{ a }}"><button class="btn {{ cls }}">{{ label }}</button></form>
+        {% endfor %}
+      </div>
+      <div class="actions" style="margin-top:8px">
+        {% for a, label in [('requeue', 'Re-queue'), ('manual', 'Move to manual'), ('skip', 'Skip'), ('won', '🏆 Mark won'), ('lost', 'Mark lost'), ('pending', 'Reset outcome')] %}
+        <form class="inline" method="post" action="/competitions/{{ c.id }}/action"><input type="hidden" name="action" value="{{ a }}"><button class="btn small">{{ label }}</button></form>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Entry attempts</h2>
+      {% for a in attempts %}
+      <div class="attempt">
+        <div class="actions">{{ badge(a.result) }} <span class="badge">{{ a.mode }}</span> <span class="muted small">{{ a.started_at | local('%d %b %Y %H:%M') }}</span>
+          {% if a.url and not a.url.startswith('mailto:') %}<a class="small" href="{{ a.url }}" target="_blank" rel="noopener noreferrer">{{ a.url[:70] }}</a>{% endif %}</div>
+        <div style="white-space:pre-wrap; margin:6px 0">{{ a.message }}</div>
+        {% if a.screenshot_before or a.screenshot_after %}
+        <div class="shots">
+          {% if a.screenshot_before %}<a href="/screenshots/{{ a.screenshot_before }}" target="_blank"><img src="/screenshots/{{ a.screenshot_before }}" alt="before" loading="lazy"><span class="small muted">before submit</span></a>{% endif %}
+          {% if a.screenshot_after %}<a href="/screenshots/{{ a.screenshot_after }}" target="_blank"><img src="/screenshots/{{ a.screenshot_after }}" alt="after" loading="lazy"><span class="small muted">after submit</span></a>{% endif %}
+        </div>{% endif %}
+        {% if a.details and a.details.fields %}
+        <details><summary>Fields ({{ a.details.fields|length }})</summary>
+          <table class="small">
+            <tr><th>Field</th><th>Action</th><th>From</th><th>Note</th></tr>
+            {% for f in a.details.fields %}<tr><td>{{ f.label }}</td><td>{{ f.action }}{% if f.ok == false %} ❌{% endif %}</td><td>{{ f.source }}{% if f.value %}: {{ f.value }}{% endif %}</td><td class="muted">{{ f.note }}</td></tr>{% endfor %}
+          </table>
+          {% if a.details.steps %}<p class="small muted">Steps: {{ a.details.steps | join(' → ') }}</p>{% endif %}
+        </details>{% endif %}
+      </div>
+      {% else %}<p class="muted">No attempts yet.</p>{% endfor %}
+    </div>
+
+    <div class="card">
+      <h2>Original post</h2>
+      <div class="post">{{ c.body_text }}</div>
+    </div>
+  </div>
+
+  <div class="grid" style="align-content:start">
+    <div class="card">
+      <h2>Details</h2>
+      <dl class="kv">
+        <dt>Prize</dt><dd>{{ c.prize }}</dd>
+        <dt>Closes</dt><dd>{{ c.closes_label }} <span class="muted">({{ c.closes_on | days_left }})</span></dd>
+        <dt>Posted</dt><dd>{{ c.posted_at | local('%d %b %Y %H:%M') }}</dd>
+        <dt>Promoter</dt><dd>{{ c.promoter_domain or '–' }}</dd>
+        <dt>Question</dt><dd>{{ c.question or '–' }}</dd>
+        <dt>Entries made</dt><dd>{{ c.entry_count }}{% if c.entered_at %} (first {{ c.entered_at | local('%d %b') }}){% endif %}</dd>
+        {% if c.outcome_note %}<dt>Outcome note</dt><dd>{{ c.outcome_note }}</dd>{% endif %}
+        {% if c.other_links %}<dt>Other links</dt><dd>{% for l in c.other_links[:8] %}<a href="{{ l }}" target="_blank" rel="noopener noreferrer">{{ l[:50] }}</a><br>{% endfor %}</dd>{% endif %}
+      </dl>
+    </div>
+    <div class="card">
+      <h2>Edit</h2>
+      <form method="post" action="/competitions/{{ c.id }}/edit" class="grid">
+        <div class="field"><label>Answers (one per line)</label><textarea name="answers">{{ c.answers | join('\n') }}</textarea></div>
+        <div class="field"><label>Entry URLs (one per line)</label><textarea name="entry_urls">{{ c.entry_urls | join('\n') }}</textarea></div>
+        <div class="form-grid">
+          <div><label>Method</label><select name="method">{% for m in methods %}<option {{ 'selected' if c.method == m }}>{{ m }}</option>{% endfor %}</select></div>
+          <div><label>Status</label><select name="status">{% for s in statuses %}<option {{ 'selected' if c.status == s }}>{{ s }}</option>{% endfor %}</select></div>
+          <div><label>Email entry to</label><input type="text" name="email_to" value="{{ c.email_to or '' }}"></div>
+          <div><label>Email subject</label><input type="text" name="email_subject" value="{{ c.email_subject or '' }}"></div>
+          <div><label>Prize value (£)</label><input type="text" name="prize_value" value="{{ c.prize_value or '' }}"></div>
+          <div><label class="check"><input type="checkbox" name="is_daily" {{ 'checked' if c.is_daily }}> Daily entry</label></div>
+        </div>
+        <div class="field"><label>Notes</label><textarea name="notes">{{ c.notes }}</textarea></div>
+        <div><button class="btn primary">Save</button></div>
+      </form>
+    </div>
+    {% if emails %}
+    <div class="card">
+      <h2>Related emails</h2>
+      {% for e in emails %}<div class="event"><span class="ts">{{ e.received_at | local }}</span>{{ badge(e.category) }}<span>{{ e.subject }}<br><span class="small muted">{{ e.from_addr }}</span></span></div>{% endfor %}
+    </div>{% endif %}
+    {% if events %}
+    <div class="card">
+      <h2>History</h2>
+      {% for e in events %}<div class="event"><span class="ts">{{ e.ts | local }}</span><span>{{ e.message }}</span></div>{% endfor %}
+    </div>{% endif %}
+  </div>
+</div>
+{% endblock %}

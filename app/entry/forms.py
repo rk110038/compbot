@@ -1,0 +1,450 @@
+"""Pure heuristics that decide how to fill each form field from the saved profile and the known answers.
+
+Nothing here touches the browser, so it can be unit-tested. browser.py extracts `Field`s from the page, calls
+`plan_form`, then applies the returned actions.
+"""
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+from datetime import date
+
+from rapidfuzz import fuzz
+
+PROFILE_KEYS = [
+    "title", "first_name", "last_name", "full_name", "email", "email_confirm", "phone", "dob", "dob_day",
+    "dob_month", "dob_year", "age", "gender", "address1", "address2", "address3", "town", "county", "postcode",
+    "country", "twitter", "instagram",
+]
+
+
+@dataclass
+class Field:
+    idx: str
+    tag: str                 # input | select | textarea | radio
+    type: str = "text"
+    name: str = ""
+    id: str = ""
+    label: str = ""
+    placeholder: str = ""
+    autocomplete: str = ""
+    aria: str = ""
+    required: bool = False
+    options: list[dict] = field(default_factory=list)   # {"value", "text", "idx"}
+    context: str = ""
+    maxlength: int | None = None
+    checked: bool = False
+
+    @property
+    def desc(self) -> str:
+        parts = [self.label, self.placeholder, self.aria, self.name, self.id, self.autocomplete]
+        return normalise(" ".join(p for p in parts if p))
+
+    @property
+    def human_label(self) -> str:
+        return (self.label or self.placeholder or self.aria or self.name or self.id or self.tag).strip()[:120]
+
+
+@dataclass
+class Action:
+    kind: str                # fill | select | check | uncheck | radio | skip | unknown
+    value: str | None = None
+    source: str = "rule"     # profile key, "answer", "rule", "llm"
+    note: str = ""
+
+
+@dataclass
+class Ctx:
+    profile: dict
+    answers: list[str] = field(default_factory=list)
+    question: str | None = None
+    tags: list[str] = field(default_factory=list)
+    marketing_opt_in: bool = False
+    answer_cursor: int = 0
+
+    @property
+    def is_newsletter(self) -> bool:
+        return "nl" in self.tags
+
+    @property
+    def want_marketing(self) -> bool:
+        return self.is_newsletter or self.marketing_opt_in
+
+
+def normalise(s: str) -> str:
+    s = re.sub(r"([a-z])([A-Z])", r"\1 \2", s or "")
+    s = re.sub(r"[_\-\[\]().:/|*]+", " ", s)
+    return re.sub(r"\s+", " ", s).strip().lower()
+
+
+AUTOCOMPLETE_MAP = {
+    "email": "email", "given-name": "first_name", "family-name": "last_name", "name": "full_name",
+    "honorific-prefix": "title", "tel": "phone", "tel-national": "phone", "mobile": "phone", "bday": "dob",
+    "bday-day": "dob_day", "bday-month": "dob_month", "bday-year": "dob_year", "address-line1": "address1",
+    "street-address": "address1", "address-line2": "address2", "address-line3": "address3",
+    "address-level2": "town", "address-level1": "county", "postal-code": "postcode", "country": "country",
+    "country-name": "country", "sex": "gender",
+}
+
+SKIP_RE = re.compile(
+    r"company|business|organi[sz]ation|job title|user ?name|password|coupon|promo ?code|voucher code|discount code|"
+    r"card number|cvv|captcha|\bsearch\b|\bwebsite\b|\burl\b|honey ?pot|leave (this )?(blank|empty)|referr?al code")
+
+KEY_PATTERNS: list[tuple[str, re.Pattern]] = [(k, re.compile(p)) for k, p in [
+    ("email_confirm", r"(confirm|repeat|re ?type|re ?enter|verify).{0,15}e ?mail|e ?mail.{0,15}(confirm|again|repeat|verif)"),
+    ("email", r"\be ?mail\b|email address"),
+    ("dob_day", r"(birth|dob|bday).{0,15}\b(day|dd)\b|\b(day|dd)\b.{0,15}(birth|dob)"),
+    ("dob_month", r"(birth|dob|bday).{0,15}\b(month|mm)\b|\b(month|mm)\b.{0,15}(birth|dob)"),
+    ("dob_year", r"(birth|dob|bday).{0,15}\b(year|yyyy|yy)\b|\b(year|yyyy)\b.{0,15}(birth|dob)"),
+    ("dob", r"date ?of ?birth|\bdob\b|birth ?date|birthday|d o b|\bborn\b"),
+    ("age", r"^age$|\byour age\b|how old"),
+    ("first_name", r"first ?name|fore ?name|given ?name|\bfname\b|christian name|name first"),
+    ("last_name", r"last ?name|sur ?name|family ?name|\blname\b|second name|name last"),
+    ("title", r"^title\b|\btitle$|salutation|honorific|\bprefix\b"),
+    ("phone", r"phone|mobile|\btel\b|telephone|contact (no|number)|\bcell\b"),
+    ("postcode", r"post ?code|\bzip\b|postal"),
+    ("address3", r"address.{0,8}\b3\b|addr\w* ?3\b"),
+    ("address2", r"address.{0,8}\b2\b|addr\w* ?2\b|street ?2|line two|apartment|\bflat\b|suite"),
+    ("address1", r"address.{0,8}\b1\b|addr\w* ?1\b|street|house (name|number|no)|address|\broad\b|building|line 1"),
+    ("town", r"\btown\b|\bcity\b|post ?town|locality|suburb"),
+    ("county", r"county|\bregion\b|\bstate\b|province"),
+    ("country", r"country|nation"),
+    ("gender", r"gender|\bsex\b"),
+    ("twitter", r"twitter|\bx (handle|username)"),
+    ("instagram", r"instagram|\binsta\b"),
+    ("full_name", r"full ?name|your ?name|^name\b|\bname$|\bname\b"),
+]]
+
+PERSONAL_Q_RE = re.compile(
+    r"\byour\b.{0,20}\b(name|e ?mail|phone|mobile|number|address|post ?code|date of birth|dob|age|town|city|county|"
+    r"country|title|gender)\b")
+QUESTION_START_RE = re.compile(
+    r"^(q ?\d*\b|question|name (one|a|the|an)\b|which|what|who|where|when|how (many|much|long|old is)|unscramble|"
+    r"complete|fill in|spot|count|identify|guess|true or false)")
+ANSWER_FIELD_RE = re.compile(r"\banswer|\bquestion\b|\bq ?\d\b|\bquiz\b|\bguess\b|solution|code ?word|secret word")
+CREATIVE_RE = re.compile(
+    r"tie ?break|in (\d+|ten|twenty|fifty|25|15) words|tell us|why (do|would|should|you)|caption|slogan|sentence|"
+    r"describe|\bcomment|\bmessage\b|\bstory\b|\bpoem\b|\breason\b")
+
+TERMS_RE = re.compile(
+    r"terms|t ?& ?c|t s ?& ?c|\btcs\b|conditions|\brules\b|privacy|i (have )?read|i agree|i accept|i confirm|"
+    r"i consent|\bagree\b|\baccept\b|over (the age of )?1[68]|aged? 1[68]|1[68] ?(\+|or over|years)|eligible|"
+    r"uk resident|resident (of|in)|i am over|consent to (the )?processing")
+MARKETING_RE = re.compile(
+    r"newsletter|marketing|offers|promotions?\b|\bnews\b|updates|hear (about|from|more)|keep (me )?(up to date|in "
+    r"touch|informed|posted)|contact me|e ?mail me|send me|sign me up|subscribe|third ?part|partners|carefully "
+    r"selected|by (e ?mail|sms|text|post|phone)|opt ?in|exclusive|discounts|latest")
+OPTOUT_RE = re.compile(r"(do not|don ?t|not) (wish|want|like) to|opt ?out|unsubscribe|if you (do not|don ?t)|prefer not")
+THIRD_PARTY_RE = re.compile(r"third ?part|partners|carefully selected|other (companies|brands)|associated brands|sister")
+HEAR_RE = re.compile(r"how did you (hear|find|see)|where did you (hear|see|find)|how you heard|source|referr")
+HEAR_PREFS = ["moneysavingexpert", "money saving expert", "mse", "forum", "online", "internet", "website", "web",
+              "search", "other", "social", "email", "newsletter"]
+PLACEHOLDER_OPT_RE = re.compile(
+    r"^\s*(?:-+.*|please (?:select|choose).*|(?:select|choose)\b.*|pick one.*|make a selection.*|dd|mm|yyyy|day|"
+    r"month|year)?\s*$", re.I)
+YES_RE = re.compile(r"^(yes|y|true|i do|i am|i agree|agree|yes please|opt in)\b", re.I)
+NO_RE = re.compile(r"^(no|n|false|i don ?t|no thanks|not now|opt out)\b", re.I)
+
+MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october",
+          "november", "december"]
+
+
+def _parse_dob(p: dict) -> date | None:
+    try:
+        return date.fromisoformat(str(p.get("dob", "")).strip())
+    except ValueError:
+        return None
+
+
+def detect_profile_key(f: Field) -> str | None:
+    ac = (f.autocomplete or "").strip().lower().split()
+    if ac and ac[-1] in AUTOCOMPLETE_MAP:
+        return AUTOCOMPLETE_MAP[ac[-1]]
+    d = f.desc
+    if f.type == "email":
+        return "email_confirm" if KEY_PATTERNS[0][1].search(d) else "email"
+    if f.type == "tel":
+        return "phone"
+    if f.type == "date" and re.search(r"birth|dob|born", d):
+        return "dob"
+    if re.search(r"\bdd mm yy(yy)?\b|\bmm dd yy(yy)?\b|\byyyy mm dd\b", d) and re.search(r"birth|dob|born|bday", d):
+        return "dob"
+    for key, pat in KEY_PATTERNS:
+        if pat.search(d):
+            return key
+    return None
+
+
+def looks_like_question(f: Field) -> bool:
+    label = normalise(f.label or f.placeholder or f.aria)
+    if not label or PERSONAL_Q_RE.search(label):
+        return False
+    return (f.label or "").strip().rstrip("* ").endswith("?") or bool(QUESTION_START_RE.match(label)) or bool(
+        ANSWER_FIELD_RE.search(f.desc))
+
+
+def is_placeholder_option(o: dict) -> bool:
+    return not str(o.get("value", "")).strip() or bool(PLACEHOLDER_OPT_RE.match(str(o.get("text", "")).strip()))
+
+
+def choose_option(options: list[dict], candidates: list[str], threshold: int = 86) -> dict | None:
+    real = [o for o in options if not is_placeholder_option(o)]
+    cands = [normalise(c) for c in candidates if c and str(c).strip()]
+    for c in cands:
+        for o in real:
+            if normalise(o.get("text", "")) == c or normalise(str(o.get("value", ""))) == c:
+                return o
+    best, best_score = None, 0
+    for c in cands:
+        for o in real:
+            score = max(fuzz.token_set_ratio(c, normalise(o.get("text", ""))),
+                        fuzz.token_set_ratio(c, normalise(str(o.get("value", "")))))
+            if score > best_score:
+                best, best_score = o, score
+    return best if best_score >= threshold else None
+
+
+def match_answer_option(options: list[dict], answers: list[str]) -> tuple[dict | None, int]:
+    best, best_score = None, 0
+    for a in answers:
+        na = normalise(a)
+        for o in options:
+            if is_placeholder_option(o):
+                continue
+            no = normalise(o.get("text", "")) or normalise(str(o.get("value", "")))
+            if not no:
+                continue
+            score = fuzz.token_set_ratio(na, no)
+            if na == no:
+                score = 100
+            elif len(na) > 2 and (na in no or no in na):
+                score = max(score, 92)
+            if score > best_score:
+                best, best_score = o, score
+    return best, best_score
+
+
+def profile_value(key: str, p: dict, f: Field | None = None) -> str:
+    dob = _parse_dob(p)
+    if key in ("email", "email_confirm"):
+        return p.get("email", "")
+    if key == "full_name":
+        return f"{p.get('first_name', '')} {p.get('last_name', '')}".strip()
+    if key == "dob":
+        if not dob:
+            return ""
+        hint = (f.placeholder + " " + f.label).lower() if f else ""
+        if f and f.type == "date" or "yyyy-mm-dd" in hint:
+            return dob.isoformat()
+        if "mm/dd" in hint:
+            return dob.strftime("%m/%d/%Y")
+        if "dd-mm" in hint:
+            return dob.strftime("%d-%m-%Y")
+        return dob.strftime("%d/%m/%Y")
+    if key == "dob_day":
+        return str(dob.day) if dob else ""
+    if key == "dob_month":
+        return str(dob.month) if dob else ""
+    if key == "dob_year":
+        return str(dob.year) if dob else ""
+    if key == "age":
+        if not dob:
+            return ""
+        t = date.today()
+        return str(t.year - dob.year - ((t.month, t.day) < (dob.month, dob.day)))
+    if key == "country":
+        return p.get("country") or "United Kingdom"
+    if key == "address3":
+        return ""
+    return str(p.get(key, "") or "")
+
+
+def option_candidates(key: str, p: dict) -> list[str]:
+    dob = _parse_dob(p)
+    if key == "country":
+        c = p.get("country") or "United Kingdom"
+        uk = ["United Kingdom", "UK", "Great Britain", "GB", "England", "United Kingdom of Great Britain and Northern Ireland"]
+        return [c] + (uk if normalise(c) in {"united kingdom", "uk", "gb", "great britain", "england"} else [])
+    if key == "title":
+        t = p.get("title", "")
+        return [t, t + "."] if t else []
+    if key == "gender":
+        g = p.get("gender", "")
+        return [g] if g else ["Prefer not to say", "Prefer not to disclose", "Rather not say", "Not specified"]
+    if key == "dob_day" and dob:
+        return [str(dob.day), f"{dob.day:02d}"]
+    if key == "dob_month" and dob:
+        m = MONTHS[dob.month - 1]
+        return [str(dob.month), f"{dob.month:02d}", m, m[:3]]
+    if key == "dob_year" and dob:
+        return [str(dob.year)]
+    v = profile_value(key, p)
+    return [v] if v else []
+
+
+def _next_answer(ctx: Ctx) -> str | None:
+    if not ctx.answers:
+        return None
+    a = ctx.answers[min(ctx.answer_cursor, len(ctx.answers) - 1)]
+    ctx.answer_cursor += 1
+    return a
+
+
+def map_checkbox(f: Field, ctx: Ctx) -> Action:
+    d = normalise(f.label + " " + (f.context[:300] if not f.label else ""))
+    is_terms, is_mkt, optout = bool(TERMS_RE.search(d)), bool(MARKETING_RE.search(d)), bool(OPTOUT_RE.search(d))
+    if optout:
+        return Action("uncheck" if ctx.want_marketing else "check", source="rule", note="marketing opt-out box")
+    if is_mkt and not is_terms:
+        if f.required:
+            return Action("check", source="rule", note="required marketing consent")
+        if THIRD_PARTY_RE.search(d):
+            return Action("uncheck", source="rule", note="third-party marketing")
+        return Action("check" if ctx.want_marketing else "uncheck", source="rule", note="marketing opt-in")
+    if is_terms or f.required:
+        return Action("check", source="rule", note="terms / eligibility" if is_terms else "required checkbox")
+    return Action("skip", note="optional checkbox")
+
+
+def map_choice(f: Field, ctx: Ctx) -> Action:
+    """Selects and radio groups."""
+    kind = "radio" if f.tag == "radio" else "select"
+    label_d = normalise(f.label or f.context[:200])
+    texts = [normalise(o.get("text", "")) for o in f.options if not is_placeholder_option(o)]
+    key = detect_profile_key(f)
+    if key in {"title", "country", "county", "gender", "dob_day", "dob_month", "dob_year"} or (
+            key in {"town"} and f.options):
+        o = choose_option(f.options, option_candidates(key, ctx.profile))
+        if o:
+            return Action(kind, o.get("idx") or o.get("value"), source=key)
+        if f.required:
+            return Action("unknown", note=f"no matching option for {key}")
+        return Action("skip", note=f"no option for {key}")
+    yes_no = texts and all(YES_RE.match(t) or NO_RE.match(t) for t in texts)
+    if yes_no:
+        is_mkt = bool(MARKETING_RE.search(label_d))
+        if OPTOUT_RE.search(label_d):
+            want_yes = not ctx.want_marketing
+        elif is_mkt and not TERMS_RE.search(label_d):
+            want_yes = ctx.want_marketing and not THIRD_PARTY_RE.search(label_d)
+        elif TERMS_RE.search(label_d):
+            want_yes = True
+        else:
+            want_yes = None
+        if want_yes is not None:
+            for o in f.options:
+                t = normalise(o.get("text", ""))
+                if (want_yes and YES_RE.match(t)) or (not want_yes and NO_RE.match(t)):
+                    return Action(kind, o.get("idx") or o.get("value"), source="rule", note="yes/no")
+    if HEAR_RE.search(label_d):
+        o = choose_option(f.options, HEAR_PREFS, threshold=90) or next(
+            (o for o in f.options if not is_placeholder_option(o)), None)
+        if o:
+            return Action(kind, o.get("idx") or o.get("value"), source="rule", note="how did you hear")
+    if ctx.answers:
+        o, score = match_answer_option(f.options, ctx.answers)
+        if o and score >= 75:
+            return Action(kind, o.get("idx") or o.get("value"), source="answer", note=f"answer match {score}")
+    if not f.required:
+        return Action("skip", note="optional choice")
+    if kind == "select" and not looks_like_question(f) and not ctx.question:
+        o = next((o for o in f.options if not is_placeholder_option(o)), None)
+        if o:
+            return Action(kind, o.get("idx") or o.get("value"), source="rule", note="first option (guess)")
+    return Action("unknown", note="required choice with no known answer")
+
+
+def map_text(f: Field, ctx: Ctx) -> Action:
+    d = f.desc
+    if f.type in ("password", "search", "url", "file", "hidden"):
+        return Action("unknown" if f.required and f.type == "file" else "skip", note=f"{f.type} field")
+    key = None
+    ac = (f.autocomplete or "").strip().lower().split()
+    strong = (ac and ac[-1] in AUTOCOMPLETE_MAP) or f.type in ("email", "tel")
+    if strong:
+        key = detect_profile_key(f)
+    elif looks_like_question(f) and not CREATIVE_RE.search(d):
+        ans = _next_answer(ctx)
+        if ans:
+            return Action("fill", ans, source="answer")
+        return Action("unknown" if f.required else "skip", note="question with no known answer")
+    elif SKIP_RE.search(d):
+        return Action("skip", note="not needed")
+    else:
+        key = detect_profile_key(f)
+    if key:
+        val = profile_value(key, ctx.profile, f)
+        if val or key == "address3":
+            return Action("fill", val, source=key) if val else Action("skip", note="address line 3")
+        return Action("unknown" if f.required else "skip", note=f"profile has no {key}")
+    if CREATIVE_RE.search(d):
+        return Action("unknown" if f.required else "skip", note="creative / tie-breaker answer")
+    if ctx.answers and (f.tag == "textarea" or ANSWER_FIELD_RE.search(d)):
+        ans = _next_answer(ctx)
+        if ans:
+            return Action("fill", ans, source="answer")
+    return Action("unknown" if f.required else "skip", note="unrecognised field")
+
+
+def map_field(f: Field, ctx: Ctx) -> Action:
+    if f.tag == "input" and f.type == "checkbox":
+        return map_checkbox(f, ctx)
+    if f.tag in ("select", "radio"):
+        return map_choice(f, ctx)
+    return map_text(f, ctx)
+
+
+def plan_form(fields: list[Field], ctx: Ctx) -> list[tuple[Field, Action]]:
+    return [(f, map_field(f, ctx)) for f in fields]
+
+
+AUTOMATION_WORD_RE = re.compile(
+    r"\bautomat\w*\s+(?:means|methods?|devices?|software|entr\w+|generated|systems?|tools?|programs?|process\w*|"
+    r"scripts?|mechanisms?|computer\w*|or\b)|"
+    r"\b(?:generated|made|submitted|entered|completed|created|sent)\s+(?:\w+\s+){0,4}?(?:automat\w*|by (?:a |any )?"
+    r"(?:script|macro|bot|robot|computer))|"
+    r"\b(?:scripts?|scripted|macros?|bots?|robots?|robotic)\b|computer[- ]generated|entry[- ]software", re.I)
+VOID_WORD_RE = re.compile(
+    r"\b(void|invalid|disqualif\w*|not (?:be )?(?:accepted|valid|permitted|allowed|eligible|counted)|will not count|"
+    r"won'?t (?:be )?(?:accepted|count\w*)|prohibited|forbidden|reject\w*|excluded|ineligible|not be entered)\b", re.I)
+ENTRY_WORD_RE = re.compile(r"\bentr(?:y|ies|ants?)\b|\bmeans\b|\bmethods?\b|\bdevices?\b|\bsubmitted\b", re.I)
+
+
+def find_automation_clause(text: str) -> str | None:
+    """Return the T&C sentence that bans automated/scripted entries, if any."""
+    if not text:
+        return None
+    for sentence in re.split(r"(?<=[.;!?])\s+|\n+", text):
+        if len(sentence) > 600:
+            continue
+        if AUTOMATION_WORD_RE.search(sentence) and VOID_WORD_RE.search(sentence) and ENTRY_WORD_RE.search(sentence):
+            return re.sub(r"\s+", " ", sentence).strip()
+    return None
+
+
+def apply_llm_action(f: Field, raw: dict, ctx: Ctx) -> Action:
+    """Turn an LLM suggestion into a concrete Action (resolving profile keys locally)."""
+    if not isinstance(raw, dict) or raw.get("unknown"):
+        return Action("unknown", source="llm", note="LLM could not answer")
+    if raw.get("skip"):
+        return Action("skip", source="llm")
+    if "profile" in raw and raw["profile"] in PROFILE_KEYS:
+        key = raw["profile"]
+        if f.tag in ("select", "radio"):
+            o = choose_option(f.options, option_candidates(key, ctx.profile))
+            return Action("radio" if f.tag == "radio" else "select", o.get("idx") or o.get("value"), source="llm") if o \
+                else Action("unknown", source="llm")
+        val = profile_value(key, ctx.profile, f)
+        return Action("fill", val, source="llm:" + key) if val else Action("unknown", source="llm")
+    if "option" in raw and f.options:
+        o = choose_option(f.options, [str(raw["option"])], threshold=80)
+        if o:
+            return Action("radio" if f.tag == "radio" else "select", o.get("idx") or o.get("value"), source="llm")
+    if "check" in raw and f.type == "checkbox":
+        return Action("check" if raw["check"] else "uncheck", source="llm")
+    if "text" in raw and f.tag in ("input", "textarea"):
+        text = str(raw["text"]).strip()
+        if f.maxlength:
+            text = text[: f.maxlength]
+        return Action("fill", text, source="llm")
+    return Action("unknown", source="llm")

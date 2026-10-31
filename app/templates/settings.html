@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+{% block content %}
+<h1>Settings</h1>
+<form method="post" action="/settings" class="grid">
+  <div class="card">
+    <h2>Your entry details</h2>
+    <p class="small muted">Used to fill in entry forms. Stored only in compbot's database on your NAS. If an LLM is configured it only ever sees field <i>names</i>, never these values.</p>
+    <div class="form-grid">
+      <div><label>Title</label><select name="p_title">{% for t in ['', 'Mr', 'Mrs', 'Ms', 'Miss', 'Mx', 'Dr'] %}<option {{ 'selected' if profile.title == t }}>{{ t }}</option>{% endfor %}</select></div>
+      <div><label>First name</label><input type="text" name="p_first_name" value="{{ profile.first_name }}" required></div>
+      <div><label>Last name</label><input type="text" name="p_last_name" value="{{ profile.last_name }}" required></div>
+      <div><label>Email (competition Gmail)</label><input type="email" name="p_email" value="{{ profile.email }}" required></div>
+      <div><label>Phone</label><input type="text" name="p_phone" value="{{ profile.phone }}"></div>
+      <div><label>Date of birth</label><input type="date" name="p_dob" value="{{ profile.dob }}"></div>
+      <div><label>Gender (optional)</label><input type="text" name="p_gender" value="{{ profile.gender }}" placeholder="leave blank = prefer not to say"></div>
+      <div><label>Address line 1</label><input type="text" name="p_address1" value="{{ profile.address1 }}"></div>
+      <div><label>Address line 2</label><input type="text" name="p_address2" value="{{ profile.address2 }}"></div>
+      <div><label>Town / city</label><input type="text" name="p_town" value="{{ profile.town }}"></div>
+      <div><label>County</label><input type="text" name="p_county" value="{{ profile.county }}"></div>
+      <div><label>Postcode</label><input type="text" name="p_postcode" value="{{ profile.postcode }}"></div>
+      <div><label>Country</label><input type="text" name="p_country" value="{{ profile.country }}"></div>
+      <div><label>X / Twitter handle</label><input type="text" name="p_twitter" value="{{ profile.twitter }}"></div>
+      <div><label>Instagram handle</label><input type="text" name="p_instagram" value="{{ profile.instagram }}"></div>
+    </div>
+  </div>
+
+  <div class="grid two">
+    <div class="card">
+      <h2>Entering</h2>
+      <div class="form-grid">
+        <div><label>Entry mode</label><select name="s_entry_mode">
+          <option value="dry_run" {{ 'selected' if settings.entry_mode != 'auto' }}>Dry run (fill + screenshot, don't submit)</option>
+          <option value="auto" {{ 'selected' if settings.entry_mode == 'auto' }}>Auto (submit entries)</option></select></div>
+        <div><label>Max entries per day</label><input type="number" min="0" name="s_daily_entry_cap" value="{{ settings.daily_entry_cap }}"></div>
+        <div><label>Failed attempts before manual</label><input type="number" min="1" name="s_max_attempts" value="{{ settings.max_attempts }}"></div>
+        <div><label>Delay between entries (s, min)</label><input type="number" min="0" name="s_delay_min_seconds" value="{{ settings.delay_min_seconds }}"></div>
+        <div><label>Delay between entries (s, max)</label><input type="number" min="0" name="s_delay_max_seconds" value="{{ settings.delay_max_seconds }}"></div>
+        <div><label>Social media comps</label><select name="s_social_handling">{% for v in ['skip', 'manual'] %}<option {{ 'selected' if settings.social_handling == v }}>{{ v }}</option>{% endfor %}</select></div>
+        <div><label>Gleam / widget comps</label><select name="s_widget_handling">{% for v in ['manual', 'skip'] %}<option {{ 'selected' if settings.widget_handling == v }}>{{ v }}</option>{% endfor %}</select></div>
+        <div><label>Skip titles containing (comma-separated)</label><input type="text" name="s_skip_keywords" value="{{ settings.skip_keywords }}" placeholder="e.g. Leeds, Glasgow, tickets"></div>
+        <div><label>Minimum stated prize value (£, 0 = off)</label><input type="number" min="0" name="s_min_prize_value" value="{{ settings.min_prize_value }}"></div>
+        <div><label>First-run backfill (days)</label><input type="number" min="1" name="s_backfill_days" value="{{ settings.backfill_days }}"></div>
+      </div>
+      <label class="check"><input type="checkbox" name="s_respect_automation_clauses" {{ 'checked' if settings.respect_automation_clauses }}><span>Respect T&amp;Cs that ban automated entries <small>Recommended. Those comps go to the manual queue instead (automated entries there would be void anyway).</small></span></label>
+      <label class="check"><input type="checkbox" name="s_enter_email_comps" {{ 'checked' if settings.enter_email_comps }}><span>Send email entries automatically</span></label>
+      <label class="check"><input type="checkbox" name="s_enter_all_md_links" {{ 'checked' if settings.enter_all_md_links }}><span>(MD) threads: enter on every magazine site listed</span></label>
+      <label class="check"><input type="checkbox" name="s_marketing_opt_in" {{ 'checked' if settings.marketing_opt_in }}><span>Tick optional marketing boxes <small>Newsletter (NL) comps always opt in, as that's the entry. Third-party marketing is never ticked unless it's required.</small></span></label>
+    </div>
+    <div class="card">
+      <h2>Inbox &amp; outcomes</h2>
+      <label class="check"><input type="checkbox" name="s_auto_confirm_links" {{ 'checked' if settings.auto_confirm_links }}><span>Click "confirm your entry/subscription" links <small>Only for emails matched to a competition entered in the last 10 days.</small></span></label>
+      <div class="form-grid"><div><label>Mark as lost after closing + N days</label><input type="number" min="1" name="s_presumed_lost_days" value="{{ settings.presumed_lost_days }}"></div></div>
+      <h2 style="margin-top:16px">AI helper (optional)</h2>
+      <p class="small muted">{% if cfg.llm_enabled %}LLM configured: <b>{{ cfg.llm_model }}</b> at {{ cfg.llm_base_url }}{% else %}No LLM configured (set LLM_BASE_URL / LLM_MODEL). Heuristics only.{% endif %}</p>
+      <label class="check"><input type="checkbox" name="s_llm_for_posts" {{ 'checked' if settings.llm_for_posts }}><span>Use it to read unclear MSE posts</span></label>
+      <label class="check"><input type="checkbox" name="s_llm_for_forms" {{ 'checked' if settings.llm_for_forms }}><span>Use it for form fields the rules can't map <small>Sends field labels only, never your details.</small></span></label>
+      <label class="check"><input type="checkbox" name="s_llm_for_email" {{ 'checked' if settings.llm_for_email }}><span>Use it to double-check possible win emails <small>Sends sender, subject and a snippet. Best with a local model (Ollama).</small></span></label>
+      <h2 style="margin-top:16px">Environment</h2>
+      <dl class="kv small">
+        <dt>Gmail</dt><dd>{{ cfg.gmail_address if cfg.mail_enabled else 'not configured' }}</dd>
+        <dt>Folders checked</dt><dd>{{ cfg.imap_folders | join(', ') }}</dd>
+        <dt>Notifications</dt><dd>{{ 'email → ' ~ cfg.notify_email if cfg.notify_email else '' }} {{ 'ntfy' if cfg.ntfy_url else '' }}{% if not cfg.notify_email and not cfg.ntfy_url %}none{% endif %}</dd>
+        <dt>Schedules</dt><dd>discover <code>{{ cfg.discover_cron }}</code> · enter <code>{{ cfg.enter_cron }}</code> · inbox <code>{{ cfg.inbox_cron }}</code></dd>
+        <dt>Data</dt><dd>{{ cfg.data_dir }}</dd>
+      </dl>
+    </div>
+  </div>
+  <div><button class="btn primary">Save settings</button></div>
+</form>
+{% endblock %}

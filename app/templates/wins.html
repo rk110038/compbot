@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge with context %}
+{% block title %}Wins{% endblock %}
+{% block content %}
+<h1>Wins 🏆</h1>
+{% if possible %}
+<div class="card" style="margin-bottom:14px">
+  <h2>Possible wins to confirm</h2>
+  <table>
+    {% for c in possible %}<tr><td><a href="/competitions/{{ c.id }}">{{ c.prize or c.title }}</a><div class="small muted">{{ c.outcome_note }}</div></td>
+      <td class="actions">
+        <form class="inline" method="post" action="/competitions/{{ c.id }}/action"><input type="hidden" name="action" value="won"><button class="btn small green">Confirm win</button></form>
+        <form class="inline" method="post" action="/competitions/{{ c.id }}/action"><input type="hidden" name="action" value="pending"><button class="btn small">Not a win</button></form>
+      </td></tr>{% endfor %}
+  </table>
+</div>
+{% endif %}
+<div class="card">
+  <h2>Confirmed wins ({{ won|length }}){% if total %} · £{{ '{:,.0f}'.format(total) }} stated value{% endif %}</h2>
+  <table>
+    <tr><th>Won</th><th>Prize</th><th>Value</th><th>Note</th></tr>
+    {% for c in won %}<tr><td class="nowrap">{{ c.won_at | local('%d %b %Y') }}</td><td><a href="/competitions/{{ c.id }}">{{ c.prize or c.title }}</a></td>
+      <td>{% if c.prize_value %}£{{ '{:,.0f}'.format(c.prize_value) }}{% endif %}</td><td class="small muted">{{ c.outcome_note }}{% if c.notes %}<br>{{ c.notes }}{% endif %}</td></tr>
+    {% else %}<tr><td colspan="4" class="muted">No wins yet — keep going!</td></tr>{% endfor %}
+  </table>
+</div>
+{% endblock %}

@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"></head>
+<body>
+<form id="f">
+  <input name="FNAME" placeholder="First name" required>
+  <input name="EMAIL" type="email" placeholder="Your email" required>
+  <input type="submit" value="Subscribe">
+</form>
+<script>
+document.getElementById('f').addEventListener('submit', e => {
+  e.preventDefault();
+  window.__submitted = Object.fromEntries(new FormData(e.target).entries());
+  document.body.innerHTML = '<p>Thanks for signing up! Please check your inbox to confirm.</p>';
+});
+</script>
+</body></html>

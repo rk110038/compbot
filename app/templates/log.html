@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge, pager with context %}
+{% block title %}Log{% endblock %}
+{% block content %}
+<h1>Activity log</h1>
+<form class="filters" method="get">
+  <select name="kind"><option value="">All kinds</option>{% for k in ['discovery', 'entry', 'inbox', 'user', 'system'] %}<option {{ 'selected' if kind == k }}>{{ k }}</option>{% endfor %}</select>
+  <select name="level"><option value="">All levels</option>{% for l in ['info', 'success', 'warn', 'error'] %}<option {{ 'selected' if level == l }}>{{ l }}</option>{% endfor %}</select>
+  <button class="btn">Filter</button>
+</form>
+<div class="grid three">
+  <div class="card">
+    {% for e in rows %}
+    <div class="event"><span class="ts">{{ e.ts | local('%d %b %H:%M:%S') }}</span>{{ badge(e.level) }} <span class="badge">{{ e.kind }}</span>
+      <span>{% if e.competition_id %}<a href="/competitions/{{ e.competition_id }}">{{ e.message }}</a>{% else %}{{ e.message }}{% endif %}</span></div>
+    {% else %}<p class="muted">Nothing logged yet.</p>{% endfor %}
+    {{ pager(page, pages) }}
+  </div>
+  <div class="card" style="align-self:start">
+    <h2>Recent job runs</h2>
+    <table class="small">
+      {% for r in runs %}<tr><td><b>{{ r.job }}</b><div class="muted">{{ r.started_at | local }}{% if r.finished_at %} · {{ ((r.finished_at - r.started_at).total_seconds()) | round(0) | int }}s{% endif %}</div><div>{{ r.summary[:200] }}</div></td><td>{{ badge('ok' if r.status == 'ok' else r.status) }}</td></tr>{% endfor %}
+    </table>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge with context %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+{% if possible %}
+<div class="banner win">🎉 {{ possible|length }} possible win{{ 's' if possible|length != 1 }} to check:
+  {% for c in possible %}<a href="/competitions/{{ c.id }}">{{ c.prize or c.title }}</a>{{ ', ' if not loop.last }}{% endfor %}
+  — review in <a href="/inbox">Inbox</a>.</div>
+{% endif %}
+
+<div class="grid stats">
+  <div class="card stat"><div class="label">Discovered</div><div class="value">{{ stats.discovered }}</div></div>
+  <div class="card stat"><div class="label">Queued</div><div class="value">{{ stats.queued }}</div></div>
+  <div class="card stat"><div class="label">Entered</div><div class="value green">{{ stats.entered }}</div></div>
+  <div class="card stat"><div class="label">Entered today</div><div class="value">{{ stats.today }}<span class="small muted"> / {{ settings.daily_entry_cap }}</span></div></div>
+  <div class="card stat"><div class="label">Manual queue</div><div class="value amber"><a href="/manual">{{ stats.manual }}</a></div></div>
+  <div class="card stat"><div class="label">Won</div><div class="value gold">{{ stats.won }}</div>{% if stats.won_value %}<div class="small muted">£{{ '{:,.0f}'.format(stats.won_value) }} of prizes</div>{% endif %}</div>
+  <div class="card stat"><div class="label">Lost</div><div class="value">{{ stats.lost }}</div><div class="small muted">{{ stats.pending }} awaiting result</div></div>
+  <div class="card stat"><div class="label">Win rate</div><div class="value">{{ stats.win_rate }}</div></div>
+  {% if stats.review %}<div class="card stat"><div class="label">Entries to check</div><div class="value amber"><a href="/competitions?review=1">{{ stats.review }}</a></div><div class="small muted">submitted, no confirmation seen</div></div>{% endif %}
+</div>
+
+<div class="grid three">
+  <div class="grid">
+    <div class="card">
+      <h2>Entries per day (last 30 days)</h2>
+      <div class="chart">
+        {% for d, n in chart %}<div class="bar" style="height: {{ (100 * n / chart_max) | round(0) }}%" title="{{ d.strftime('%a %d %b') }}: {{ n }} entries"></div>{% endfor %}
+      </div>
+      <div class="chart-labels"><span>{{ chart[0][0].strftime('%d %b') }}</span><span>today</span></div>
+    </div>
+    <div class="card">
+      <h2>Closing soon (not yet entered)</h2>
+      <table>
+        <tr><th>Competition</th><th>Closes</th><th>Status</th></tr>
+        {% for c in closing %}
+        <tr><td><a href="/competitions/{{ c.id }}">{{ c.prize or c.title }}</a></td>
+          <td class="nowrap">{{ c.closes_on | days_left }}</td><td>{{ badge(c.status) }}</td></tr>
+        {% else %}<tr><td colspan="3" class="muted">Nothing waiting.</td></tr>{% endfor %}
+      </table>
+    </div>
+    <div class="card">
+      <h2>Recent activity</h2>
+      {% for e in events %}
+      <div class="event"><span class="ts">{{ e.ts | local }}</span>{{ badge(e.level) }}<span>{% if e.competition_id %}<a href="/competitions/{{ e.competition_id }}">{{ e.message }}</a>{% else %}{{ e.message }}{% endif %}</span></div>
+      {% else %}<p class="muted">No activity yet. Click <b>Discover now</b> to fetch competitions.</p>{% endfor %}
+      <p><a href="/log">Full log ›</a></p>
+    </div>
+  </div>
+  <div class="grid" style="align-content:start">
+    <div class="card">
+      <h2>Jobs</h2>
+      <table>
+        {% for name, label in [('discover', 'Discover (MSE)'), ('enter', 'Enter competitions'), ('inbox', 'Check Gmail'), ('maintenance', 'Maintenance')] %}
+        {% set r = last_runs[name] %}
+        <tr><td><b>{{ label }}</b>
+          <div class="small muted">Last: {{ r.started_at | ago if r else 'never' }}{% if r %} · {{ badge('ok' if r.status == 'ok' else r.status) }}{% endif %}</div>
+          {% if r and r.summary %}<div class="small muted">{{ r.summary[:160] }}</div>{% endif %}
+          {% if next_runs.get(name) %}<div class="small muted">Next: {{ next_runs[name].strftime('%a %d %b %H:%M') }}</div>{% endif %}
+        </td>
+        <td><form method="post" action="/run/{{ name }}"><button class="btn small" {{ 'disabled' if name in running }}>{{ 'Running…' if name in running else 'Run now' }}</button></form></td></tr>
+        {% endfor %}
+      </table>
+      {% if not cfg.mail_enabled %}<p class="small muted">Gmail isn't configured, so inbox checks and email entries are off.</p>{% endif %}
+    </div>
+    <div class="card">
+      <h2>By entry method</h2>
+      <table>
+        {% for m, n in methods %}<tr><td><a href="/competitions?method={{ m }}">{{ badge(m) }}</a></td><td>{{ n }}</td></tr>{% endfor %}
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

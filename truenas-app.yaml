@@ -1,0 +1,48 @@
+# compbot for TrueNAS SCALE 24.10+ (Electric Eel / Fangtooth / later)
+# Apps -> Discover Apps -> (⋮) Custom App / "Install via YAML" -> paste this file, then edit the CHANGE_ME values.
+#
+# Before installing:
+#   1. Create a dataset, e.g. /mnt/tank/apps/compbot, owned by the "apps" user (568:568).
+#   2. The image is built by GitHub Actions on every push to main and published to GHCR.
+#      Make the package public once (github.com/rk110038 -> Packages -> compbot -> Package settings -> Public).
+#      To update: push to main, wait for the Action to go green, then in TrueNAS stop/start the app (it re-pulls).
+#      (Alternative: build on the NAS with `docker build -t compbot:latest .`, set image: compbot:latest
+#       and pull_policy: never.)
+services:
+  compbot:
+    image: ghcr.io/rk110038/compbot:latest
+    pull_policy: always
+    container_name: compbot
+    restart: unless-stopped
+    init: true                 # reaps Chromium child processes
+    shm_size: "1gb"            # Chromium needs more than Docker's 64 MB default
+    ports:
+      - "8085:8080"            # GUI at http://<truenas-ip>:8085
+    volumes:
+      - /mnt/tank/apps/compbot:/data   # CHANGE_ME: your dataset path (database + screenshots live here)
+    environment:
+      TZ: Europe/London
+      # --- GUI login (required) ---
+      WEB_USER: rob
+      WEB_PASSWORD: CHANGE_ME_long_random_password
+      # --- Competition Gmail (IMAP to read results, SMTP to send email entries) ---
+      # Needs 2-Step Verification on the Google account, then create an App Password.
+      GMAIL_ADDRESS: CHANGE_ME@gmail.com
+      GMAIL_APP_PASSWORD: "xxxx xxxx xxxx xxxx"
+      IMAP_FOLDERS: "INBOX,[Gmail]/Spam"
+      # --- Where to tell you about possible wins (optional) ---
+      NOTIFY_EMAIL: ""                 # e.g. your main personal address
+      NTFY_URL: ""                     # e.g. https://ntfy.sh/your-secret-topic (push to your phone)
+      # --- Schedules (cron, in TZ above) ---
+      DISCOVER_CRON: "0 7 * * *"
+      ENTER_CRON: "30 7 * * *"
+      INBOX_CRON: "0 8,20 * * *"
+      MAINTENANCE_CRON: "0 3 * * *"
+      # --- Optional LLM helper, any OpenAI-compatible API (e.g. the Ollama app on TrueNAS) ---
+      LLM_BASE_URL: ""                 # e.g. http://192.168.1.10:30068/v1
+      LLM_MODEL: ""                    # e.g. a small instruct model you've pulled in Ollama
+      LLM_API_KEY: ""
+    deploy:
+      resources:
+        limits:
+          memory: 2g

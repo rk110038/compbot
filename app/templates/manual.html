@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge with context %}
+{% block title %}Manual queue{% endblock %}
+{% block content %}
+<h1>Manual queue <span class="muted small">({{ rows|length }})</span></h1>
+<p class="muted">Competitions compbot can't (or shouldn't) enter for you: CAPTCHAs, T&amp;Cs that ban automated entries, social media, Gleam, accounts or unknown answers. Enter them yourself, then click <b>I've entered it</b> so the inbox checker can match any win.</p>
+
+<div class="card" style="margin-bottom:14px">
+  <h2>Your details <span class="small muted">(click to copy)</span></h2>
+  <div class="profile-chips">
+    {% for k in ['first_name', 'last_name', 'email', 'phone', 'dob', 'address1', 'address2', 'town', 'county', 'postcode'] %}
+    {% if profile[k] %}{% set v = profile[k] %}{% if k == 'dob' and v.count('-') == 2 %}{% set p = v.split('-') %}{% set v = p[2] ~ '/' ~ p[1] ~ '/' ~ p[0] %}{% endif %}<span class="copy" data-copy="{{ v }}" title="{{ k }}">{{ v }}</span>{% endif %}{% endfor %}
+  </div>
+</div>
+
+<div class="tabs">
+  <a href="/manual" class="{{ 'active' if not method }}">All</a>
+  {% for m, n in by_method %}<a href="/manual?method={{ m }}" class="{{ 'active' if method == m }}">{{ m.replace('_', ' ') }} ({{ n }})</a>{% endfor %}
+</div>
+
+<div class="grid">
+{% for c in rows %}
+  {% set a = last_msgs.get(c.id) %}
+  <div class="card manual-card">
+    <div>
+      <div><a href="/competitions/{{ c.id }}"><b>{{ c.prize or c.title }}</b></a> {{ badge(c.method) }}
+        {% for t in c.tags %}<span class="badge">{{ t }}</span>{% endfor %}</div>
+      <div class="small muted">Closes {{ c.closes_label }} ({{ c.closes_on | days_left }}) · {{ c.status_reason[:300] }}</div>
+      {% if c.answers %}<div style="margin-top:6px">Answer{{ 's' if c.answers|length > 1 }}: {% for ans in c.answers %}<span class="copy" data-copy="{{ ans }}">{{ ans }}</span> {% endfor %}</div>{% endif %}
+      {% if c.email_to %}<div style="margin-top:4px">Email: <span class="copy" data-copy="{{ c.email_to }}">{{ c.email_to }}</span>{% if c.email_subject %} · subject <span class="copy" data-copy="{{ c.email_subject }}">{{ c.email_subject }}</span>{% endif %}</div>{% endif %}
+      {% if a and a.screenshot_before %}<details><summary class="small">Last attempt screenshot</summary><a href="/screenshots/{{ a.screenshot_before }}" target="_blank"><img src="/screenshots/{{ a.screenshot_before }}" style="max-width:420px;border-radius:6px" loading="lazy"></a></details>{% endif %}
+    </div>
+    <div class="actions" style="align-items:start; justify-content:flex-end">
+      {% for u in c.entry_urls %}<a class="btn primary" href="{{ u }}" target="_blank" rel="noopener noreferrer">Open{% if c.entry_urls|length > 1 %} {{ loop.index }}{% endif %} ↗</a>{% endfor %}
+      {% if not c.entry_urls and c.other_links %}<a class="btn primary" href="{{ c.other_links[0] }}" target="_blank" rel="noopener noreferrer">Open link ↗</a>{% endif %}
+      <a class="btn" href="{{ c.thread_url }}" target="_blank" rel="noopener noreferrer">Thread ↗</a>
+      <form class="inline" method="post" action="/competitions/{{ c.id }}/action"><input type="hidden" name="action" value="mark_entered"><button class="btn green">I've entered it</button></form>
+      <form class="inline" method="post" action="/competitions/{{ c.id }}/action"><input type="hidden" name="action" value="skip"><button class="btn">Skip</button></form>
+    </div>
+  </div>
+{% else %}
+  <div class="card muted">Nothing in the manual queue. 🎉</div>
+{% endfor %}
+</div>
+{% endblock %}

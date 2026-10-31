@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Win a Herbelin watch</title>
+<style>
+  body { font-family: sans-serif; max-width: 720px; margin: 2rem auto; }
+  label { display: block; margin-top: .6rem; }
+  #cookie-banner { position: fixed; bottom: 0; left: 0; right: 0; background: #333; color: #fff; padding: 1rem; }
+  .hp { position: absolute; left: -9999px; }
+  .fancy input[type=checkbox] { opacity: 0; position: absolute; }
+  .fancy span::before { content: "[ ] "; }
+</style>
+</head>
+<body>
+<div id="cookie-banner" class="cookie-consent">We use cookies. <button id="acc" onclick="this.parentNode.remove()">Accept all</button></div>
+<h1>Win a Herbelin Art Deco watch worth £710</h1>
+<p>To enter, answer the question below. Closing date 30 November.</p>
+<form id="entry" novalidate>
+  <fieldset>
+    <legend>Where in France are the Herbelin workshops?</legend>
+    <label><input type="radio" name="q1" value="a" required> Paris</label>
+    <label><input type="radio" name="q1" value="b"> Charquemont</label>
+    <label><input type="radio" name="q1" value="c"> Lyon</label>
+  </fieldset>
+  <label for="title">Title *</label>
+  <select id="title" name="title" required><option value="">Please select</option><option>Mr</option><option>Mrs</option><option>Ms</option><option>Miss</option><option>Dr</option></select>
+  <label for="fn">First name *</label><input id="fn" name="firstName" required>
+  <label for="ln">Surname *</label><input id="ln" name="lastName" required>
+  <label for="em">Email address *</label><input id="em" name="email" type="email" required>
+  <label for="em2">Confirm email *</label><input id="em2" name="email_confirm" required>
+  <label for="ph">Telephone</label><input id="ph" name="phone" type="tel">
+  <div>Date of birth *
+    <select name="dob_day" aria-label="Date of birth day" required><option value="">DD</option>
+      <option>1</option><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option><option>7</option><option>8</option><option>9</option><option>10</option><option>11</option><option>12</option><option>13</option><option>14</option><option>15</option></select>
+    <select name="dob_month" aria-label="Date of birth month" required><option value="">MM</option>
+      <option value="1">January</option><option value="2">February</option><option value="3">March</option><option value="4">April</option><option value="5">May</option><option value="6">June</option><option value="7">July</option><option value="8">August</option><option value="9">September</option><option value="10">October</option><option value="11">November</option><option value="12">December</option></select>
+    <select name="dob_year" aria-label="Date of birth year" required><option value="">YYYY</option><option>1979</option><option>1980</option><option>1981</option><option>1982</option></select>
+  </div>
+  <label for="a1">Address line 1 *</label><input id="a1" name="address_line_1" required>
+  <label for="a2">Address line 2</label><input id="a2" name="address_line_2">
+  <label for="town">Town/City *</label><input id="town" name="town" required>
+  <label for="county">County</label><input id="county" name="county">
+  <label for="pc">Postcode *</label><input id="pc" name="postcode" required>
+  <label for="country">Country</label>
+  <select id="country" name="country"><option value="">Select</option><option value="IE">Ireland</option><option value="GB">United Kingdom</option></select>
+  <div class="hp"><label for="website">Website</label><input id="website" name="website" tabindex="-1" autocomplete="off"></div>
+  <label for="hear">How did you hear about this competition? *</label>
+  <select id="hear" name="hear" required><option value="">Please select</option><option>Facebook</option><option>Magazine</option><option>Online</option><option>Other</option></select>
+  <label class="fancy"><input type="checkbox" name="tcs" required><span>I agree to the <a href="/terms.html">terms and conditions</a> *</span></label>
+  <label><input type="checkbox" name="news"> Sign me up to the newsletter for news and offers</label>
+  <label><input type="checkbox" name="partners"> I'd like to hear from carefully selected third parties</label>
+  <button type="submit">Enter now</button>
+  <p id="err" style="color:red"></p>
+</form>
+<script>
+document.getElementById('entry').addEventListener('submit', function (e) {
+  e.preventDefault();
+  const f = e.target, fd = new FormData(f), data = Object.fromEntries(fd.entries());
+  data.tcs = f.tcs.checked; data.news = f.news.checked; data.partners = f.partners.checked;
+  window.__submitted = data;
+  const problems = [];
+  if (!data.q1) problems.push('Please select an answer');
+  if (data.q1 && data.q1 !== 'b') problems.push('Wrong answer');
+  if (data.partners) problems.push('third party box should not be ticked');
+  if (data.country !== 'GB' || data.dob_day !== '5' || data.dob_month !== '3' || data.dob_year !== '1980' || data.title !== 'Mr') problems.push('profile mismatch ' + JSON.stringify(data));
+  if (!data.tcs) problems.push('You must accept the terms');
+  if (data.website) problems.push('bot');
+  for (const k of ['title','firstName','lastName','email','address_line_1','town','postcode','dob_day','dob_month','dob_year','hear']) if (!data[k]) problems.push(k + ' is required');
+  if (data.email !== data.email_confirm) problems.push('Emails must match');
+  if (problems.length) { document.getElementById('err').textContent = problems.join('; '); return; }
+  f.outerHTML = '<div class="thanks"><h2>Thank you for entering!</h2><p>Good luck.</p></div>';
+});
+</script>
+</body>
+</html>

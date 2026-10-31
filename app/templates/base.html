@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}compbot{% endblock %} · compbot</title>
+  <link rel="stylesheet" href="/static/style.css?v={{ version }}">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏆</text></svg>">
+</head>
+<body>
+{% set path = request.url.path %}
+<header class="top"><div class="inner">
+  <a class="brand" href="/"><span>🏆</span> compbot</a>
+  <nav>
+    <a href="/" class="{{ 'active' if path == '/' }}">Dashboard</a>
+    <a href="/competitions" class="{{ 'active' if path.startswith('/competitions') }}">Competitions</a>
+    <a href="/manual" class="{{ 'active' if path == '/manual' }}">Manual queue{% if nav_manual %}<span class="count">{{ nav_manual }}</span>{% endif %}</a>
+    <a href="/inbox" class="{{ 'active' if path == '/inbox' }}">Inbox</a>
+    <a href="/wins" class="{{ 'active' if path == '/wins' }}">Wins{% if nav_wins %}<span class="count gold">{{ nav_wins }}</span>{% endif %}</a>
+    <a href="/log" class="{{ 'active' if path == '/log' }}">Log</a>
+    <a href="/settings" class="{{ 'active' if path == '/settings' }}">Settings</a>
+  </nav>
+  <div class="right">
+    {% for name, prog in running.items() %}<span class="running"><span class="spinner"></span>{{ name }}: {{ prog }}</span> {% endfor %}
+  </div>
+</div></header>
+<main>
+  {% if auth_disabled %}<div class="banner warn">⚠️ No WEB_PASSWORD is set, so this GUI is open to anyone on your network. Set WEB_USER / WEB_PASSWORD in the app's environment.</div>{% endif %}
+  {% if settings.entry_mode != 'auto' %}<div class="banner info">🧪 <b>Dry-run mode</b>: forms are filled and screenshotted but never submitted, and emails aren't sent. Check a few results, then switch Entry mode to <b>Auto</b> in <a href="/settings">Settings</a>.</div>{% endif %}
+  {% if flash %}<div class="banner ok">{{ flash }}</div>{% endif %}
+  {% block content %}{% endblock %}
+</main>
+<footer>compbot {{ version }} · times shown in {{ cfg.tz }}</footer>
+<script>
+document.addEventListener('click', e => {
+  const el = e.target.closest('[data-copy]');
+  if (!el) return;
+  navigator.clipboard.writeText(el.dataset.copy).then(() => { el.classList.add('copied'); setTimeout(() => el.classList.remove('copied'), 1200); });
+});
+{% if running %}setTimeout(() => location.reload(), 15000);{% endif %}
+</script>
+</body>
+</html>

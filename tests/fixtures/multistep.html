@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Win tickets</title>
+<style>body{font-family:sans-serif;max-width:700px;margin:2rem auto} label{display:block;margin-top:.5rem}</style></head>
+<body>
+<h1>Win tickets to an evening with Harry</h1>
+<p>Q. Which reality TV show did Harry win?</p>
+<section>
+  <h2>Enter This Competition</h2>
+  <form id="comp">
+    <div id="page1">
+      <label for="ans">Your Answer *</label><textarea id="ans" name="answer" required></textarea>
+      <button type="submit" id="next">Next</button>
+    </div>
+    <div id="page2" style="display:none">
+      <label for="fn">First name *</label><input id="fn" name="fn">
+      <label for="ln">Last name *</label><input id="ln" name="ln">
+      <label for="em">Email *</label><input id="em" name="em" type="email">
+      <label><input type="checkbox" name="tc"> I confirm I am over 18 and agree to the terms *</label>
+      <button type="submit">Submit entry</button>
+    </div>
+  </form>
+</section>
+<footer>
+  <h3>Get the latest straight to your inbox</h3>
+  <form id="news"><input name="FNAME" placeholder="First Name"><input name="EMAIL" type="email" placeholder="Email"><button>Submit</button></form>
+</footer>
+<script>
+let page = 1;
+document.getElementById('news').addEventListener('submit', e => { e.preventDefault(); document.body.innerHTML = '<p>WRONG FORM: thanks for subscribing</p>'; });
+document.getElementById('comp').addEventListener('submit', e => {
+  e.preventDefault();
+  const f = e.target;
+  if (page === 1) {
+    if (!/celebrity/i.test(f.answer.value)) return;
+    document.getElementById('page1').style.display = 'none';
+    document.getElementById('page2').style.display = 'block';
+    page = 2; return;
+  }
+  if (!f.fn.value || !f.ln.value || !f.em.value || !f.tc.checked) { f.insertAdjacentHTML('beforeend', '<p>Please complete all required fields</p>'); return; }
+  document.querySelector('section').innerHTML = '<h2>Thank you for entering, good luck!</h2>';
+});
+</script>
+</body></html>

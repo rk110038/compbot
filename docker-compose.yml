@@ -1,0 +1,16 @@
+# Plain Docker Compose (any Linux host). For TrueNAS use truenas-app.yaml instead.
+#   cp .env.example .env   # fill it in
+#   docker compose up -d --build
+services:
+  compbot:
+    build: .
+    image: compbot:latest
+    container_name: compbot
+    restart: unless-stopped
+    init: true
+    shm_size: "1gb"
+    ports:
+      - "8085:8080"
+    volumes:
+      - ./data:/data
+    env_file: .env
