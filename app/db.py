@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import os
 from contextlib import contextmanager
 from datetime import date, datetime, timezone
 from typing import Iterator
@@ -174,8 +175,18 @@ def init_db(url: str | None = None) -> None:
     global _engine, _SessionLocal
     cfg = get_config()
     if url is None:
-        cfg.data_dir.mkdir(parents=True, exist_ok=True)
-        cfg.screenshot_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            cfg.data_dir.mkdir(parents=True, exist_ok=True)
+            cfg.screenshot_dir.mkdir(parents=True, exist_ok=True)
+            probe = cfg.data_dir / ".write-test"
+            probe.touch()
+            probe.unlink()
+        except PermissionError as exc:
+            uid, gid = getattr(os, "getuid", lambda: "?")(), getattr(os, "getgid", lambda: "?")()
+            raise RuntimeError(
+                f"{cfg.data_dir} is not writable by this container (running as uid {uid}, gid {gid}). "
+                f"On the host, give that user the data folder, e.g.: sudo chown -R {uid}:{gid} /path/to/data"
+            ) from exc
         url = f"sqlite:///{cfg.db_path.as_posix()}"
     _engine = create_engine(url, connect_args={"check_same_thread": False, "timeout": 30})
 
