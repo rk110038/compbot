@@ -1,7 +1,16 @@
 from email.message import EmailMessage
 from types import SimpleNamespace
 
-from app.inbox import classify, parse_message
+from app.inbox import classify, parse_message, resolve_folders
+
+
+def test_spam_folder_resolution():
+    uk = [b'(\\HasNoChildren) "/" "INBOX"', b'(\\HasNoChildren \\Junk) "/" "[Google Mail]/Spam"',
+          b'(\\All \\HasNoChildren) "/" "[Google Mail]/All Mail"']
+    assert resolve_folders(uk, ["INBOX", "[Gmail]/Spam"]) == ["INBOX", "[Google Mail]/Spam"]
+    us = [b'(\\HasNoChildren \\Junk) "/" "[Gmail]/Spam"']
+    assert resolve_folders(us, ["INBOX", "spam"]) == ["INBOX", "[Gmail]/Spam"]
+    assert resolve_folders([], ["INBOX", "[Gmail]/Spam"]) == ["INBOX", "[Gmail]/Spam"]
 
 
 def _mail(frm, subject, body, html=None):

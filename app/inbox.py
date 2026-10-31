@@ -210,6 +210,36 @@ def _imap_date(d: datetime) -> str:
     return d.strftime("%d-%b-%Y")
 
 
+LIST_RE = re.compile(r'^\((?P<flags>[^)]*)\)\s+(?:"[^"]*"|NIL)\s+(?P<name>.+)$')
+SPAM_ALIASES = {"spam", "junk", "\\junk", "[gmail]/spam", "[google mail]/spam"}
+ALL_ALIASES = {"all mail", "\\all", "[gmail]/all mail", "[google mail]/all mail"}
+
+
+def resolve_folders(list_lines: list, folders: list[str]) -> list[str]:
+    """Map Spam/All Mail aliases to the account's real special-use folders (Gmail UK uses '[Google Mail]/...')."""
+    special: dict[str, str] = {}
+    for raw in list_lines or []:
+        line = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw)
+        m = LIST_RE.match(line.strip())
+        if not m:
+            continue
+        name = m.group("name").strip()
+        if name.startswith('"') and name.endswith('"'):
+            name = name[1:-1].replace('\\"', '"')
+        for flag in m.group("flags").split():
+            special.setdefault(flag.lower(), name)
+    out = []
+    for f in folders:
+        key = f.strip().lower()
+        if key in SPAM_ALIASES:
+            out.append(special.get("\\junk", f))
+        elif key in ALL_ALIASES:
+            out.append(special.get("\\all", f))
+        else:
+            out.append(f)
+    return list(dict.fromkeys(out))
+
+
 def fetch_messages(host: str, user: str, password: str, folders: list[str], since: datetime,
                    known_ids: set[str], max_total: int = 500) -> tuple[list[ParsedMail], bool]:
     """Fetch unseen messages oldest-first. Returns (messages, truncated) - truncated means more are waiting."""
@@ -218,6 +248,11 @@ def fetch_messages(host: str, user: str, password: str, folders: list[str], sinc
     imap = imaplib.IMAP4_SSL(host)
     try:
         imap.login(user, password)
+        try:
+            typ, listing = imap.list()
+            folders = resolve_folders(listing if typ == "OK" else [], folders)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("IMAP LIST failed, using folders as configured: %s", exc)
         for folder in folders:
             typ, _ = imap.select(f'"{folder}"', readonly=True)
             if typ != "OK":
