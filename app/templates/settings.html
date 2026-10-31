@@ -68,4 +68,13 @@
   </div>
   <div><button class="btn primary">Save settings</button></div>
 </form>
+
+<div class="card" style="margin-top:14px">
+  <h2>Housekeeping</h2>
+  <p class="small muted">Removes every dry-run attempt and its screenshots ({{ dry_runs }} attempt{{ 's' if dry_runs != 1 }} now). Competitions that were only ever dry-run go back to a clean "never attempted" state; real entries, wins and the manual queue are untouched. You don't have to do this: dry runs never mark anything as entered and don't count towards the live daily cap.</p>
+  <form method="post" action="/settings/clear-dry-runs" class="actions" onsubmit="return confirm('Delete all dry-run history and screenshots?');">
+    <label class="check"><input type="checkbox" name="requeue_manual" value="1"><span>Also give competitions that went to the manual queue during dry runs another automatic try <small>Useful if you've since fixed your profile; CAPTCHA/T&amp;C ones will simply land back in the queue.</small></span></label>
+    <button class="btn" {{ 'disabled' if not dry_runs }}>Clear dry-run history</button>
+  </form>
+</div>
 {% endblock %}

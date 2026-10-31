@@ -292,18 +292,19 @@ def log_event(s: Session, kind: str, message: str, level: str = "info", competit
     s.add(Event(kind=kind, message=message[:4000], level=level, competition_id=competition_id))
 
 
-def entries_today(s: Session, tz_name: str) -> int:
-    """Count successful automated entries (or dry runs) since local midnight."""
+def entries_today(s: Session, tz_name: str, dry_run: bool = False) -> int:
+    """Successful entries since local midnight for the current mode (dry runs never count towards a live cap)."""
     from zoneinfo import ZoneInfo
 
     tz = ZoneInfo(tz_name)
     local_midnight = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
     since = local_midnight.astimezone(timezone.utc).replace(tzinfo=None)
+    modes, results = (["dry_run"], ["dry_run_ok"]) if dry_run else (["auto", "email"], ["entered", "unverified"])
     rows = s.scalars(
         select(EntryAttempt.id).where(
             EntryAttempt.started_at >= since,
-            EntryAttempt.mode.in_(["auto", "email", "dry_run"]),
-            EntryAttempt.result.in_(["entered", "unverified", "dry_run_ok"]),
+            EntryAttempt.mode.in_(modes),
+            EntryAttempt.result.in_(results),
         )
     ).all()
     return len(rows)

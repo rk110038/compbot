@@ -1,3 +1,5 @@
+from sqlalchemy import select
+
 from app import jobs
 from app.config import DEFAULT_SETTINGS
 from app.db import Competition, init_db, session_scope
@@ -58,3 +60,31 @@ def test_dry_run_leaves_status_alone():
     jobs._finalise_web(cid, {U[0]: "dry_run_ok"}, DEFAULT_SETTINGS)
     c = _get(cid)
     assert c.status == "queued" and c.entry_count == 0 and "Dry run OK" in c.status_reason
+
+
+def test_clear_dry_runs():
+    from app.db import EntryAttempt, utcnow
+
+    a = _comp("clear-a", [U[0]])   # only dry-run, OK
+    b = _comp("clear-b", [U[0]])   # dry-run failures pushed it to manual
+    c = _comp("clear-c", [U[0]])   # has a real entry as well
+    with session_scope() as s:
+        s.add_all([EntryAttempt(competition_id=a, url=U[0], mode="dry_run", result="dry_run_ok"),
+                   EntryAttempt(competition_id=b, url=U[0], mode="dry_run", result="failed"),
+                   EntryAttempt(competition_id=c, url=U[0], mode="dry_run", result="dry_run_ok"),
+                   EntryAttempt(competition_id=c, url=U[0], mode="auto", result="entered")])
+        for cid in (a, b, c):
+            s.get(Competition, cid).last_attempt_at = utcnow()
+        s.get(Competition, a).status_reason = "Dry run OK - will submit once entry mode is set to auto"
+        cb = s.get(Competition, b)
+        cb.status, cb.failed_attempts, cb.status_reason = "manual", 2, "Automatic entry failed 2 times"
+    msg = jobs.clear_dry_runs(requeue_manual=True)
+    assert "Cleared 3 dry-run attempts" in msg
+    ca, cb, cc = _get(a), _get(b), _get(c)
+    assert ca.status == "queued" and ca.last_attempt_at is None and ca.status_reason == "Queued"
+    assert cb.status == "queued" and cb.failed_attempts == 0
+    assert cc.last_attempt_at is not None  # real attempt kept
+    with session_scope() as s:
+        modes = {m for (m,) in s.execute(select(EntryAttempt.mode)).all()}
+    assert "dry_run" not in modes and "auto" in modes
+    assert jobs.clear_dry_runs() == "No dry-run history to clear"

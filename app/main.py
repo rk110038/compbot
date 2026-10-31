@@ -203,7 +203,7 @@ def dashboard(request: Request):
             "lost": count(Competition.outcome == "lost"),
             "pending": count(Competition.outcome == "pending", Competition.status == "entered"),
             "review": count(Competition.needs_review.is_(True)),
-            "today": entries_today(s, cfg.tz),
+            "today": entries_today(s, cfg.tz, get_settings(s).get("entry_mode") != "auto"),
             "won_value": s.scalar(select(func.sum(Competition.prize_value)).where(Competition.outcome == "won")) or 0,
         }
         decided = stats["won"] + stats["lost"]
@@ -508,7 +508,17 @@ def settings_view(request: Request):
     with session_scope() as s:
         profile = get_profile(s)
         settings = get_settings(s)
-    return render(request, "settings.html", profile=profile, settings=settings, defaults=DEFAULT_SETTINGS)
+        dry_runs = s.scalar(select(func.count(EntryAttempt.id)).where(EntryAttempt.mode == "dry_run")) or 0
+    return render(request, "settings.html", profile=profile, settings=settings, defaults=DEFAULT_SETTINGS,
+                  dry_runs=dry_runs)
+
+
+@app.post("/settings/clear-dry-runs")
+def clear_dry_runs(request: Request, requeue_manual: str = Form("")):
+    if jobs.is_running("enter"):
+        return back(request, "/settings", "An entry run is in progress - try again when it finishes")
+    msg = jobs.clear_dry_runs(requeue_manual=bool(requeue_manual))
+    return back(request, "/settings", msg)
 
 
 @app.post("/settings")

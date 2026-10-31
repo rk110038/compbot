@@ -204,7 +204,7 @@ def _enter(comp_ids: list[int] | None = None, force: bool = False) -> str:
             log_event(s, "entry", "Entry run skipped: fill in your profile first (" + ", ".join(missing) + ")", "warn")
             return "Profile incomplete"
         cap = int(settings.get("daily_entry_cap", 25))
-        done_today = entries_today(s, cfg.tz)
+        done_today = entries_today(s, cfg.tz, settings.get("entry_mode") != "auto")
         comps = _due_competitions(s, settings, comp_ids)
         comp_ids_ordered = [c.id for c in comps]
     budget = max(0, cap - done_today) if not force else max(1, len(comp_ids_ordered) * 6)
@@ -511,6 +511,55 @@ def _click_confirm(url: str) -> str:
 
 
 # --------------------------------------------------------------------------- maintenance
+
+def clear_dry_runs(requeue_manual: bool = False) -> str:
+    """Delete dry-run attempts + their screenshots and reset competitions that were only ever dry-run."""
+    from sqlalchemy import delete
+
+    cfg = get_config()
+    shots: list[str] = []
+    with session_scope() as s:
+        rows = s.execute(select(EntryAttempt.id, EntryAttempt.competition_id, EntryAttempt.screenshot_before,
+                                EntryAttempt.screenshot_after).where(EntryAttempt.mode == "dry_run")).all()
+        if not rows:
+            return "No dry-run history to clear"
+        comp_ids = {r.competition_id for r in rows}
+        shots = [n for r in rows for n in (r.screenshot_before, r.screenshot_after) if n]
+        s.execute(delete(EntryAttempt).where(EntryAttempt.mode == "dry_run"))
+        s.flush()
+        reset = requeued = 0
+        today = today_local()
+        for cid in comp_ids:
+            c = s.get(Competition, cid)
+            if c is None:
+                continue
+            real = s.scalar(select(EntryAttempt.id).where(EntryAttempt.competition_id == cid).limit(1))
+            if real is not None:
+                if (c.status_reason or "").startswith("Dry run OK"):
+                    c.status_reason = "Queued"
+                continue
+            c.last_attempt_at, c.failed_attempts = None, 0
+            reset += 1
+            open_ = c.closes_on is None or c.closes_on >= today
+            if (c.status_reason or "").startswith("Dry run OK"):
+                c.status_reason = "Queued"
+            elif requeue_manual and c.status == "manual" and c.method in ("web_form", "email") and open_ and (
+                    c.entry_urls or c.email_to):
+                c.status, c.status_reason = "queued", "Re-queued after clearing dry-run history"
+                requeued += 1
+        summary = f"Cleared {len(rows)} dry-run attempts on {len(comp_ids)} competitions ({reset} reset" + (
+            f", {requeued} re-queued from manual" if requeue_manual else "") + ")"
+        log_event(s, "user", summary, "warn")
+    removed = 0
+    for name in shots:
+        p = cfg.screenshot_dir / name
+        try:
+            p.unlink()
+            removed += 1
+        except OSError:
+            pass
+    return f"{summary}; {removed} screenshots deleted"
+
 
 def run_maintenance() -> str:
     return _run("maintenance", _maintenance)
