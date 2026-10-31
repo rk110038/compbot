@@ -80,3 +80,29 @@ def test_private_address_refused(browser, fixture_server, profile, monkeypatch):
     monkeypatch.delenv("ALLOW_PRIVATE_URLS", raising=False)
     res = browser.enter(f"{fixture_server}/comp_form.html", Ctx(profile=profile), _settings(entry_mode="auto"), "t9", {})
     assert res.result == "blocked" and "non-public" in res.message
+
+
+def test_lazy_iframe_does_not_hang(browser, fixture_server, profile):
+    import time
+    t0 = time.time()
+    res = browser.enter(f"{fixture_server}/lazy_iframe.html", Ctx(profile=profile, tags=["nl"]),
+                        _settings(entry_mode="auto"), "t10", {})
+    assert res.result == "entered", (res.message, res.details)
+    assert time.time() - t0 < 90
+
+
+def test_isolated_entry_round_trip(fixture_server, profile):
+    from app.entry.browser import enter_isolated
+    res = enter_isolated(f"{fixture_server}/comp_form.html", Ctx(profile=profile, answers=["Charquemont"]),
+                         _settings(entry_mode="dry_run", respect_automation_clauses=False), "t11", {}, timeout=120)
+    assert res.result == "dry_run_ok", res.message
+
+
+def test_isolated_entry_hard_timeout():
+    import time
+    from app.entry.browser import enter_isolated
+    t0 = time.time()
+    # Unroutable address: goto would sit for 45 s; the watchdog must cut it off first.
+    res = enter_isolated("http://10.255.255.1/", Ctx(profile={}), _settings(entry_mode="auto"), "t12", {}, timeout=4)
+    assert res.result == "error" and "Timed out" in res.message
+    assert time.time() - t0 < 30

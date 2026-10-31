@@ -285,12 +285,19 @@ CLOSED_RE = re.compile(
 # --------------------------------------------------------------------------- helpers
 
 def _all_frames(page):
-    return [f for f in page.frames if not f.is_detached()]
+    # Frames that never navigated (e.g. lazy-loaded iframes off-screen) have no URL and no JS context;
+    # evaluating in them waits forever, so leave them out.
+    return [f for f in page.frames if not f.is_detached() and f.url]
+
+
+EVAL_TIMEOUT_MS = 10000
 
 
 def _safe_eval(frame, script, arg=None, default=None):
+    """Run one of our page scripts with a hard timeout (frame.evaluate itself has none)."""
     try:
-        return frame.evaluate(script, arg) if arg is not None else frame.evaluate(script)
+        wrapped = f"(_root, __arg) => ({script})(__arg)"
+        return frame.locator(":root").evaluate(wrapped, arg, timeout=EVAL_TIMEOUT_MS)
     except Exception as exc:  # noqa: BLE001
         log.debug("evaluate failed in %s: %s", getattr(frame, "url", "?"), exc)
         return default
@@ -559,7 +566,7 @@ class Browser:
                         time.sleep(2.5)
                         if len(context.pages) > n_pages:
                             page = context.pages[-1]
-                            page.wait_for_load_state("domcontentloaded")
+                            page.wait_for_load_state("domcontentloaded", timeout=15000)
                         _wait_settle(page, 6000)
                         dismiss_cookies(page)
                         clause = clause_check()
@@ -716,3 +723,39 @@ class Browser:
 
 def result_as_dict(r: AttemptResult) -> dict:
     return asdict(r)
+
+
+# --------------------------------------------------------------------------- isolation / watchdog
+
+ENTRY_TIMEOUT_S = 240
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def enter_isolated(url: str, ctx: Ctx, settings: dict, shot_prefix: str, comp_context: dict,
+                   timeout: float = ENTRY_TIMEOUT_S) -> AttemptResult:
+    """Run one entry in its own process with a hard time limit, so no single page can stall a whole run."""
+    import pickle
+    import subprocess
+    import sys
+
+    payload = pickle.dumps({"url": url, "ctx": ctx, "settings": settings, "shot_prefix": shot_prefix,
+                            "comp_context": comp_context})
+    proc = subprocess.Popen([sys.executable, "-m", "app.entry.worker"], cwd=str(_PROJECT_ROOT),
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    try:
+        out, _ = proc.communicate(payload, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()  # Playwright's driver sees its pipe close and shuts Chromium down with it
+        try:
+            proc.communicate(timeout=15)
+        except subprocess.TimeoutExpired:
+            pass
+        log.warning("entry timed out after %ss: %s", timeout, url)
+        return AttemptResult(result="error", message=f"Timed out after {int(timeout)}s (the page never finished "
+                                                     "responding) - skipped")
+    if proc.returncode != 0 or not out:
+        return AttemptResult(result="error", message=f"Browser process ended unexpectedly (exit {proc.returncode})")
+    try:
+        return pickle.loads(out)
+    except Exception as exc:  # noqa: BLE001
+        return AttemptResult(result="error", message=f"Couldn't read the browser result: {exc}"[:500])

@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Lazy iframe</title></head>
+<body>
+<h1>Win a scarf - sign up to our newsletter</h1>
+<form id="f">
+  <label>First name <input name="fname" required></label>
+  <label>Email <input type="email" name="email" required></label>
+  <button type="submit">Subscribe</button>
+</form>
+<!-- An off-screen lazy iframe never navigates, so it has no JS context; evaluating in it used to hang forever. -->
+<div style="height: 9000px"></div>
+<iframe loading="lazy" src="iframe_inner.html" width="300" height="200"></iframe>
+<script>
+document.getElementById('f').addEventListener('submit', e => { e.preventDefault(); document.body.innerHTML = '<p>Thanks for signing up!</p>'; });
+</script>
+</body></html>

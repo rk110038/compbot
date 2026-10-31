@@ -211,50 +211,44 @@ def _enter(comp_ids: list[int] | None = None, force: bool = False) -> str:
     if budget == 0:
         return f"Daily cap reached ({cap})"
     stats: dict[str, int] = {}
-    browser = None
-    try:
-        for n, cid in enumerate(comp_ids_ordered, 1):
+    for n, cid in enumerate(comp_ids_ordered, 1):
+        if budget <= 0:
+            break
+        with session_scope() as s:
+            comp = s.get(Competition, cid)
+            urls = _urls_to_try(comp) or (list(comp.entry_urls or []) if force else [])
+            method = comp.method
+            _progress["enter"] = f"{n}/{len(comp_ids_ordered)}: {comp.title[:60]}"
+        if method == "email":
+            result = _enter_email(cid, settings, profile, force=force)
+            stats[result] = stats.get(result, 0) + 1
+            budget -= 1
+            continue
+        if not urls:
+            continue
+        results: dict[str, str] = {}
+        for url in urls:
             if budget <= 0:
                 break
-            with session_scope() as s:
-                comp = s.get(Competition, cid)
-                urls = _urls_to_try(comp) or (list(comp.entry_urls or []) if force else [])
-                method = comp.method
-                _progress["enter"] = f"{n}/{len(comp_ids_ordered)}: {comp.title[:60]}"
-            if method == "email":
-                result = _enter_email(cid, settings, profile, force=force)
-                stats[result] = stats.get(result, 0) + 1
-                budget -= 1
-                continue
-            if not urls:
-                continue
-            if browser is None:
-                from .entry.browser import Browser
-                browser = Browser()
-            results: dict[str, str] = {}
-            for url in urls:
-                if budget <= 0:
-                    break
-                results[url] = _enter_web(browser, cid, url, settings, profile)
-                budget -= 1
-                if len(urls) > 1:
-                    time.sleep(random.uniform(3, 8))
-            for o in results.values():
-                stats[o] = stats.get(o, 0) + 1
-            _finalise_web(cid, results, settings)
-            if n < len(comp_ids_ordered) and budget > 0:
-                lo, hi = int(settings.get("delay_min_seconds", 20)), int(settings.get("delay_max_seconds", 60))
-                time.sleep(random.uniform(min(lo, hi), max(lo, hi)) if not comp_ids else 2)
-    finally:
-        if browser:
-            browser.close()
+            results[url] = _enter_web(cid, url, settings, profile)
+            budget -= 1
+            if len(urls) > 1:
+                time.sleep(random.uniform(3, 8))
+        for o in results.values():
+            stats[o] = stats.get(o, 0) + 1
+        _finalise_web(cid, results, settings)
+        if n < len(comp_ids_ordered) and budget > 0:
+            lo, hi = int(settings.get("delay_min_seconds", 20)), int(settings.get("delay_max_seconds", 60))
+            time.sleep(random.uniform(min(lo, hi), max(lo, hi)) if not comp_ids else 2)
     summary = ", ".join(f"{v} {k}" for k, v in sorted(stats.items())) or "Nothing to enter"
     with session_scope() as s:
         log_event(s, "entry", f"Entry run finished: {summary}", "success")
     return summary
 
 
-def _enter_web(browser, cid: int, url: str, settings: dict, profile: dict) -> str:
+def _enter_web(cid: int, url: str, settings: dict, profile: dict) -> str:
+    from .entry.browser import enter_isolated
+
     with session_scope() as s:
         comp = s.get(Competition, cid)
         att = EntryAttempt(competition_id=cid, url=url, mode="dry_run" if settings.get("entry_mode") != "auto" else "auto")
@@ -265,7 +259,7 @@ def _enter_web(browser, cid: int, url: str, settings: dict, profile: dict) -> st
                   marketing_opt_in=bool(settings.get("marketing_opt_in")))
         comp_context = {"title": comp.title, "question": comp.question, "known_answers": comp.answers,
                         "post_excerpt": (comp.body_text or "")[:800]}
-    r = browser.enter(url, ctx, settings, f"c{cid}_a{att_id}", comp_context)
+    r = enter_isolated(url, ctx, settings, f"c{cid}_a{att_id}", comp_context)
     with session_scope() as s:
         att = s.get(EntryAttempt, att_id)
         att.result, att.message, att.details = r.result, r.message, r.details

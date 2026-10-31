@@ -52,6 +52,8 @@ async def lifespan(_app: FastAPI):
     global scheduler
     init_db()
     with session_scope() as s:
+        for jr in s.scalars(select(JobRun).where(JobRun.status == "running")).all():
+            jr.status, jr.finished_at, jr.summary = "error", utcnow(), "Interrupted (app restarted)"
         log_event(s, "system", f"compbot {__version__} started")
     if cfg.scheduler_enabled:
         from apscheduler.schedulers.background import BackgroundScheduler
@@ -348,8 +350,6 @@ def competition_action(request: Request, cid: int, action: str = Form(...), note
 
 def _dry_single(cid: int) -> str:
     """Dry-run one competition regardless of the global entry mode."""
-    from .entry.browser import Browser
-
     with session_scope() as s:
         settings = dict(get_settings(s))
         profile = get_profile(s)
@@ -359,9 +359,7 @@ def _dry_single(cid: int) -> str:
     settings["entry_mode"] = "dry_run"
     if method == "email":
         return jobs._enter_email(cid, settings, profile, force=True)
-    with Browser() as b:
-        results = [jobs._enter_web(b, cid, u, settings, profile) for u in urls[:3]]
-    return ", ".join(results)
+    return ", ".join(jobs._enter_web(cid, u, settings, profile) for u in urls[:3])
 
 
 @app.post("/competitions/{cid}/edit")
