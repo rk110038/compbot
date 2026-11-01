@@ -142,3 +142,17 @@ def test_yes_option_wording_decides_consent_radio(profile):
         {"value": "1", "text": "Yes, send me offers and news", "idx": "y"}, {"value": "0", "text": "No thanks", "idx": "n"}])
     assert map_field(mkt, ctx(profile)).value == "n"
     assert map_field(mkt, ctx(profile, tags=["nl"])).value == "y"
+
+
+def test_contact_channel_checkboxes(profile):
+    email = Field("1", "input", "checkbox", name="consent", label="Email", context="How would you like to hear from us? Email Online Advertisements")
+    ads = Field("2", "input", "checkbox", name="consent", label="Online Advertisements", context="How would you like to hear from us?")
+    assert map_field(email, ctx(profile, tags=["nl"])).kind == "check"
+    assert map_field(email, ctx(profile)).kind == "skip"
+    assert map_field(ads, ctx(profile, tags=["nl"])).kind == "skip"
+
+
+def test_single_radio_consent(profile):
+    f = Field("r", "radio", "radio", label="I agree to the terms and conditions.", options=[
+        {"value": "yes", "text": "Terms and conditions: https://example.com/terms", "idx": "t1"}])
+    assert map_field(f, ctx(profile)).value == "t1"

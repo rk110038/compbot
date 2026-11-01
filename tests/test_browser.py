@@ -156,3 +156,38 @@ def test_invisible_recaptcha_is_not_a_captcha(browser, fixture_server, profile):
     # Sainsbury's Magazine, Mailchimp, Heinz...: only an invisible reCAPTCHA badge - no challenge to solve.
     res = browser.enter(f"{fixture_server}/captcha_invisible.html", Ctx(profile=profile), _settings(entry_mode="auto"), "r7", {})
     assert res.result == "entered", (res.message, res.details)
+
+
+def test_required_error_gets_one_corrected_resubmit(browser, fixture_server, profile):
+    # Red Torpedo (Klaviyo): interests + email consent are only demanded after submitting.
+    res = browser.enter(f"{fixture_server}/required_retry.html", Ctx(profile=profile, tags=["nl"]),
+                        _settings(entry_mode="auto"), "r8", {})
+    assert res.result == "entered", (res.message, res.details)
+    assert any("site said fields were required" in s for s in res.details["steps"])
+    assert sum("clicked" in s for s in res.details["steps"]) == 2
+
+
+def test_single_option_terms_radios(browser, fixture_server, profile):
+    # Jimmy's (Jotform): "I agree to the terms" / "privacy policy" are lone radio buttons.
+    res = browser.enter(f"{fixture_server}/single_radio_terms.html", Ctx(profile=profile),
+                        _settings(entry_mode="auto"), "r9", {})
+    assert res.result == "entered", (res.message, res.details)
+
+
+def test_terms_link_that_loads_late_is_still_checked(browser, fixture_server, profile):
+    # Rayo: form + T&C link appear only after scrolling; the T&Cs ban automated entries.
+    res = browser.enter(f"{fixture_server}/late_terms.html", Ctx(profile=profile), _settings(entry_mode="auto"), "r10", {})
+    assert res.result == "tc_blocked", (res.result, res.message)
+
+
+def test_start_the_quiz_button_then_questions(browser, fixture_server, profile):
+    ctx = Ctx(profile=profile, answers=["Alpine", "Abu Dhabi"], question="quiz")
+    res = browser.enter(f"{fixture_server}/quiz.html", ctx, _settings(entry_mode="auto"), "r11", {})
+    assert res.result == "entered", (res.message, res.details)
+    assert any("Start the quiz" in s for s in res.details["steps"])
+
+
+def test_dry_run_presses_safe_quiz_button(browser, fixture_server, profile):
+    ctx = Ctx(profile=profile, answers=["Alpine", "Abu Dhabi"], question="quiz")
+    res = browser.enter(f"{fixture_server}/quiz.html", ctx, _settings(entry_mode="dry_run"), "r12", {})
+    assert res.result == "dry_run_ok", (res.message, res.details)

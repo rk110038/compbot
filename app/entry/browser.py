@@ -16,7 +16,18 @@ from bs4 import BeautifulSoup
 from .. import llm
 from ..config import get_config
 from ..netguard import guarded_client, is_public_url
-from .forms import PROFILE_KEYS, Action, Ctx, Field, apply_llm_action, find_automation_clause, plan_form
+from .forms import (
+    PROFILE_KEYS,
+    THIRD_PARTY_RE,
+    Action,
+    Ctx,
+    Field,
+    apply_llm_action,
+    find_automation_clause,
+    is_placeholder_option,
+    normalise,
+    plan_form,
+)
 
 log = logging.getLogger("compbot.browser")
 
@@ -146,6 +157,24 @@ JS_EXTRACT = "(prefix) => {\n" + JS_HELPERS + r"""
         placeholder: el.getAttribute('placeholder') || '', autocomplete: el.getAttribute('autocomplete') || '',
         aria: el.getAttribute('aria-label') || '', required: isReq(el, label), options: [], context: ctxText(el),
         maxlength: el.maxLength > 0 ? el.maxLength : null, checked: !!el.checked};
+      if (type === 'checkbox' && el.name) {
+        // A group of checkboxes ("What are you interested in? [ ] MTB [ ] Moto"): use the group's own question.
+        const same = Array.from(document.querySelectorAll('input[type=checkbox]')).filter(c => c.name === el.name);
+        if (same.length > 1) {
+          let n = el.parentElement, q = '';
+          for (let i = 0; i < 6 && n && !q; i++) {
+            const inside = Array.from(n.querySelectorAll('input[type=checkbox]'));
+            if (inside.length >= same.length && inside.every(c => c.name === el.name)) {
+              const lab = Array.from(n.querySelectorAll('legend, [class*=label i], p, h3, h4, label')).find(l => !l.querySelector('input') && !(l.closest('label') && l.closest('label').querySelector('input')) && txt(l));
+              const prev = n.previousElementSibling;
+              q = lab ? txt(lab) : (prev && txt(prev).length < 300 && !prev.querySelector('input') ? txt(prev) : '');
+            }
+            n = n.parentElement;
+          }
+          if (!q) { let p = el.closest('label') || el; for (let i = 0; i < 6 && p && !q; i++) { p = p.previousElementSibling; if (p && !p.querySelector('input') && txt(p)) q = txt(p); } }
+          if (q) f.context = q.slice(0, 300);
+        }
+      }
       if (el.tagName === 'SELECT') f.options = Array.from(el.options).map(o => ({value: o.value, text: (o.text || '').trim()}));
       fields.push(f);
     }
@@ -288,18 +317,37 @@ JS_TERMS_LINKS = r"""
   .map(a => a.href).filter(h => /^https?:/i.test(h)).slice(0, 3)
 """
 
-JS_REVEAL = "(linksOnly) => {\n" + JS_HELPERS + r"""
+JS_REVEAL = "(dryRun) => {\n" + JS_HELPERS + r"""
   const vis = __cbVis, txt = __cbTxt;
-  const re = /^(enter( now| here| the competition| competition| the (prize )?draw| to win| now for free)?|click (here )?to enter|take part|get started|start|begin|play now|enter giveaway|i want to win)!?$/i;
+  // Buttons that only open the entry form or quiz: safe to press even in a dry run.
+  const safe = /^((let'?s )?(start|begin|take|do|play|try)( the| our| this| a)?( quiz| game| competition| challenge| test)?( now| here)?|get started|let'?s (go|start|play)|show (the )?(form|questions?)|reveal (the )?(form|question))!?$/i;
+  // Buttons that might themselves submit an entry: only pressed for real entries.
+  const enter = /^(enter( now| here| the competition| competition| the (prize )?draw| to win| now for free| the giveaway| giveaway| the quiz| quiz)?|click (here )?to enter|take part|enter (&|and) win|i want to win|join (in|now)|count me in)!?$/i;
+  const h1 = document.querySelector('h1');
+  const top0 = h1 ? h1.getBoundingClientRect().top + scrollY : 0;
+  let best = null, bestScore = -1e9;
   for (const b of document.querySelectorAll('button, a, [role=button], input[type=button]')) {
     if (!vis(b)) continue;
-    // Never press anything that could submit a form; in dry-run only follow plain links.
+    // Never press anything that could submit a form.
     if (b.closest('form') || (b.getAttribute('type') || '').toLowerCase() === 'submit') continue;
-    if (linksOnly && !(b.tagName === 'A' && /^https?:/i.test(b.href || ''))) continue;
     const t = (txt(b) || b.value || '').trim();
-    if (re.test(t)) { b.setAttribute('data-cb-reveal', '1'); return t; }
+    const isLink = b.tagName === 'A' && /^https?:/i.test(b.href || '');
+    const offsite = isLink && new URL(b.href, location.href).host !== location.host;
+    const isSafe = safe.test(t), isEnter = enter.test(t);
+    if (!isSafe && !isEnter) continue;
+    if (isEnter && !isSafe && dryRun && !isLink) continue;
+    let s = 0;
+    if (/quiz|competition|draw|giveaway|enter/i.test(t)) s += 6;
+    if (/^(play|play now|start|begin|try)!?$/i.test(t)) s -= 4;          // generic: could be a game or video
+    if (offsite && /^(play|start|begin|try|take)/i.test(t)) s -= 8;       // e.g. a fantasy-game promo
+    if (b.closest('main, article, [role=main]')) s += 2;
+    if (b.closest('header, nav, footer, aside, [role=navigation], [role=banner], [role=contentinfo]')) s -= 8;
+    s -= Math.min(6, Math.abs(b.getBoundingClientRect().top + scrollY - top0) / 600);  // nearer the headline
+    if (s > bestScore) { best = b; bestScore = s; }
   }
-  return null;
+  if (!best || bestScore < -6) return null;
+  best.setAttribute('data-cb-reveal', '1');
+  return (txt(best) || best.value || '').trim();
 }
 """
 
@@ -386,6 +434,8 @@ CLOSED_RE = re.compile(
     r"(?:competition|promotion|prize draw|giveaway|this comp\w*) (?:is |has )?(?:now )?(?:closed|ended|finished)|"
     r"no longer (?:accepting|open|available)|entries (?:are|have) (?:now )?closed|has now closed|this competition "
     r"has expired", re.I)
+
+MAX_FORM_PAGES = 8  # multi-page forms and quizzes (one question per page)
 
 
 # --------------------------------------------------------------------------- helpers
@@ -525,7 +575,9 @@ def _refresh_container(frame, done_idx: set[str], prefix: str) -> dict | None:
 
 
 def _form_sig(container: dict) -> frozenset:
-    return frozenset((f.get("type", ""), (f.get("name") or f.get("label") or f.get("placeholder") or "").strip().lower())
+    # Name *and* label: quiz pages often reuse one field name for every question.
+    return frozenset((f.get("type", ""), (f.get("name") or "").strip().lower(),
+                      (f.get("label") or f.get("placeholder") or "").strip().lower()[:60])
                      for f in container.get("fields", []))
 
 
@@ -533,6 +585,41 @@ def _same_form(a: frozenset, b: frozenset) -> bool:
     if not a or not b:
         return False
     return len(a & b) / min(len(a), len(b)) >= 0.6
+
+
+REQUIRED_ERR_RE = re.compile(
+    r"(?:field|this|option|selection) is required|required field|please (?:select|choose|tick|check|complete|fill)|"
+    r"must (?:select|choose|tick|agree|accept|be checked)|select at least one|at least one (?:option|box)", re.I)
+
+
+def _required_fixes(container: dict) -> list[tuple[Field, Action]]:
+    """After a 'this field is required' error: sensible choices for groups compbot left untouched."""
+    from collections import defaultdict
+
+    fields = _to_fields(container)
+    fixes: list[tuple[Field, Action]] = []
+    note = "site said this was required"
+    groups: dict[str, list[Field]] = defaultdict(list)
+    for f in fields:
+        if f.tag == "input" and f.type == "checkbox" and f.name:
+            groups[f.name].append(f)
+    for fs in groups.values():
+        if len(fs) < 2 or any(f.checked for f in fs):
+            continue
+        labels = [normalise(f.label) for f in fs]
+        if any(THIRD_PARTY_RE.search(lb) for lb in labels):
+            continue
+        pick = next((f for f, lb in zip(fs, labels) if lb in ("email", "e mail", "by email")), fs[0])
+        fixes.append((pick, Action("check", source="rule", note=note)))
+    for f in fields:
+        if f.tag == "radio" and not f.checked:
+            o = next((o for o in f.options if not is_placeholder_option(o)), None)
+            if o:
+                fixes.append((f, Action("radio", o.get("idx") or o.get("value"), source="rule", note=note)))
+        elif f.tag == "input" and f.type == "checkbox" and f.required and not f.checked and len(groups.get(f.name, [])) < 2:
+            if not THIRD_PARTY_RE.search(normalise(f.label)):
+                fixes.append((f, Action("check", source="rule", note=note)))
+    return fixes
 
 
 def _click_submit(page, frame) -> str:
@@ -607,13 +694,18 @@ def scroll_through(page) -> None:
     prime_iframes(page)
 
 
-def fetch_terms_text(page) -> str:
+def terms_links(page) -> list[str]:
     links: list[str] = []
     for fr in _all_frames(page):
         links += _safe_eval(fr, JS_TERMS_LINKS, default=[]) or []
+    return list(dict.fromkeys(links))[:3]
+
+
+def fetch_terms_text(page, links: list[str] | None = None) -> str:
+    links = terms_links(page) if links is None else links
     texts = []
     with guarded_client(headers={"User-Agent": get_config().user_agent}, timeout=15) as client:
-        for href in list(dict.fromkeys(links))[:3]:
+        for href in links[:3]:
             try:
                 resp = client.get(href)
                 ctype = (resp.headers.get("content-type") or "").lower()
@@ -736,14 +828,21 @@ class Browser:
             return find_best_form(page, ctx, gen[0])
 
         def clause_check() -> str | None:
-            """Automation-ban check for the current page (once per URL)."""
+            """Automation-ban check: page text + linked T&Cs. Re-runs whenever new T&C links have appeared
+            (e.g. after scrolling or revealing the form), so a late-loading T&C link is never missed."""
             if not settings.get("respect_automation_clauses", True):
                 return None
-            key = page.url.split("#")[0]
+            links = terms_links(page)
+            key = page.url.split("#")[0] + "|" + ",".join(sorted(links))
             if key in checked_urls:
                 return None
             checked_urls.add(key)
-            return find_automation_clause(_page_text(page)) or find_automation_clause(fetch_terms_text(page))
+            return find_automation_clause(_page_text(page)) or find_automation_clause(fetch_terms_text(page, links))
+
+        def tc_blocked(where: str = "") -> AttemptResult:
+            res.result = "tc_blocked"
+            res.message = f"T&Cs{where} ban automated entries: \u201c{clause[:300]}\u201d"
+            return res
 
         try:
             resp = page.goto(url, wait_until="domcontentloaded", timeout=45000)
@@ -802,7 +901,8 @@ class Browser:
                         try:
                             fr.locator('[data-cb-reveal="1"]').first.click(timeout=5000)
                         except Exception:  # noqa: BLE001
-                            pass
+                            _safe_eval(fr, "() => { const b = document.querySelector('[data-cb-reveal=\"1\"]'); "
+                                           "if (b) b.click(); return !!b; }")
                         time.sleep(2.5)
                         if len(context.pages) > n_pages:
                             page = context.pages[-1]
@@ -824,6 +924,11 @@ class Browser:
                 res.screenshot_before = _shot(page, cfg.screenshot_dir / f"{shot_prefix}_noform.jpg")
                 return res
 
+            # The form may have appeared late (scroll/reveal/embed) along with new T&C links: check them again.
+            clause = clause_check()
+            if clause:
+                return tc_blocked()
+
             cap = detect_captcha(page)
             if cap:
                 res.result, res.message = "captcha", f"CAPTCHA on the form ({cap}) - enter manually"
@@ -832,7 +937,8 @@ class Browser:
 
             done_idx: set[str] = set()
             submitted_sigs: list[frozenset] = []
-            for step in range(1, 4):
+            retried_required = False
+            for step in range(1, MAX_FORM_PAGES + 1):
                 frame, container, score = best
                 plan_all: list = []
                 # Fill in rounds: many forms only reveal later fields (or the submit button) once earlier ones are set.
@@ -912,6 +1018,9 @@ class Browser:
                     res.result, res.message = "failed", "Couldn't find the submit button"
                     res.screenshot_before = _shot(page, cfg.screenshot_dir / f"{shot_prefix}_nosubmit.jpg")
                     return res
+                clause = clause_check()  # last look at the T&Cs before anything is sent
+                if clause:
+                    return tc_blocked()
                 before_text = set(_page_text(page).splitlines())
                 before_url = page.url
                 submitted_sigs.append(_form_sig(container))
@@ -968,6 +1077,26 @@ class Browser:
                     details["steps"].append(f"step {step + 1}: another form page")
                     continue
                 if err:
+                    # "This field is required": tick the obvious option in untouched groups and send once more,
+                    # like a person correcting the form.
+                    if not retried_required and same_form and REQUIRED_ERR_RE.search(new_text):
+                        gen[0] += 1
+                        cur = _refresh_container(frame, done_idx, f"g{gen[0]}q_")
+                        fixes = _required_fixes(cur) if cur else []
+                        applied = []
+                        for f, a in fixes:
+                            if _apply(frame, f, a):
+                                applied.append(f.human_label)
+                                details["fields"].append({"label": f.human_label, "action": a.kind, "source": a.source,
+                                                          "note": a.note, "ok": True})
+                        if applied:
+                            retried_required = True
+                            _safe_eval(frame, JS_BLUR)
+                            details["steps"].append(
+                                f"step {step}: site said fields were required - set {', '.join(applied)[:200]}; sending again")
+                            submitted_sigs.clear()
+                            best = (frame, cur, score)
+                            continue
                     snippet = new_text[max(0, err.start() - 60): err.end() + 80].replace("\n", " ")
                     res.result, res.message = "failed", f"Form reported a problem: \u201c{snippet.strip()}\u201d"
                     return res
@@ -976,7 +1105,7 @@ class Browser:
                     return res
                 res.result, res.message = "failed", "Submitted but nothing changed on the page"
                 return res
-            res.result, res.message = "unverified", "Gave up after 3 form pages"
+            res.result, res.message = "unverified", f"Gave up after {MAX_FORM_PAGES} form pages"
             return res
         except Exception as exc:  # noqa: BLE001
             log.exception("entry error for %s", url)

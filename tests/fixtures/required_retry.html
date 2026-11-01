@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Required retry</title></head>
+<body>
+<h1>Win £1000 of kit</h1>
+<h2>Enter the competition</h2>
+<!-- Like Red Torpedo's Klaviyo form: nothing is marked required, but submitting without an interest and the
+     email consent is rejected with "This field is required". -->
+<form id="f" novalidate>
+  <label>First name <input name="first"></label>
+  <label>Enter your email address <input type="email" name="email"></label>
+  <p>What are you interested in? Select all that apply.</p>
+  <label><input type="checkbox" name="category" value="mtb"> MTB</label>
+  <label><input type="checkbox" name="category" value="moto"> Moto</label>
+  <p>How would you like to hear from us?</p>
+  <label><input type="checkbox" name="consent" value="email"> Email</label>
+  <label><input type="checkbox" name="consent" value="ads"> Online Advertisements</label>
+  <button type="submit">ENTER COMPETITION</button>
+  <div id="err"></div>
+</form>
+<script>
+window.__submits = 0;
+document.getElementById('f').addEventListener('submit', e => {
+  e.preventDefault(); window.__submits++;
+  const f = e.target;
+  const cat = f.querySelectorAll('[name=category]:checked').length;
+  const em = f.querySelector('[name=consent][value=email]').checked;
+  const ads = f.querySelector('[name=consent][value=ads]').checked;
+  if (!cat || !em || ads) {
+    document.getElementById('err').innerHTML = (cat ? '' : '<p>This field is required</p>') + (em ? '' : '<p>This field is required</p>') + (ads ? '<p>WRONG: ads ticked</p>' : '');
+    return;
+  }
+  document.body.innerHTML = '<p>Thanks for signing up! Good luck.</p>';
+});
+</script>
+</body></html>

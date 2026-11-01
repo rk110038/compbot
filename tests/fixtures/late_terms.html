@@ -1,0 +1,20 @@
+﻿<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Late terms</title></head>
+<body>
+<h1>Win a family ticket</h1>
+<p>Scroll down to enter.</p>
+<div style="height: 5000px"></div>
+<div id="slot"></div>
+<script>
+// Like the Rayo pages: the entry form and its T&C link only load when scrolled into view.
+let loaded = false;
+window.addEventListener('scroll', () => {
+  if (loaded || window.scrollY < 1200) return;
+  loaded = true;
+  document.getElementById('slot').innerHTML = `<h2>Enter the competition</h2><form id="f">
+    <label>First name <input name="first" required></label><label>Email <input type="email" name="email" required></label>
+    <button type="submit">Enter</button></form><p><a href="terms.html">Terms and conditions</a></p>`;
+  document.getElementById('f').addEventListener('submit', e => { e.preventDefault(); document.title = 'SUBMITTED'; document.body.innerHTML = '<p>Thank you for entering!</p>'; });
+});
+</script>
+</body></html>

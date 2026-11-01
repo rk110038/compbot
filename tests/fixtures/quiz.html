@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Quiz comp</title></head>
+<body>
+<h1>Win a signed race helmet</h1>
+<p>Answer our quick quiz for a chance to win. Winners will be contacted by email.</p>
+<button id="start" type="button">Start the quiz</button>
+<div id="app"></div>
+<script>
+const qs = [
+  {q: 'Which team does the driver race for?', opts: ['Ferrari', 'Alpine', 'Williams']},
+  {q: 'Where is the next race?', opts: ['Monaco', 'Abu Dhabi', 'Silverstone']},
+];
+let i = 0;
+function question() {
+  const q = qs[i];
+  // Every question reuses the same field name, like many quiz builders.
+  document.getElementById('app').innerHTML = `<h2>Question ${i + 1}</h2><form id="f"><fieldset><legend>${q.q}</legend>` +
+    q.opts.map((o, k) => `<label><input type="radio" name="answer" value="${o}"> ${o}</label>`).join('') +
+    `</fieldset><button type="submit">Next</button></form>`;
+  document.getElementById('f').addEventListener('submit', e => {
+    e.preventDefault();
+    if (!e.target.querySelector('input:checked')) return;
+    i++; i < qs.length ? question() : details();
+  });
+}
+function details() {
+  document.getElementById('app').innerHTML = `<h2>Your details</h2><form id="d"><label>First name <input name="fn" required></label>
+    <label>Email <input type="email" name="em" required></label><label><input type="checkbox" name="tc" required> I agree to the terms</label>
+    <button type="submit">Submit entry</button></form>`;
+  document.getElementById('d').addEventListener('submit', e => { e.preventDefault(); document.getElementById('app').innerHTML = '<p>Thank you for entering, good luck!</p>'; });
+}
+document.getElementById('start').addEventListener('click', () => { document.getElementById('start').remove(); question(); });
+</script>
+</body></html>

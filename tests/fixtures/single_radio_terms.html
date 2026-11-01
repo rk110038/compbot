@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Single radio terms</title></head>
+<body>
+<h1>Win a custom PS5</h1>
+<h2>Enter the competition</h2>
+<!-- Jotform-style: each consent is a lone radio button. -->
+<form id="f">
+  <label>First name <input name="first" required></label>
+  <label>Last name <input name="last" required></label>
+  <label>Email* <input type="email" name="email" required></label>
+  <div class="form-line">
+    <label class="form-label">I agree to the terms and conditions.<span>*</span></label>
+    <span class="form-radio-item"><input type="radio" id="t1" name="q21_termsAnd" value="yes"><label for="t1">Terms and conditions: https://example.com/terms</label></span>
+  </div>
+  <div class="form-line">
+    <label class="form-label">I agree to the privacy policy<span>*</span></label>
+    <span class="form-radio-item"><input type="radio" id="p1" name="q22_yourData" value="yes"><label for="p1">Your data will be handled in accordance with our privacy policy</label></span>
+  </div>
+  <button type="submit">Submit</button>
+</form>
+<script>
+document.getElementById('f').addEventListener('submit', e => {
+  e.preventDefault(); const f = e.target;
+  if (!f.q21_termsAnd.checked || !f.q22_yourData.checked) { f.insertAdjacentHTML('beforeend', '<p>This field is required.</p>'); return; }
+  document.body.innerHTML = '<p>Thank you for entering!</p>';
+});
+</script>
+</body></html>

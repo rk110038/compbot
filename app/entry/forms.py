@@ -326,8 +326,18 @@ def _next_answer(ctx: Ctx) -> str | None:
     return a
 
 
+CHANNEL_RE = re.compile(r"^(?:by )?(?:e ?mail|sms|text(?: message)?|post|phone|telephone|whats ?app|online advertisements?|"
+                        r"social media|push notifications?)$")
+
+
 def map_checkbox(f: Field, ctx: Ctx) -> Action:
-    d = normalise(f.label + " " + (f.context[:300] if not f.label else ""))
+    label = normalise(f.label)
+    # Very short labels ("Email", "MTB") only make sense with the surrounding question.
+    d = normalise(f.label + " " + (f.context[:300] if len(label.split()) <= 3 else ""))
+    if CHANNEL_RE.match(label):
+        # "How would you like to hear from us?  [ ] Email  [ ] SMS ..." - for newsletter comps email *is* the entry.
+        want = ctx.want_marketing and label in ("e mail", "email", "by email", "by e mail")
+        return Action("check" if want else "skip", source="rule", note="contact channel")
     is_terms, is_mkt, optout = bool(TERMS_RE.search(d)), bool(MARKETING_RE.search(d)), bool(OPTOUT_RE.search(d))
     if optout:
         return Action("uncheck" if ctx.want_marketing else "check", source="rule", note="marketing opt-out box")
@@ -347,6 +357,12 @@ def map_choice(f: Field, ctx: Ctx) -> Action:
     kind = "radio" if f.tag == "radio" else "select"
     label_d = normalise(f.label or f.context[:200])
     texts = [normalise(o.get("text", "")) for o in f.options if not is_placeholder_option(o)]
+    real = [o for o in f.options if not is_placeholder_option(o)]
+    # A lone radio button agreeing to terms / privacy (e.g. Jotform "I agree to the terms and conditions").
+    if kind == "radio" and len(real) == 1:
+        about = normalise(" ".join([f.label, real[0].get("text", ""), f.context[:300]]))
+        if TERMS_RE.search(about) and not (MARKETING_RE.search(about) and not TERMS_RE.search(normalise(f.label))):
+            return Action(kind, real[0].get("idx") or real[0].get("value"), source="rule", note="terms / consent")
     key = detect_profile_key(f)
     if key in {"title", "country", "county", "gender", "dob_day", "dob_month", "dob_year"} or (
             key in {"town"} and f.options):
