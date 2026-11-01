@@ -23,6 +23,7 @@ from .forms import (
     Ctx,
     Field,
     apply_llm_action,
+    choose_option,
     find_automation_clause,
     is_placeholder_option,
     normalise,
@@ -587,6 +588,76 @@ def _same_form(a: frozenset, b: frozenset) -> bool:
     return len(a & b) / min(len(a), len(b)) >= 0.6
 
 
+JS_MAIN_TEXT = r"""() => { const m = document.querySelector('main, article, [role=main]') || document.body;
+  return m ? m.innerText.replace(/\n{3,}/g, '\n\n').slice(0, 12000) : ''; }"""
+AI_QUESTION_NOTES = ("question with no known answer", "required choice with no known answer")
+WORD_LIMIT_RE = re.compile(r"(\d{1,3})\s*words?|(ten|fifteen|twenty|twenty[- ]five|thirty|fifty)\s*words?", re.I)
+WORD_NUMS = {"ten": 10, "fifteen": 15, "twenty": 20, "twenty five": 25, "twenty-five": 25, "thirty": 30, "fifty": 50}
+
+
+def _page_context(page, frame) -> str:
+    text = _safe_eval(page.main_frame, JS_MAIN_TEXT, default="") or ""
+    if frame is not page.main_frame:  # form inside an embed: its own text matters too
+        text = (_safe_eval(frame, JS_MAIN_TEXT, default="") or "") + "\n\n" + text
+    return text
+
+
+def _ai_fill(page, frame, plan, settings: dict, comp_context: dict, details: dict):
+    """Ask the AI about competition questions the MSE post didn't answer (and, if allowed, tie-breakers)."""
+    min_conf = int(settings.get("ai_min_confidence", 75) or 0)
+    page_text = None
+    out = []
+    for f, a in plan:
+        is_q = (a.kind == "unknown" and a.note in AI_QUESTION_NOTES) or (
+            a.kind == "skip" and a.note == "question with no known answer")
+        if is_q and settings.get("ai_answers", True):
+            if page_text is None:
+                page_text = _page_context(page, frame)
+            options = [o.get("text", "") for o in f.options if not is_placeholder_option(o)] if f.options else None
+            question = f.human_label if len(f.human_label) > 6 else (f.context[:300] or f.human_label)
+            res = llm.answer_question(question, options, page_text, comp_context, settings)
+            record = {"question": question[:200], "options": (options or [])[:12]}
+            if res:
+                record.update(answer=res["answer"], confidence=res["confidence"], source=res["source"],
+                              reason=res["reason"], used=False)
+            if res and res["answer"] and res["confidence"] >= min_conf and settings.get("ai_double_check", True):
+                check = llm.verify_answer(question, res["answer"], options, page_text, settings)
+                if check:
+                    record["check"] = check["verdict"]
+                if check and check["verdict"] == "incorrect":
+                    record.update(used=False, reason=f"second check disagreed: {check['reason'][:150]}")
+                    details.setdefault("ai", []).append(record)
+                    if a.kind == "unknown":
+                        a = Action("unknown", note=f"AI answer \u201c{res['answer'][:40]}\u201d failed its second check")
+                    out.append((f, a))
+                    continue
+            if res and res["answer"] and res["confidence"] >= min_conf:
+                note = f"AI: \u201c{res['answer'][:60]}\u201d ({res['confidence']}% sure, from {res['source']})"
+                if options:
+                    o = choose_option(f.options, [res["answer"]], threshold=80)
+                    if o:
+                        a = Action("radio" if f.tag == "radio" else "select", o.get("idx") or o.get("value"),
+                                   source="ai", note=note)
+                else:
+                    value = res["answer"][: f.maxlength] if f.maxlength else res["answer"]
+                    a = Action("fill", value, source="ai", note=note)
+                record["used"] = a.source == "ai"
+            elif res and a.kind == "unknown":
+                a = Action("unknown", note=f"AI wasn't sure enough ({res['confidence']}% < {min_conf}%)"
+                           if res["answer"] else "AI couldn't work out the answer")
+            details.setdefault("ai", []).append(record)
+        elif a.kind == "unknown" and a.note == "creative / tie-breaker answer" and settings.get("ai_tiebreakers"):
+            m = WORD_LIMIT_RE.search(f.human_label + " " + f.context[:200])
+            limit = int(m.group(1)) if m and m.group(1) else WORD_NUMS.get((m.group(2) or "").lower(), 25) if m else 25
+            text = llm.write_tiebreaker(f.human_label, comp_context, max(5, min(limit, 60)), settings)
+            if text:
+                a = Action("fill", text[: f.maxlength] if f.maxlength else text, source="ai", note="AI-written tie-breaker")
+                details.setdefault("ai", []).append({"question": f.human_label[:200], "answer": text, "used": True,
+                                                     "source": "written", "confidence": None})
+        out.append((f, a))
+    return out
+
+
 REQUIRED_ERR_RE = re.compile(
     r"(?:field|this|option|selection) is required|required field|please (?:select|choose|tick|check|complete|fill)|"
     r"must (?:select|choose|tick|agree|accept|be checked)|select at least one|at least one (?:option|box)", re.I)
@@ -947,13 +1018,15 @@ class Browser:
                     if not fields:
                         break
                     plan = plan_form(fields, ctx)
+                    if llm.enabled(settings) and (settings.get("ai_answers", True) or settings.get("ai_tiebreakers")):
+                        plan = _ai_fill(page, frame, plan, settings, comp_context, details)
                     unknown = [(f, a) for f, a in plan if a.kind == "unknown"]
-                    if unknown and llm.enabled() and settings.get("llm_for_forms", True):
+                    if unknown and llm.enabled(settings) and settings.get("llm_for_forms", True):
                         payload = [{"id": f.idx, "type": f.type if f.tag != "radio" else "radio",
                                     "label": f.human_label, "required": f.required, "context": f.context[:200],
                                     "options": [o.get("text") for o in f.options][:40]}
-                                   for f, a in unknown if not a.note.startswith("captcha")]
-                        suggestions = llm.map_fields(payload, comp_context, PROFILE_KEYS) if payload else {}
+                                   for f, a in unknown if not a.note.startswith(("captcha", "AI "))]
+                        suggestions = llm.map_fields(payload, comp_context, PROFILE_KEYS, settings) if payload else {}
                         new_plan = []
                         for f, a in plan:
                             if a.kind == "unknown" and f.idx in suggestions:
@@ -982,7 +1055,7 @@ class Browser:
                         details["fields"].append({"label": f.human_label, "action": a.kind, "source": a.source,
                                                   "note": a.note, "ok": ok,
                                                   "value": a.value if a.source in ("answer", "llm", "email",
-                                                                                   "email_confirm") else None})
+                                                                                   "email_confirm", "ai") else None})
                         if not ok and (f.required or a.source == "answer"):
                             failed.append(f.human_label)
                     if failed:
@@ -1129,7 +1202,7 @@ def result_as_dict(r: AttemptResult) -> dict:
 
 # --------------------------------------------------------------------------- isolation / watchdog
 
-ENTRY_TIMEOUT_S = 240
+ENTRY_TIMEOUT_S = 300  # includes time for the AI to answer questions on CPU
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 

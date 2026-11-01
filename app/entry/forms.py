@@ -404,6 +404,8 @@ def map_choice(f: Field, ctx: Ctx) -> Action:
         if o and score >= 75:
             return Action(kind, o.get("idx") or o.get("value"), source="answer", note=f"answer match {score}")
     if not f.required:
+        if looks_like_question(f):  # an unanswered quiz question - the AI may be able to help
+            return Action("skip", note="question with no known answer")
         return Action("skip", note="optional choice")
     if kind == "select" and not looks_like_question(f) and not ctx.question:
         o = next((o for o in f.options if not is_placeholder_option(o)), None)

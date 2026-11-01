@@ -114,15 +114,16 @@ def _discover() -> str:
     _progress["discover"] = "Fetching threads from MSE"
     threads = mse.fetch_threads(known, since)
     counts: dict[str, int] = {}
-    use_llm = llm.enabled() and settings.get("llm_for_posts", True)
+    use_llm = llm.enabled(settings) and settings.get("llm_for_posts", True)
+    eff = dict(settings, _ai_answers=bool(llm.enabled(settings) and settings.get("ai_answers", True)))
     for i, t in enumerate(reversed(threads), 1):  # oldest first so ids increase with time
         _progress["discover"] = f"Analysing {i}/{len(threads)}"
-        a = analyse(t["title"], t["body"], settings, today_local())
+        a = analyse(t["title"], t["body"], eff, today_local())
         if a.status == "queued" and a.method == "web_form" and a.entry_urls and all(
                 registrable_domain(u) in blocked for u in a.entry_urls):
             a.status, a.reason = "manual", "This site has blocked compbot's browser before - enter it yourself"
         if use_llm and a.status == "manual" and a.method in ("unknown", "web_form") and not a.answers:
-            hint = llm.analyse_post(t["title"], a.text, a.entry_urls + a.other_links)
+            hint = llm.analyse_post(t["title"], a.text, a.entry_urls + a.other_links, settings)
             if hint:
                 if hint.get("entry_url") and not a.entry_urls:
                     a.entry_urls = [hint["entry_url"]]
@@ -313,7 +314,11 @@ def _enter_web(cid: int, url: str, settings: dict, profile: dict) -> str:
         att.finished_at = utcnow()
         level = "success" if r.result in ENTERED_RESULTS | {"dry_run_ok"} else (
             "warn" if r.result in MANUAL_RESULTS | {"closed"} else "error")
-        log_event(s, "entry", f"{r.result}: {s.get(Competition, cid).title[:80]} - {r.message[:300]}", level, cid)
+        ai_used = [x for x in (r.details or {}).get("ai", []) if x.get("used")]
+        ai_note = (" [AI answered: " + "; ".join(f"{x['answer'][:40]}" + (f" {x['confidence']}%" if x.get("confidence")
+                                                                            is not None else "") for x in ai_used) + "]"
+                   if ai_used else "")
+        log_event(s, "entry", f"{r.result}: {s.get(Competition, cid).title[:80]} - {r.message[:300]}{ai_note}", level, cid)
     return r.result
 
 
@@ -483,8 +488,8 @@ def _inbox() -> str:
             continue
         known.add(m.message_id)
         c = inbox.classify(m, comps)
-        if llm.enabled() and settings.get("llm_for_email") and (c.score >= 1 or c.competition_id):
-            verdict = llm.classify_email(m.from_addr, m.subject, m.text, titles.get(c.competition_id))
+        if llm.enabled(settings) and settings.get("llm_for_email") and (c.score >= 1 or c.competition_id):
+            verdict = llm.classify_email(m.from_addr, m.subject, m.text, titles.get(c.competition_id), settings)
             if verdict and verdict.get("category") in {"possible_win", "loss", "confirm", "entry_ack", "promo",
                                                        "scam_suspect", "other"}:
                 c.signals.append(f"llm:{verdict['category']} ({str(verdict.get('reason', ''))[:80]})")
@@ -566,6 +571,8 @@ def requeue_retryable() -> str:
     today = today_local()
     requeued = reclassified = 0
     with session_scope() as s:
+        settings = get_settings(s)
+        ai_on = bool(llm.enabled(settings) and settings.get("ai_answers", True))
         blocked = blocked_domains(s)
         comps = s.scalars(select(Competition).where(
             Competition.status == "manual", Competition.method.in_(["web_form", "email"]),
@@ -583,6 +590,11 @@ def requeue_retryable() -> str:
                                                         EntryAttempt.mode != "dry_run")
                              .order_by(EntryAttempt.id.desc())).first()
             if last is None:
+                # Never tried because the post had no answer: the AI can now have a go.
+                if ai_on and c.method == "web_form" and (c.status_reason or "").startswith("Needs an answer"):
+                    c.status, c.failed_attempts, c.last_attempt_at = "queued", 0, None
+                    c.status_reason = "Re-queued: the AI will try to answer the question"
+                    requeued += 1
                 continue
             ok = last.result in RETRYABLE_RESULTS or (
                 last.result == "tc_blocked" and CIRCUMVENT_LIMIT_RE.search(last.message or ""))

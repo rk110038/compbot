@@ -1,0 +1,8 @@
+# Any other GPU (Intel Arc / Iris Xe, older AMD) for Ollama via its built-in Vulkan support.
+# Enable with COMPOSE_FILE=docker-compose.yml:docker-compose.gpu-vulkan.yml in .env
+services:
+  ollama:
+    devices:
+      - /dev/dri
+    environment:
+      OLLAMA_VULKAN: "1"

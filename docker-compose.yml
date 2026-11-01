@@ -1,7 +1,14 @@
-# Plain Docker Compose (e.g. from the TrueNAS shell, or any Linux host).
-#   1. Put this file and .env (copy of .env.example, filled in) in a folder, e.g. /mnt/appspool/compbot
-#   2. sudo mkdir -p data && sudo chown -R 568:568 data     # container runs as UID/GID 568 (TrueNAS "apps")
-#   3. sudo docker compose up -d                              # pulls ghcr.io/rk110038/compbot:latest
+# compbot + Ollama (local AI) - Docker Compose for the TrueNAS shell or any Linux host.
+#
+#   1. Put this folder's docker-compose*.yml files and your .env (copy of .env.example) in e.g. /mnt/appspool/compbot
+#   2. sudo mkdir -p data ollama && sudo chown -R ${COMPBOT_UID:-568}:${COMPBOT_GID:-568} data
+#   3. GPU: set COMPOSE_FILE in .env to add the file for your card (see .env.example), e.g.
+#        COMPOSE_FILE=docker-compose.yml:docker-compose.gpu-nvidia.yml
+#   4. sudo docker compose up -d
+#   5. Download a model: in compbot go to Settings -> AI models -> Download (or:
+#        sudo docker exec compbot-ollama ollama pull gemma4:12b)
+#      then pick it in Settings -> AI helper -> Model and Save.
+#
 #   Update later:  sudo docker compose pull && sudo docker compose up -d
 services:
   compbot:
@@ -13,8 +20,30 @@ services:
     restart: unless-stopped
     init: true
     shm_size: "1gb"
+    user: "${COMPBOT_UID:-568}:${COMPBOT_GID:-568}"   # who owns ./data (set COMPBOT_UID/GID in .env)
     ports:
       - "8085:8080"
     volumes:
       - ./data:/data
     env_file: .env
+    environment:
+      OLLAMA_URL: http://ollama:11434
+    depends_on:
+      - ollama
+
+  ollama:
+    image: ollama/ollama:${OLLAMA_TAG:-latest}
+    container_name: compbot-ollama
+    restart: unless-stopped
+    volumes:
+      - ./ollama:/root/.ollama          # downloaded models live here (several GB each)
+    environment:
+      OLLAMA_KEEP_ALIVE: 30m            # keep the model in memory between entries
+      OLLAMA_MAX_LOADED_MODELS: "1"
+      OLLAMA_NUM_PARALLEL: "1"
+      OLLAMA_CONTEXT_LENGTH: "8192"     # enough for a competition page + question
+      OLLAMA_FLASH_ATTENTION: "1"
+      OLLAMA_KV_CACHE_TYPE: q8_0        # halves context memory so bigger models fit in VRAM
+    # Uncomment to let other devices on your network use this Ollama as well:
+    # ports:
+    #   - "11434:11434"

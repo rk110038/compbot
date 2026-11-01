@@ -1,0 +1,9 @@
+# AMD Radeon GPU for Ollama via ROCm (RX 6800 and newer, RX 7000/9000 series, Radeon PRO W6800/W7000...).
+# Older or unsupported AMD cards: use docker-compose.gpu-vulkan.yml instead.
+# Enable with COMPOSE_FILE=docker-compose.yml:docker-compose.gpu-amd.yml in .env
+services:
+  ollama:
+    image: ollama/ollama:rocm
+    devices:
+      - /dev/kfd
+      - /dev/dri

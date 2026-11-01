@@ -43,6 +43,11 @@
           {% if a.url and not a.url.startswith('mailto:') %}<a class="small" href="{{ a.url }}" target="_blank" rel="noopener noreferrer">{{ a.url[:70] }}</a>{% endif %}</div>
         {% set em = (a.details.fields if a.details and a.details.fields else []) | selectattr('source', 'equalto', 'email') | map(attribute='value') | select | first %}
         {% if em %}<div class="small muted">Email address used: <b>{{ em }}</b></div>{% endif %}
+        {% if a.details and a.details.ai %}
+        <div class="small" style="margin:4px 0">🤖 {% for x in a.details.ai %}
+          <div>{{ x.question[:120] }} → <b>{{ x.answer if x.answer else 'no answer' }}</b>{% if x.confidence is not none %} ({{ x.confidence }}% sure{% if x.source %}, from {{ x.source }}{% endif %}){% endif %}{% if x.check %} · double-check: {{ x.check }}{% endif %}{% if x.used %} <span class="badge b-ok">used</span>{% else %} <span class="badge">not used</span>{% endif %}{% if x.reason %} <span class="muted">- {{ x.reason[:120] }}</span>{% endif %}</div>
+        {% endfor %}</div>
+        {% endif %}
         <div style="white-space:pre-wrap; margin:6px 0">{{ a.message }}</div>
         {% if a.screenshot_before or a.screenshot_after %}
         <div class="shots">

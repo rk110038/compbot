@@ -5,6 +5,7 @@ import base64
 import csv
 import io
 import logging
+import re
 import secrets
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -512,12 +513,62 @@ def event_log(request: Request, kind: str = "", level: str = "", page: int = 1):
 
 @app.get("/settings", response_class=HTMLResponse)
 def settings_view(request: Request):
+    from . import llm
+
     with session_scope() as s:
         profile = get_profile(s)
         settings = get_settings(s)
         dry_runs = s.scalar(select(func.count(EntryAttempt.id)).where(EntryAttempt.mode == "dry_run")) or 0
+    ollama = llm.ollama_status() if llm.ollama_url() else None
+    pulls = llm.pull_progress()
+    installed = {m["name"] for m in (ollama or {}).get("models", [])}
     return render(request, "settings.html", profile=profile, settings=settings, defaults=DEFAULT_SETTINGS,
-                  dry_runs=dry_runs)
+                  dry_runs=dry_runs, ollama=ollama, pulls=pulls, recommended=llm.RECOMMENDED_MODELS,
+                  installed=installed, active_model=llm.model_name(settings),
+                  pulling=any(not p["done"] for p in pulls.values()))
+
+
+MODEL_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._\-/]{0,80}(:[a-z0-9._\-]{1,40})?$", re.I)
+
+
+@app.post("/ai/pull")
+def ai_pull(request: Request, model: str = Form(""), custom: str = Form("")):
+    import threading
+
+    from . import llm
+
+    name = (custom or model).strip()
+    if not MODEL_NAME_RE.match(name):
+        return back(request, "/settings", "That doesn't look like an Ollama model name (e.g. gemma4:12b)")
+    if not llm.ollama_url():
+        return back(request, "/settings", "Ollama isn't configured (OLLAMA_URL)")
+    threading.Thread(target=llm.pull_model, args=(name,), daemon=True, name=f"pull-{name}").start()
+    with session_scope() as s:
+        log_event(s, "user", f"Downloading AI model {name}")
+    return back(request, "/settings", f"Downloading {name} - progress shows below; you can leave this page")
+
+
+@app.post("/ai/delete")
+def ai_delete(request: Request, model: str = Form(...)):
+    from . import llm
+
+    if not MODEL_NAME_RE.match(model.strip()):
+        return back(request, "/settings", "Invalid model name")
+    msg = llm.delete_model(model.strip())
+    with session_scope() as s:
+        log_event(s, "user", f"Removed AI model {model}: {msg}")
+    return back(request, "/settings", f"{model}: {msg}")
+
+
+@app.post("/ai/test")
+def ai_test(request: Request):
+    from . import llm
+
+    with session_scope() as s:
+        settings = get_settings(s)
+    if not llm.enabled(settings):
+        return back(request, "/settings", "Choose a model first (and save settings)")
+    return back(request, "/settings", llm.self_test(settings))
 
 
 @app.post("/settings/clear-dry-runs")

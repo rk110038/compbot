@@ -47,6 +47,22 @@ sudo docker build -t compbot:latest /mnt/tank/apps/compbot-src
 
 Then set `image: compbot:latest` and `pull_policy: never` in the YAML.
 
+### Option: Docker Compose from the TrueNAS shell (includes the AI)
+
+Instead of Install-via-YAML you can run the stack with Compose from **System → Shell**. This is the easiest way to get the bundled **Ollama** AI with GPU acceleration:
+
+```bash
+mkdir -p /mnt/appspool/compbot && cd /mnt/appspool/compbot
+for f in docker-compose.yml docker-compose.gpu-nvidia.yml docker-compose.gpu-amd.yml docker-compose.gpu-vulkan.yml; do
+  sudo curl -fsSLO https://raw.githubusercontent.com/rk110038/compbot/main/$f; done
+[ -f .env ] || sudo curl -fsSLo .env https://raw.githubusercontent.com/rk110038/compbot/main/.env.example
+sudo nano .env        # passwords, Gmail, COMPBOT_UID/GID, and COMPOSE_FILE for your GPU (see below)
+sudo mkdir -p data ollama && sudo chown -R "$(grep ^COMPBOT_UID .env | cut -d= -f2):$(grep ^COMPBOT_GID .env | cut -d= -f2)" data
+sudo docker compose up -d
+```
+
+Update later with `sudo docker compose pull && sudo docker compose up -d`.
+
 ### 4. Install the app
 
 **Apps → Discover Apps → ⋮ → Install via YAML**. Paste [`truenas-app.yaml`](truenas-app.yaml), change every `CHANGE_ME` (dataset path, GUI password, Gmail address and app password), and save.
@@ -88,19 +104,42 @@ Secrets and infrastructure go in environment variables (in the YAML). Everything
 | `NOTIFY_EMAIL` | — | Where to send "possible win" alerts |
 | `NTFY_URL` | — | e.g. `https://ntfy.sh/<secret-topic>` for phone push alerts |
 | `DISCOVER_CRON`, `ENTER_CRON`, `INBOX_CRON`, `MAINTENANCE_CRON` | see above | Standard 5-field cron |
-| `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY` | — | Optional OpenAI-compatible endpoint (see below) |
+| `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY` | — | Only to use a different OpenAI-compatible endpoint instead of the bundled Ollama |
+| `OLLAMA_URL` | set by `docker-compose.yml` | Where the bundled Ollama runs (`http://ollama:11434`) |
+| `COMPBOT_UID` / `COMPBOT_GID` | `568` | (Compose) user compbot runs as; must own `./data` |
+| `COMPOSE_FILE` | `docker-compose.yml` | (Compose) add your GPU file, see the AI section |
 | `TZ` | `Europe/London` | |
 | `DATA_DIR` | `/data` | |
 
 GUI settings include the daily entry cap (default 25), delays between entries, retries, how to treat social and Gleam comps, skip keywords (e.g. `Glasgow, Leeds` for local-only prizes), minimum prize value, marketing opt-ins (newsletter comps always opt in, because that *is* the entry; third-party marketing is never ticked unless required), T&C respect, and auto-confirm links.
 
-### Optional AI helper
+### AI helper (Ollama, runs on your NAS)
 
-compbot works without an LLM. If you point it at an OpenAI-compatible endpoint (the **Ollama** app from the TrueNAS catalogue works, as do OpenAI and Azure OpenAI), it will also:
+`docker-compose.yml` runs [Ollama](https://ollama.com) next to compbot, so the AI is local and nothing leaves your network. With a model chosen in **Settings → AI helper**, compbot will:
 
-* read posts the rules couldn't parse (finding the entry link and answer),
-* map form fields the heuristics don't recognise (it gets field **labels only** and replies with profile *keys*; your personal details are filled in locally and never sent),
-* optionally double-check possible-win emails (off by default, because that sends the subject and a snippet; best with a local model).
+* **answer competition questions the MSE post didn't**: it reads the competition page first, then uses the model's general knowledge, and only uses answers the model is at least 80% sure of (adjustable). By default a second pass double-checks each answer and rejects ones it thinks are wrong. In testing, this caught a model that answered the dial's colour when asked about the case. Every AI answer, its confidence and the check result are shown on the competition page;
+* optionally write short tie-breaker / "tell us why" answers (off by default);
+* map form fields the rules don't recognise (it sees field **labels only** and replies with profile *keys*; your details are filled in locally and never sent to the model);
+* read unclear posts, and optionally double-check possible-win emails.
+
+**GPU acceleration.** Pick one line for `COMPOSE_FILE` in `.env`, then run `sudo docker compose up -d`:
+
+| GPU | `.env` line | TrueNAS prerequisite |
+|---|---|---|
+| NVIDIA (GTX 9xx / RTX 20xx and newer) | `COMPOSE_FILE=docker-compose.yml:docker-compose.gpu-nvidia.yml` | **Apps → Configuration → Settings → Install NVIDIA Drivers**, then check `nvidia-smi` works in the shell |
+| AMD Radeon RX 6800+ / 7000 / 9000 (ROCm) | `COMPOSE_FILE=docker-compose.yml:docker-compose.gpu-amd.yml` | none (uses `/dev/kfd` + `/dev/dri`) |
+| Intel Arc / Iris Xe, older AMD (Vulkan) | `COMPOSE_FILE=docker-compose.yml:docker-compose.gpu-vulkan.yml` | none (uses `/dev/dri`) |
+
+**Choose a model** in **Settings → AI models → Download** (progress is shown there), then select it under **AI helper → Model** and **Save**. Or from the shell: `sudo docker exec compbot-ollama ollama pull gemma4:12b`.
+
+| Model | Download | Fits | Notes |
+|---|---|---|---|
+| `gemma4:12b` | 7.7 GB | 10–12 GB VRAM | **Recommended**: strong general knowledge and reading comprehension |
+| `qwen3.5:9b` | 6.6 GB | 8 GB VRAM | Good for 8 GB cards |
+| `qwen3.5:4b` | 3.3 GB | 4–6 GB VRAM or CPU | Small and quick. In testing it answered page questions well but needed the double-check |
+| `gemma4:26b` / `qwen3.5:27b` | 16–17 GB | 24 GB VRAM | Most knowledgeable |
+
+Use **Test the chosen model** in Settings to see an answer and how long it took. To confirm the GPU is being used, check that `sudo docker exec compbot-ollama ollama ps` shows `100% GPU` while a model is loaded; Settings also shows "% on GPU". Without a GPU it still works, at about 20–30 seconds per question for a 4B model.
 
 ## Privacy & safety
 

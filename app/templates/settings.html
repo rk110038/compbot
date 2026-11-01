@@ -51,11 +51,6 @@
       <h2>Inbox &amp; outcomes</h2>
       <label class="check"><input type="checkbox" name="s_auto_confirm_links" {{ 'checked' if settings.auto_confirm_links }}><span>Click "confirm your entry/subscription" links <small>Only for emails matched to a competition entered in the last 10 days.</small></span></label>
       <div class="form-grid"><div><label>Mark as lost after closing + N days</label><input type="number" min="1" name="s_presumed_lost_days" value="{{ settings.presumed_lost_days }}"></div></div>
-      <h2 style="margin-top:16px">AI helper (optional)</h2>
-      <p class="small muted">{% if cfg.llm_enabled %}LLM configured: <b>{{ cfg.llm_model }}</b> at {{ cfg.llm_base_url }}{% else %}No LLM configured (set LLM_BASE_URL / LLM_MODEL). Heuristics only.{% endif %}</p>
-      <label class="check"><input type="checkbox" name="s_llm_for_posts" {{ 'checked' if settings.llm_for_posts }}><span>Use it to read unclear MSE posts</span></label>
-      <label class="check"><input type="checkbox" name="s_llm_for_forms" {{ 'checked' if settings.llm_for_forms }}><span>Use it for form fields the rules can't map <small>Sends field labels only, never your details.</small></span></label>
-      <label class="check"><input type="checkbox" name="s_llm_for_email" {{ 'checked' if settings.llm_for_email }}><span>Use it to double-check possible win emails <small>Sends sender, subject and a snippet. Best with a local model (Ollama).</small></span></label>
       <h2 style="margin-top:16px">Environment</h2>
       <dl class="kv small">
         <dt>Gmail</dt><dd>{{ cfg.gmail_address if cfg.mail_enabled else 'not configured' }}</dd>
@@ -66,8 +61,79 @@
       </dl>
     </div>
   </div>
+  <div class="card">
+    <h2>🤖 AI helper</h2>
+    {% if ollama %}
+      {% if ollama.ok %}
+        <p class="small">Ollama {{ ollama.version }} is running · {{ ollama.models|length }} model{{ 's' if ollama.models|length != 1 }} downloaded{% if not ollama.models %} - download one below to switch the AI on{% endif %}.</p>
+      {% else %}
+        <div class="banner warn small">{{ ollama.error }}. Is the <code>ollama</code> container running? (see the README)</div>
+      {% endif %}
+    {% elif cfg.llm_enabled %}
+      <p class="small muted">Using an OpenAI-compatible endpoint at {{ cfg.llm_base_url }}.</p>
+    {% else %}
+      <p class="small muted">No AI configured. Add the Ollama service from <code>docker-compose.yml</code> (it sets <code>OLLAMA_URL</code>), or set <code>LLM_BASE_URL</code>.</p>
+    {% endif %}
+    <div class="form-grid">
+      <div style="grid-column: span 2"><label>Model</label>
+        <select name="s_llm_model">
+          <option value="" {{ 'selected' if not settings.llm_model }}>{{ 'Off (no AI)' if not cfg.llm_model else 'Default from environment: ' ~ cfg.llm_model }}</option>
+          {% for m in (ollama.models if ollama else []) %}
+          <option value="{{ m.name }}" {{ 'selected' if settings.llm_model == m.name }}>{{ m.name }} · {{ m.params }} · {{ m.size_gb }} GB{% if m.loaded %} · loaded{% if m.gpu_pct is not none %} ({{ m.gpu_pct }}% on GPU){% endif %}{% endif %}</option>
+          {% endfor %}
+          {% if settings.llm_model and settings.llm_model not in installed and ollama %}<option value="{{ settings.llm_model }}" selected>{{ settings.llm_model }} (not downloaded)</option>{% endif %}
+        </select></div>
+      <div><label>Only use AI answers it is at least … % sure of</label><input type="number" min="0" max="100" name="s_ai_min_confidence" value="{{ settings.ai_min_confidence }}"></div>
+    </div>
+    <label class="check"><input type="checkbox" name="s_ai_answers" {{ 'checked' if settings.ai_answers }}><span>Answer competition questions the MSE post didn't answer <small>Reads the competition page first, then uses the model's own knowledge. Every AI answer is logged with its confidence on the competition page.</small></span></label>
+    <label class="check"><input type="checkbox" name="s_ai_double_check" {{ 'checked' if settings.ai_double_check }}><span>Double-check AI answers before using them <small>A second pass re-reads the question and rejects answers it thinks are wrong (e.g. the dial's colour when asked about the case). Doubles the AI time per question.</small></span></label>
+    <label class="check"><input type="checkbox" name="s_ai_tiebreakers" {{ 'checked' if settings.ai_tiebreakers }}><span>Write short tie-breaker / "tell us why" answers <small>Off by default: judged tie-breakers reward originality, so you may prefer to write those yourself.</small></span></label>
+    <label class="check"><input type="checkbox" name="s_llm_for_forms" {{ 'checked' if settings.llm_for_forms }}><span>Help with form fields the rules can't recognise <small>Sends field labels only - never your personal details.</small></span></label>
+    <label class="check"><input type="checkbox" name="s_llm_for_posts" {{ 'checked' if settings.llm_for_posts }}><span>Read unclear MSE posts</span></label>
+    <label class="check"><input type="checkbox" name="s_llm_for_email" {{ 'checked' if settings.llm_for_email }}><span>Double-check possible-win emails <small>Sends sender, subject and a snippet to the model (stays on your NAS with Ollama).</small></span></label>
+  </div>
+
   <div><button class="btn primary">Save settings</button></div>
 </form>
+
+{% if ollama and ollama.ok %}
+<div class="card" style="margin-top:14px">
+  <h2>AI models</h2>
+  <p class="small muted">Models download into the <code>ollama</code> folder next to your compose file. Pick one that fits your GPU's memory (VRAM); bigger models know more trivia but are slower. A model that doesn't fit in VRAM still works, just partly on the CPU.</p>
+  <table class="small">
+    <tr><th>Model</th><th>Download</th><th>Good for</th><th>Notes</th><th></th></tr>
+    {% for r in recommended %}
+    <tr><td><b>{{ r.name }}</b></td><td>{{ r.size }}</td><td>{{ r.vram }}</td><td class="muted">{{ r.note }}</td>
+      <td class="nowrap">
+        {% set p = pulls.get(r.name) %}
+        {% if r.name in installed %}<span class="badge b-ok">downloaded</span>
+        {% elif p and not p.done %}<span class="badge b-queued">{{ p.status[:24] }} {{ p.pct }}%</span>
+        {% else %}<form class="inline" method="post" action="/ai/pull"><input type="hidden" name="model" value="{{ r.name }}"><button class="btn small">Download</button></form>{% if p and p.error %}<div class="small" style="color:var(--red)">{{ p.error[:120] }}</div>{% endif %}{% endif %}
+      </td></tr>
+    {% endfor %}
+  </table>
+  <form method="post" action="/ai/pull" class="actions" style="margin-top:10px">
+    <input type="text" name="custom" placeholder="any other model, e.g. qwen3:14b" style="min-width:260px">
+    <button class="btn small">Download</button>
+    <a class="small" href="https://ollama.com/library" target="_blank" rel="noopener noreferrer">Browse models ↗</a>
+  </form>
+  {% for name, p in pulls.items() if name not in (recommended|map(attribute='name')|list) %}
+    <div class="small">{{ name }}: {{ p.status }} {{ p.pct }}%{% if p.error %} - <span style="color:var(--red)">{{ p.error[:160] }}</span>{% endif %}</div>
+  {% endfor %}
+  {% if ollama.models %}
+  <h3>Downloaded</h3>
+  <table class="small">
+    {% for m in ollama.models %}
+    <tr><td><b>{{ m.name }}</b>{% if m.name == active_model %} <span class="badge b-ok">in use</span>{% endif %}</td><td>{{ m.params }} {{ m.quant }}</td><td>{{ m.size_gb }} GB</td>
+      <td>{% if m.loaded %}loaded{% if m.gpu_pct is not none %} · <b>{{ m.gpu_pct }}% on GPU</b>{% endif %}{% endif %}</td>
+      <td><form class="inline" method="post" action="/ai/delete" onsubmit="return confirm('Remove {{ m.name }}?');"><input type="hidden" name="model" value="{{ m.name }}"><button class="btn small">Remove</button></form></td></tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+  <form method="post" action="/ai/test" style="margin-top:10px"><button class="btn small" {{ 'disabled' if not active_model }}>Test the chosen model</button> <span class="small muted">Asks a sample question and reports the answer and how long it took (first run includes loading the model).</span></form>
+</div>
+{% if pulling %}<script>setTimeout(() => location.reload(), 5000);</script>{% endif %}
+{% endif %}
 
 <div class="card" style="margin-top:14px">
   <h2>Housekeeping</h2>

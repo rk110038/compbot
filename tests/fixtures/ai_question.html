@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>AI question</title></head>
+<body>
+<main>
+<h1>Win a Stormele watch</h1>
+<p>We're giving away a stunning watch with a polished gold case and a brown sunray dial.</p>
+<h2>Enter the competition</h2>
+<form id="f">
+  <label>What colour is the watch case? <input name="q" required></label>
+  <label>First name <input name="fn" required></label>
+  <label>Email <input type="email" name="em" required></label>
+  <button type="submit">Enter</button>
+</form>
+</main>
+<script>
+document.getElementById('f').addEventListener('submit', e => {
+  e.preventDefault();
+  if (e.target.q.value.trim().toLowerCase() !== 'gold') { e.target.insertAdjacentHTML('beforeend', '<p>Wrong answer</p>'); return; }
+  document.body.innerHTML = '<p>Thank you for entering!</p>';
+});
+</script>
+</body></html>

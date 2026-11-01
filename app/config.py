@@ -33,6 +33,7 @@ class Config:
     llm_base_url: str | None
     llm_api_key: str | None
     llm_model: str | None
+    ollama_url: str | None
     notify_email: str | None
     ntfy_url: str | None
     discover_cron: str
@@ -54,7 +55,8 @@ class Config:
 
     @property
     def llm_enabled(self) -> bool:
-        return bool(self.llm_base_url and self.llm_model)
+        """An endpoint is configured (the model itself may be chosen in the GUI)."""
+        return bool(self.llm_base_url)
 
     @property
     def mail_enabled(self) -> bool:
@@ -63,6 +65,7 @@ class Config:
 
 @lru_cache(maxsize=1)
 def get_config() -> Config:
+    ollama_url = (_env("OLLAMA_URL") or "").rstrip("/") or None
     return Config(
         data_dir=Path(_env("DATA_DIR", "/data")),
         tz=_env("TZ", "Europe/London"),
@@ -74,9 +77,10 @@ def get_config() -> Config:
         imap_folders=[f.strip() for f in _env("IMAP_FOLDERS", "INBOX,[Gmail]/Spam").split(",") if f.strip()],
         smtp_host=_env("SMTP_HOST", "smtp.gmail.com"),
         smtp_port=int(_env("SMTP_PORT", "465")),
-        llm_base_url=_env("LLM_BASE_URL"),
+        llm_base_url=_env("LLM_BASE_URL") or (f"{ollama_url}/v1" if ollama_url else None),
         llm_api_key=_env("LLM_API_KEY"),
         llm_model=_env("LLM_MODEL"),
+        ollama_url=ollama_url,
         notify_email=_env("NOTIFY_EMAIL"),
         ntfy_url=_env("NTFY_URL"),
         discover_cron=_env("DISCOVER_CRON", "0 7 * * *"),
@@ -107,6 +111,11 @@ DEFAULT_SETTINGS: dict = {
     "llm_for_posts": True,               # use the LLM (if configured) to analyse unclear posts
     "llm_for_forms": True,               # use the LLM (if configured) for fields heuristics can't map
     "llm_for_email": False,              # send candidate win emails (subject + snippet) to the LLM
+    "llm_model": "",                     # model chosen in Settings (blank = LLM_MODEL from the environment)
+    "ai_answers": True,                  # let the AI answer competition questions the MSE post didn't answer
+    "ai_min_confidence": 80,             # only use AI answers it is at least this sure of (0-100)
+    "ai_double_check": True,             # a second AI pass must not judge the answer wrong before it's used
+    "ai_tiebreakers": False,             # let the AI write short tie-breaker / "tell us why" answers
     "delay_min_seconds": 20,
     "delay_max_seconds": 60,
     "skip_keywords": "",                 # comma-separated; titles containing any are skipped

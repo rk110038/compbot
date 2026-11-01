@@ -379,7 +379,10 @@ def analyse(title: str, body_html: str, settings: dict, today: date | None = Non
     elif entry_urls:
         method = "web_form"
         if b["needs_help"] or (b["question"] and not b["answers"]):
-            status, reason = "manual", "Needs an answer that isn't in the post yet"
+            if settings.get("_ai_answers"):
+                status, reason = "queued", "Web form - the AI will try to answer the question"
+            else:
+                status, reason = "manual", "Needs an answer that isn't in the post yet"
         else:
             status, reason = "queued", "Web form"
         if tags & WIDGET_TAGS or kinds["widget"]:

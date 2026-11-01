@@ -2,7 +2,8 @@
 # Apps -> Discover Apps -> (⋮) Custom App / "Install via YAML" -> paste this file, then edit the CHANGE_ME values.
 #
 # Before installing:
-#   1. Create a dataset, e.g. /mnt/tank/apps/compbot, owned by the "apps" user (568:568).
+#   1. Create datasets, e.g. /mnt/tank/apps/compbot (owned by the "apps" user, 568:568) and
+#      /mnt/tank/apps/compbot-ollama (for AI models).
 #   2. The image is built by GitHub Actions on every push to main and published (public) to GHCR.
 #      To update: push to main, wait for the Action to go green, then in TrueNAS stop/start the app (it re-pulls).
 #      (Alternative: build on the NAS with `docker build -t compbot:latest .`, set image: compbot:latest
@@ -37,11 +38,41 @@ services:
       ENTER_CRON: "30 7 * * *"
       INBOX_CRON: "0 8,20 * * *"
       MAINTENANCE_CRON: "0 3 * * *"
-      # --- Optional LLM helper, any OpenAI-compatible API (e.g. the Ollama app on TrueNAS) ---
-      LLM_BASE_URL: ""                 # e.g. http://192.168.1.10:30068/v1
-      LLM_MODEL: ""                    # e.g. a small instruct model you've pulled in Ollama
-      LLM_API_KEY: ""
+      # --- AI helper: the bundled Ollama service below. Choose/download the model in compbot's Settings page. ---
+      OLLAMA_URL: http://ollama:11434
+    depends_on:
+      - ollama
     deploy:
       resources:
         limits:
           memory: 2g
+
+  ollama:
+    image: ollama/ollama:latest          # AMD (ROCm) cards: use ollama/ollama:rocm
+    container_name: compbot-ollama
+    restart: unless-stopped
+    volumes:
+      - /mnt/tank/apps/compbot-ollama:/root/.ollama   # CHANGE_ME: dataset for downloaded models (several GB each)
+    environment:
+      OLLAMA_KEEP_ALIVE: 30m
+      OLLAMA_MAX_LOADED_MODELS: "1"
+      OLLAMA_NUM_PARALLEL: "1"
+      OLLAMA_CONTEXT_LENGTH: "8192"
+      OLLAMA_FLASH_ATTENTION: "1"
+      OLLAMA_KV_CACHE_TYPE: q8_0
+      # NVIDIA only:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    # --- GPU: keep the block for your card, delete the others ---
+    # NVIDIA (first tick Apps -> Configuration -> Settings -> "Install NVIDIA Drivers"):
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    # AMD (ROCm, with image ollama/ollama:rocm):
+    # devices: ["/dev/kfd", "/dev/dri"]
+    # Intel Arc / other GPUs (Vulkan):
+    # devices: ["/dev/dri"]
