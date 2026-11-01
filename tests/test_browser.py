@@ -278,3 +278,24 @@ def test_paged_survey_dry_run_ignores_hidden_later_pages(browser, fixture_server
     res = browser.enter(f"{fixture_server}/paged_survey.html", Ctx(profile=profile), _settings(entry_mode="dry_run"),
                         "p2", {})
     assert res.result == "dry_run_ok", res.message
+
+# --- web-component widgets (shadow DOM) ----------------------------------------------------------------------------
+
+def test_shadow_dom_widget_popup_form(browser, fixture_server, profile):
+    # Baby Blooms (Viral Loops <form-widget>): "JOIN TO ENTER" opens a pop-up form, and the button, the form and the
+    # thank-you message are all inside a shadow root that document.querySelectorAll can't see.
+    res = browser.enter(f"{fixture_server}/shadow_widget.html", Ctx(profile=profile, tags=["nl"]),
+                        _settings(entry_mode="auto"), "sw1", {})
+    assert res.result == "entered", (res.message, res.details["steps"])
+    assert "Thanks for joining" in res.message
+    steps = "\n".join(res.details["steps"])
+    assert "clicked 'JOIN TO ENTER'" in steps and "clicked 'Join to Enter'" in steps
+    acts = {f["value"] for f in res.details["fields"] if f.get("value")}
+    assert profile["email"] in acts
+
+
+def test_shadow_dom_widget_dry_run_never_opens_join_button(browser, fixture_server, profile):
+    # "Join to enter" might enter you by itself, so a dry run leaves it alone (as with "Enter now").
+    res = browser.enter(f"{fixture_server}/shadow_widget.html", Ctx(profile=profile), _settings(entry_mode="dry_run"),
+                        "sw2", {})
+    assert res.result != "entered" and not any("JOIN TO ENTER" in s for s in res.details["steps"])

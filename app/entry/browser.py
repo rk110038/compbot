@@ -76,6 +76,19 @@ const __cbVis = (el) => {
   return true;
 };
 const __cbTxt = (el) => (el ? (el.innerText || el.textContent || '') : '').replace(/\s+/g, ' ').trim();
+// Web-component widgets (e.g. Viral Loops' <form-widget>) keep their buttons and entry form inside an open shadow
+// root, which document.querySelectorAll can't see. These search inside shadow roots too.
+const __cbAll = (root, sel) => {
+  const out = Array.from(root.querySelectorAll(sel));
+  const walk = r => { for (const h of r.querySelectorAll('*')) if (h.shadowRoot) { out.push(...h.shadowRoot.querySelectorAll(sel)); walk(h.shadowRoot); } };
+  walk(root);
+  return out;
+};
+const __cbOne = (sel) => document.querySelector(sel) || __cbAll(document, sel)[0] || null;
+// closest() that carries on outside the shadow root, through its host element.
+const __cbClosest = (el, sel) => { while (el) { const c = el.closest(sel); if (c) return c; const r = el.getRootNode(); el = r && r.host; } return null; };
+const __cbContains = (box, el) => { while (el) { if (box.contains(el)) return true; const r = el.getRootNode(); el = r && r.host; } return false; };
+const __cbById = (el, id) => { const r = el && el.getRootNode && el.getRootNode(); return (r && r.getElementById && r.getElementById(id)) || document.getElementById(id); };
 """
 
 JS_EXTRACT = "(prefix) => {\n" + JS_HELPERS + r"""
@@ -83,7 +96,7 @@ JS_EXTRACT = "(prefix) => {\n" + JS_HELPERS + r"""
   const labelFor = (el) => {
     let t = '';
     if (el.labels && el.labels.length) t = Array.from(el.labels).map(txt).join(' ');
-    if (!t) { const lb = el.getAttribute('aria-labelledby'); if (lb) t = lb.split(/\s+/).map(id => txt(document.getElementById(id))).join(' '); }
+    if (!t) { const lb = el.getAttribute('aria-labelledby'); if (lb) t = lb.split(/\s+/).map(id => txt(__cbById(el, id))).join(' '); }
     if (!t) { const c = el.closest('label'); if (c) t = txt(c); }
     if (!t) {
       let prev = el.previousElementSibling, hops = 0;
@@ -100,15 +113,15 @@ JS_EXTRACT = "(prefix) => {\n" + JS_HELPERS + r"""
   const isReq = (el, label) => el.required || el.getAttribute('aria-required') === 'true' || /\*\s*$|\(required\)/i.test(label || '');
   const choiceVis = (el) => vis(el) || (el.labels && Array.from(el.labels).some(vis)) || vis(el.closest('label')) || vis(el.parentElement);
   let counter = 0;
-  const all = Array.from(document.querySelectorAll('[data-cb-idx]')).map(e => e.getAttribute('data-cb-idx'));
+  const all = __cbAll(document, '[data-cb-idx]').map(e => e.getAttribute('data-cb-idx'));
   for (const a of all) { const n = parseInt(String(a).split('_').pop(), 10); if (!isNaN(n) && n >= counter) counter = n + 1; }
-  const forms = Array.from(document.querySelectorAll('form'));
+  const forms = __cbAll(document, 'form');
   const roots = forms.concat([document.body]);
   const out = [];
   for (const root of roots) {
     if (!root) continue;
     const fields = [], groups = {};
-    for (const el of root.querySelectorAll('input, select, textarea')) {
+    for (const el of __cbAll(root, 'input, select, textarea')) {
       if (root === document.body && el.form) continue;
       const type = (el.tagName === 'INPUT' ? (el.getAttribute('type') || 'text') : el.tagName).toLowerCase();
       if (['hidden', 'submit', 'button', 'image', 'reset'].includes(type)) continue;
@@ -123,10 +136,10 @@ JS_EXTRACT = "(prefix) => {\n" + JS_HELPERS + r"""
         if (!groups[key]) {
           let gl = '';
           const rg = el.closest('[role=radiogroup]');
-          if (rg) { gl = rg.getAttribute('aria-label') || ''; const lb = rg.getAttribute('aria-labelledby'); if (!gl && lb) gl = txt(document.getElementById(lb)); }
+          if (rg) { gl = rg.getAttribute('aria-label') || ''; const lb = rg.getAttribute('aria-labelledby'); if (!gl && lb) gl = txt(__cbById(rg, lb)); }
           if (!gl) {
             // The smallest container holding just this group: use its own question label, not an option label.
-            const isOptionLabel = l => l.querySelector('input') || (l.htmlFor && (document.getElementById(l.htmlFor) || {}).type === 'radio') || (l.closest('label') && l.closest('label').querySelector('input[type=radio]'));
+            const isOptionLabel = l => l.querySelector('input') || (l.htmlFor && (__cbById(l, l.htmlFor) || {}).type === 'radio') || (l.closest('label') && l.closest('label').querySelector('input[type=radio]'));
             let n = el.parentElement;
             for (let i = 0; i < 6 && n; i++) {
               const rs = Array.from(n.querySelectorAll('input[type=radio]'));
@@ -174,7 +187,7 @@ JS_EXTRACT = "(prefix) => {\n" + JS_HELPERS + r"""
         maxlength: el.maxLength > 0 ? el.maxLength : null, checked: !!el.checked};
       if (type === 'checkbox' && el.name) {
         // A group of checkboxes ("What are you interested in? [ ] MTB [ ] Moto"): use the group's own question.
-        const same = Array.from(document.querySelectorAll('input[type=checkbox]')).filter(c => c.name === el.name);
+        const same = Array.from(el.getRootNode().querySelectorAll('input[type=checkbox]')).filter(c => c.name === el.name);
         if (same.length > 1) {
           let n = el.parentElement, q = '';
           for (let i = 0; i < 6 && n && !q; i++) {
@@ -193,7 +206,7 @@ JS_EXTRACT = "(prefix) => {\n" + JS_HELPERS + r"""
       if (el.tagName === 'SELECT') f.options = Array.from(el.options).map(o => ({value: o.value, text: (o.text || '').trim()}));
       fields.push(f);
     }
-    const btns = Array.from(root.querySelectorAll('button, input[type=submit], input[type=image], input[type=button], [role=button], a.button, a.btn')).filter(vis);
+    const btns = __cbAll(root, 'button, input[type=submit], input[type=image], input[type=button], [role=button], a.button, a.btn').filter(vis);
     let formId = '';
     if (root !== document.body) {
       // Lets a paged form (Next -> Next -> Submit inside one <form>) be recognised on its later pages.
@@ -217,7 +230,7 @@ JS_EXTRACT = "(prefix) => {\n" + JS_HELPERS + r"""
     out.push({isForm: root.tagName === 'FORM', formId, fields, hasPassword: !!root.querySelector('input[type=password]'),
       submitTexts: btns.map(b => (txt(b) || b.value || b.getAttribute('aria-label') || '').slice(0, 60)),
       text: txt(root).slice(0, 1500), heading, meta,
-      inFooter: root !== document.body && !!root.closest('footer, [role=contentinfo], #footer, .footer, [id*=site-footer i], [class*=site-footer i], [class*=page-footer i], [id*=page-footer i]')});
+      inFooter: root !== document.body && !!__cbClosest(root, 'footer, [role=contentinfo], #footer, .footer, [id*=site-footer i], [class*=site-footer i], [class*=page-footer i], [id*=page-footer i]')});
   }
   return out;
 }
@@ -225,8 +238,8 @@ JS_EXTRACT = "(prefix) => {\n" + JS_HELPERS + r"""
 
 JS_MARK_SUBMIT = "(idx) => {\n" + JS_HELPERS + r"""
   const vis = __cbVis, txt = __cbTxt;
-  document.querySelectorAll('[data-cb-submit]').forEach(e => e.removeAttribute('data-cb-submit'));
-  const el = document.querySelector(`[data-cb-idx="${idx}"]`);
+  __cbAll(document, '[data-cb-submit]').forEach(e => e.removeAttribute('data-cb-submit'));
+  const el = __cbOne(`[data-cb-idx="${idx}"]`);
   let root = el && el.form ? el.form : null;
   if (!root && el) { let n = el.parentElement; while (n && !n.querySelector('button, input[type=submit], input[type=button], [role=button]')) n = n.parentElement; root = n; }
   if (!root) root = document.body;
@@ -251,9 +264,8 @@ JS_MARK_SUBMIT = "(idx) => {\n" + JS_HELPERS + r"""
 }
 """
 
-JS_SET_CHECKED = r"""
-([idx, want]) => {
-  const el = document.querySelector(`[data-cb-idx="${idx}"]`);
+JS_SET_CHECKED = "([idx, want]) => {\n" + JS_HELPERS + r"""
+  const el = __cbOne(`[data-cb-idx="${idx}"]`);
   if (!el) return false;
   if (el.checked !== want) { const l = el.labels && el.labels[0]; (l || el).click(); }
   if (el.checked !== want && el.type === 'checkbox') { el.click(); }
@@ -267,7 +279,7 @@ JS_SET_CHECKED = r"""
 """
 
 JS_VALIDITY = "(idx) => {\n" + JS_HELPERS + r"""
-  const el = document.querySelector(`[data-cb-idx="${idx}"]`);
+  const el = __cbOne(`[data-cb-idx="${idx}"]`);
   const form = el && el.form;
   if (!form || form.noValidate) return [];  // the site validates itself
   // Only what's on screen: a paged form keeps its later pages' required fields in the same <form>, hidden.
@@ -303,8 +315,7 @@ JS_COOKIES = "() => {\n" + JS_HELPERS + r"""
 }
 """
 
-JS_CAPTCHA = r"""
-() => {
+JS_CAPTCHA = "() => {\n" + JS_HELPERS + r"""
   // Only *interactive* challenges count. Invisible reCAPTCHA/hCaptcha just score the visit in the background (the
   // site decides); if they escalate to a real challenge that shows up here and compbot stops.
   const shown = el => {
@@ -317,7 +328,7 @@ JS_CAPTCHA = r"""
     }
     return true;
   };
-  for (const f of document.querySelectorAll('iframe')) {
+  for (const f of __cbAll(document, 'iframe')) {
     const s = f.src || '';
     if (/recaptcha\/(api2|enterprise)\/anchor/.test(s) && !/size=invisible/.test(s) && shown(f)) return 'reCAPTCHA checkbox';
     if (/recaptcha\/(api2|enterprise)\/bframe/.test(s) && shown(f)) return 'reCAPTCHA challenge';
@@ -327,7 +338,7 @@ JS_CAPTCHA = r"""
   }
   for (const sel of ['.h-captcha:not([data-size="invisible"])', '.cf-turnstile', '#px-captcha', '.frc-captcha',
                      'input[name*="captcha" i]:not([type=hidden])', '#captcha', '.captcha']) {
-    for (const el of document.querySelectorAll(sel)) if (shown(el)) return sel;
+    for (const el of __cbAll(document, sel)) if (shown(el)) return sel;
   }
   const head = (document.title + ' ' + (document.body ? document.body.innerText.slice(0, 600) : '')).toLowerCase();
   if (/just a moment|verify you are human|checking your browser|are you a robot|attention required|access denied|request blocked|unusual traffic|verification failed|403 forbidden|pardon our interruption/.test(head)) return 'challenge-page';
@@ -347,7 +358,7 @@ JS_REVEAL = "(dryRun) => {\n" + JS_HELPERS + r"""
   // Buttons that only open the entry form or quiz: safe to press even in a dry run.
   const safe = /^((let'?s )?(start|begin|take|do|play|try)( the| our| this| a)?( quiz| game| competition| challenge| test)?( now| here)?|get started|let'?s (go|start|play)|show (the )?(form|questions?)|reveal (the )?(form|question)|continue)!?$/i;
   // Buttons that might themselves submit an entry: only pressed for real entries.
-  const enter = /^(enter( now| here| the competition| competition| the (prize )?draw| to win| now for free| the giveaway| giveaway| the quiz| quiz)?|click (here )?to enter|take part|enter (&|and) win|i want to win|join (in|now)|count me in)!?$/i;
+  const enter = /^(enter( now| here| the competition| competition| the (prize )?draw| to win| now for free| the giveaway| giveaway| the quiz| quiz)?|click (here )?to enter|take part|enter (&|and) win|i want to win|join (in|now)|(join|sign ?up|subscribe|register|opt in)( now)? to enter|count me in)!?$/i;
   // A start button greyed out until "I've read the rules" is ticked: that box is the gate.
   const gateRe = /\b(read|understood?|accept|agree|ready|rules|terms|t'?s? ?(&|and) ?c'?s|conditions|over (the age of )?18|18 or over|aged 18)\b/i;
   const notGate = /marketing|newsletter|offers|partners|third|e-?mail me|contact me|keep me (updated|informed)|updates|news\b/i;
@@ -368,7 +379,7 @@ JS_REVEAL = "(dryRun) => {\n" + JS_HELPERS + r"""
   const h1 = document.querySelector('h1');
   const top0 = h1 ? h1.getBoundingClientRect().top + scrollY : 0;
   let best = null, bestScore = -1e9, bestGate = null;
-  for (const b of document.querySelectorAll('button, a, [role=button], input[type=button]')) {
+  for (const b of __cbAll(document, 'button, a, [role=button], input[type=button]')) {
     if (!vis(b) || b.hasAttribute('data-cb-tried')) continue;
     // Never press anything that could submit a form.
     if (b.closest('form') || (b.getAttribute('type') || '').toLowerCase() === 'submit') continue;
@@ -385,13 +396,13 @@ JS_REVEAL = "(dryRun) => {\n" + JS_HELPERS + r"""
     if (/^(play|play now|start|begin|try)!?$/i.test(t)) s -= 4;          // generic: could be a game or video
     if (/^continue$/i.test(t)) s -= 3;                                    // e.g. a form's welcome screen
     if (offsite && /^(play|start|begin|try|take)/i.test(t)) s -= 8;       // e.g. a fantasy-game promo
-    if (b.closest('main, article, [role=main]')) s += 2;
-    if (b.closest('header, nav, footer, aside, [role=navigation], [role=banner], [role=contentinfo]')) s -= 8;
+    if (__cbClosest(b, 'main, article, [role=main]')) s += 2;
+    if (__cbClosest(b, 'header, nav, footer, aside, [role=navigation], [role=banner], [role=contentinfo]')) s -= 8;
     s -= Math.min(6, Math.abs(b.getBoundingClientRect().top + scrollY - top0) / 600);  // nearer the headline
     if (s > bestScore) { best = b; bestScore = s; bestGate = gate; }
   }
   if (!best || bestScore < -6) return null;
-  document.querySelectorAll('[data-cb-reveal],[data-cb-gate]').forEach(e => { e.removeAttribute('data-cb-reveal'); e.removeAttribute('data-cb-gate'); });
+  __cbAll(document, '[data-cb-reveal],[data-cb-gate]').forEach(e => { e.removeAttribute('data-cb-reveal'); e.removeAttribute('data-cb-gate'); });
   best.setAttribute('data-cb-reveal', '1');
   best.setAttribute('data-cb-tried', '1');  // if it doesn't lead anywhere, the next-best button gets a turn
   let gateLabel = null;
@@ -600,9 +611,9 @@ JS_EMBED_CONSENT = "() => {\n" + JS_HELPERS + r"""
 # Close marketing pop-ups / sticky bars that sit on top of the submit button (but never the form's own dialog).
 JS_CLOSE_POPUPS = "() => {\n" + JS_HELPERS + r"""
   const vis = __cbVis, txt = __cbTxt;
-  const sub = document.querySelector('[data-cb-submit="1"]');
+  const sub = __cbOne('[data-cb-submit="1"]');
   const hostOf = b => b.closest('[role=dialog], [aria-modal=true], [class*=modal i], [class*=popup i], [class*=klaviyo i], [class*=overlay i], form') || b.parentElement;
-  const safe = b => { const h = hostOf(b); return !(sub && h && h.contains(sub)); };
+  const safe = b => { const h = hostOf(b); return !(sub && h && __cbContains(h, sub)); };
   let n = 0;
   const sels = ['[aria-label*="close" i]', '[title*="close" i]', '.klaviyo-close-form', 'button.close', '.close-button',
                 '.modal-close', '[class*="close-btn" i]', '[class*="closebutton" i]', '[data-testid*="close" i]'];
@@ -616,9 +627,8 @@ JS_CLOSE_POPUPS = "() => {\n" + JS_HELPERS + r"""
 """
 
 # Last resort when a covering element swallows real clicks: activate the button directly (as its own script would).
-JS_CLICK_MARKED = r"""
-() => {
-  const b = document.querySelector('[data-cb-submit="1"]');
+JS_CLICK_MARKED = "() => {\n" + JS_HELPERS + r"""
+  const b = __cbOne('[data-cb-submit="1"]');
   if (!b) return false;
   if (b.form && (b.type || '').toLowerCase() === 'submit' && b.form.requestSubmit) {
     try { b.form.requestSubmit(b); return true; } catch (e) {}
@@ -649,7 +659,10 @@ SUCCESS_RE = re.compile(
     r"successfully|subscribed|on the list)|successfully (?:entered|submitted|subscribed|registered|signed up)|good luck|"
     r"check your (?:e-?mail|inbox)|we(?:'ve| have) (?:received|got) your|confirmation e-?mail|you(?:'re| are) in\b|"
     r"almost there|nearly there|almost finished|please confirm your|thanks for signing up|thank you for subscribing|"
-    r"welcome to the (?:club|list|family|community)|subscription (?:is )?confirmed|thank you!?$", re.I | re.M)
+    r"welcome to the (?:club|list|family|community)|subscription (?:is )?confirmed|thank you!?$|"
+    # Referral widgets (Viral Loops, Gleam...) swap the form for "share your link for more entries" once you're in.
+    r"share (?:your|this) (?:unique |personal |referral )*link|(?:earn|get|unlock) (?:more|extra|bonus) entries",
+    re.I | re.M)
 ALREADY_RE = re.compile(
     r"already (?:been )?entered|already (?:subscribed|registered|signed up|a subscriber)|only (?:one|1) entry|you "
     r"have already|duplicate entry|already taken part|already on (?:our|the) list", re.I)
@@ -778,10 +791,41 @@ def _safe_eval(frame, script, arg=None, default=None):
 def _page_text(page) -> str:
     parts = []
     for fr in _all_frames(page):
-        t = _safe_eval(fr, "() => document.body ? document.body.innerText : ''", default="")
+        t = _safe_eval(fr, JS_PAGE_TEXT, default="")
         if t:
             parts.append(t)
     return "\n".join(parts)
+
+
+# The page's visible text, plus what's shown inside web-component widgets (body.innerText leaves shadow roots out,
+# so a widget's "Thanks for joining!" would otherwise go unseen).
+JS_PAGE_TEXT = r"""
+() => {
+  const parts = [document.body ? document.body.innerText : ''];
+  const walk = r => {
+    for (const h of r.querySelectorAll('*')) {
+      if (!h.shadowRoot) continue;
+      for (const c of h.shadowRoot.children) {
+        if (/^(STYLE|SCRIPT|LINK|TEMPLATE)$/.test(c.tagName)) continue;
+        if (c.checkVisibility ? !c.checkVisibility() : !c.getClientRects().length) continue;
+        const t = c.innerText;
+        if (t && t.trim()) parts.push(t);
+      }
+      walk(h.shadowRoot);
+    }
+  };
+  walk(document);
+  return parts.join('\n');
+}
+"""
+
+# A real click's fallback for elements our scripts marked, wherever they are (inside shadow roots too).
+JS_CLICK_SEL = "(sel) => {\n" + JS_HELPERS + r"""
+  const b = __cbOne(sel);
+  if (b) b.click();
+  return !!b;
+}
+"""
 
 
 def _click_marked(frame, attr: str = "data-cb-cookie") -> bool:
@@ -791,8 +835,7 @@ def _click_marked(frame, attr: str = "data-cb-cookie") -> bool:
         loc.click(timeout=4000)
         return True
     except Exception:  # noqa: BLE001
-        return bool(_safe_eval(frame, f"() => {{ const b = document.querySelector('[{attr}=\"1\"]'); "
-                                      f"if (b) {{ b.click(); return true; }} return false; }}", default=False))
+        return bool(_safe_eval(frame, JS_CLICK_SEL, f'[{attr}="1"]', default=False))
 
 
 def dismiss_cookies(page) -> list[str]:
@@ -1059,8 +1102,7 @@ def _click_sel(frame, selector: str, timeout: int = 4000) -> bool:
         frame.locator(selector).first.click(timeout=timeout)
         return True
     except Exception:  # noqa: BLE001
-        return bool(_safe_eval(frame, "(sel) => { const b = document.querySelector(sel); if (b) b.click(); return !!b; }",
-                               selector, default=False))
+        return bool(_safe_eval(frame, JS_CLICK_SEL, selector, default=False))
 
 
 def _click_follow(context, page, frame, selector: str, live, wait_s: float = 1.2):
@@ -1087,7 +1129,7 @@ def _tick_gate(page, frame) -> bool:
         loc.check(timeout=4000)
         ok = True
     except Exception:  # noqa: BLE001
-        ok = bool(_safe_eval(frame, "() => { const c = document.querySelector('[data-cb-gate=\"1\"]'); if (!c) return false;"
+        ok = bool(_safe_eval(frame, "() => {\n" + JS_HELPERS + "\n const c = __cbOne('[data-cb-gate=\"1\"]'); if (!c) return false;"
                                     " if (!c.checked) c.click(); if (!c.checked) { c.checked = true;"
                                     " c.dispatchEvent(new Event('input', {bubbles: true}));"
                                     " c.dispatchEvent(new Event('change', {bubbles: true})); } return c.checked; }",

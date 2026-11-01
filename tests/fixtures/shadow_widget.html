@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Giveaway</title></head>
+<body>
+<main>
+<h1>Enter our Speedy Monkey Jumbo Chunky Puzzles Giveaway!</h1>
+<p>One lucky winner will win 4 Speedy Monkey Jumbo Chunky Puzzles worth &pound;80!</p>
+<p>Competition open: 29th October to the 4th November.</p>
+<form-widget mode="popup"></form-widget>
+</main>
+<script>
+// Like Viral Loops' <form-widget>: the "JOIN TO ENTER" button, its pop-up entry form and the thank-you message all
+// live inside an open shadow root (Baby Blooms, Nov 2026).
+customElements.define('form-widget', class extends HTMLElement {
+  connectedCallback() {
+    const root = this.attachShadow({mode: 'open'});
+    root.innerHTML = `
+      <style>.popup{display:none;position:fixed;top:10%;left:25%;width:50%;background:#fff;border:1px solid #333;padding:20px}
+             .popup.open{display:block}</style>
+      <div class="banner"><p>One lucky person will win a set of 4 puzzles</p><button class="popup-button">JOIN TO ENTER</button></div>
+      <div class="popup"><button class="close">&times;</button>
+        <form id="participation_form"><h3>Join to Enter</h3>
+          <input type="text" id="firstname" placeholder="Your First Name">
+          <input type="email" id="email" placeholder="Your Email Address*">
+          <button type="button" class="participation-submit">Join to Enter</button>
+        </form>
+        <div class="done" hidden></div>
+      </div>`;
+    root.querySelector('.popup-button').onclick = () => root.querySelector('.popup').classList.add('open');
+    root.querySelector('.close').onclick = () => root.querySelector('.popup').classList.remove('open');
+    root.querySelector('.participation-submit').onclick = () => {
+      const name = root.querySelector('#firstname').value, email = root.querySelector('#email').value;
+      if (!name || !/@/.test(email)) return;
+      root.querySelector('#participation_form').remove();
+      const d = root.querySelector('.done');
+      d.hidden = false;
+      d.textContent = 'Thanks for joining, ' + name + '! Share your unique link to earn more entries.';
+    };
+  }
+});
+</script>
+</body></html>
