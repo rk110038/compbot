@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Gated quiz</title>
+<style>
+  body { font-family: sans-serif; }
+  .ans { display: block; margin: 4px 0; padding: 8px; }
+  .locked-opt { padding: 8px; color: #666; }
+</style></head>
+<body>
+<h1>Think you know spooky Britain?</h1>
+<p>Answer 2 questions and score 2 to unlock your chance to enter the prize draw.</p>
+<label class="row"><input type="checkbox" id="rules">
+  <span>I've read the rules and I'm ready to play - <a href="quiz_rules.html" target="_blank">T's &amp; C's apply</a></span></label>
+<button type="button" id="startq" disabled>Start the quiz</button>
+<div id="cards"></div>
+<div id="submit-area" style="display:none"><p>All done! Ready to see how you did?</p><button type="button" id="see">&#10024; See my results</button></div>
+<div id="results"></div>
+<script>
+const Q = [
+  {q: 'Which seaside town helped inspire Dracula?', o: ['Scarborough', 'Whitby', 'Filey'], c: 'Whitby'},
+  {q: 'Which theme park hosts Fright Nights?', o: ['Thorpe Park', 'Alton Towers', 'Drayton Manor'], c: 'Thorpe Park'},
+];
+const answers = {};
+const rules = document.getElementById('rules'), start = document.getElementById('startq');
+rules.onchange = () => { start.disabled = !rules.checked; };
+function render() {
+  const cards = document.getElementById('cards');
+  cards.innerHTML = '';
+  let nextShown = false;
+  Q.forEach((q, i) => {
+    const card = document.createElement('div');
+    card.className = 'card';
+    const n = i + 1;
+    if (answers[n] !== undefined) {
+      card.innerHTML = `<h3>Question ${n} of ${Q.length}</h3><div class="q-text">${q.q}</div><div class="grid answers-locked">` +
+        q.o.map(o => `<div class="locked-opt">${o}</div>`).join('') + `</div><p>${answers[n] === q.c ? 'Correct!' : 'Not quite - the answer was ' + q.c}</p>`;
+    } else if (!nextShown) {
+      nextShown = true;
+      card.innerHTML = `<h3>Question ${n} of ${Q.length}</h3><button type="button" class="reveal">Reveal question ${n} &#128064;</button>`;
+      card.querySelector('.reveal').onclick = () => {
+        card.innerHTML = `<h3>Question ${n} of ${Q.length}</h3><div class="q-text">${q.q}</div><div class="grid">` +
+          q.o.map((o, k) => `<button type="button" class="ans"><span class="letter">${'ABC'[k]}</span> <span>${o}</span></button>`).join('') + '</div>';
+        card.querySelectorAll('.ans').forEach(b => b.onclick = () => { answers[n] = b.lastElementChild.textContent; render(); });
+      };
+    } else {
+      card.innerHTML = `<h3>Question ${n} of ${Q.length}</h3><p>Locked</p>`;
+    }
+    cards.appendChild(card);
+  });
+  document.getElementById('submit-area').style.display = Object.keys(answers).length === Q.length ? '' : 'none';
+}
+start.onclick = () => { start.style.display = 'none'; render(); };
+document.getElementById('see').onclick = () => {
+  const score = Q.filter((q, i) => answers[i + 1] === q.c).length;
+  document.getElementById('submit-area').style.display = 'none';
+  document.getElementById('results').innerHTML = score >= 2
+    ? `<h2>You scored ${score} out of 2</h2><a href="gated_form.html#result=${score}" target="_blank">Enter the prize draw</a>`
+    : `<h2>You scored ${score} out of 2</h2><p>You didn't quite reach 2 this time.</p>`;
+};
+</script>
+</body></html>

@@ -89,6 +89,10 @@ Default schedule (Europe/London): discover 07:00, enter 07:30, inbox 08:00 and 2
 | **Live** | Watch the browser compbot is driving as it happens: a live picture of the page plus the current competition, step and result. Watch-only, and streamed from memory, so there are no disk writes. Switch it off in Settings → Live view |
 | **Log** | Everything compbot and you did, plus job run history |
 
+The 🌓 button at the top right switches the GUI between **Auto** (follows your device's light/dark setting), **Light** and **Dark**. The choice is remembered in that browser.
+
+Quizzes that unlock the entry form (answer tiles or buttons, "Reveal question", "I've read the rules" boxes, "Enter the prize draw" links) are played automatically: the MSE post's answer first, then the AI, then a guess, and the next option after a "wrong, try again". Switch this off in Settings → Play quizzes.
+
 Statuses: `queued` (will be auto-entered) → `entered` (or `manual`, `skipped`, `expired`). Outcomes: `pending` → `possible_win` → `won` / `lost`. Entered comps are marked **lost** automatically 60 days after closing if no win email arrived (most promoters only contact winners).
 
 **Daily comps** (tagged "Daily") are re-entered every day until they close. **(MD) threads** list the same prize on several magazine sites, and compbot enters each one (configurable).

@@ -3,12 +3,16 @@
   --green: #2b8a3e; --green-bg: #e6f4ea; --amber: #b25e00; --amber-bg: #fff1db; --red: #c92a2a; --red-bg: #fde8e8;
   --blue: #1c5fb8; --blue-bg: #e5efff; --grey-bg: #eef0f3; --gold: #8a6100; --gold-bg: #fff3bf;
   --radius: 10px; --shadow: 0 1px 2px rgba(16, 24, 40, .06), 0 1px 3px rgba(16, 24, 40, .08);
+  color-scheme: light;
 }
-@media (prefers-color-scheme: dark) {
-  :root { --bg: #14171d; --panel: #1c2028; --text: #e6e8ee; --muted: #9aa3b5; --line: #2c323d; --accent: #7c9bff;
-    --green-bg: #12301b; --green: #69db7c; --amber-bg: #3a2a0f; --amber: #ffb84d; --red-bg: #3b1616; --red: #ff8787;
-    --blue-bg: #13284a; --blue: #8ab4ff; --grey-bg: #262b35; --gold-bg: #3d3310; --gold: #ffd43b; }
-}
+/* data-theme is set before first paint by the script in base.html (the header button, else the system setting). */
+:root[data-theme="dark"] { --bg: #14171d; --panel: #1c2028; --text: #e6e8ee; --muted: #9aa3b5; --line: #2c323d; --accent: #7c9bff;
+  --green-bg: #12301b; --green: #69db7c; --amber-bg: #3a2a0f; --amber: #ffb84d; --red-bg: #3b1616; --red: #ff8787;
+  --blue-bg: #13284a; --blue: #8ab4ff; --grey-bg: #262b35; --gold-bg: #3d3310; --gold: #ffd43b; color-scheme: dark; }
+.theme-btn { border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 8px; padding: 4px 9px;
+  font: inherit; font-size: 15px; line-height: 1; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+.theme-btn:hover { background: var(--grey-bg); }
+.theme-btn small { font-size: 12px; color: var(--muted); }
 * { box-sizing: border-box; }
 body { margin: 0; font: 14px/1.5 "Segoe UI", system-ui, -apple-system, Roboto, sans-serif; background: var(--bg); color: var(--text); }
 a { color: var(--accent); text-decoration: none; }

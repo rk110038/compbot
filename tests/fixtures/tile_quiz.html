@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Tile quiz</title>
+<style>
+  body { font-family: sans-serif; margin: 0; }
+  .hero { height: 300px; }
+  .spacer { height: 1600px; }
+  #modal { display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, .6); z-index: 10; }
+  #modal.open { display: block; }
+  .box { position: absolute; left: 50%; top: 40px; width: 700px; margin-left: -350px; background: #fff; }
+  .viewport { overflow: hidden; width: 700px; }
+  .track { display: flex; transition: transform .3s; }
+  .slide { flex: 0 0 700px; width: 700px; padding: 20px; box-sizing: border-box; }
+  quiz-choice { display: block; padding: 10px; margin: 6px 0; border: 1px solid #999; }
+  quiz-choice.incorrect { background: #fcc; }
+  quiz-choice.correct { background: #cfc; }
+  #layer { display: none; position: fixed; inset: 0; z-index: 20; background: rgba(255, 255, 255, .9); }
+  #layer.open { display: block; }
+  #layer .msg { margin: 200px auto; width: 300px; text-align: center; }
+</style></head>
+<body>
+<div class="hero">
+  <h1>Test your F1 knowledge</h1>
+  <p>For a chance to win a signed helmet.</p>
+  <!-- Only scrolls down to the quiz: the real start button is further down. -->
+  <button type="button" id="take">Take the quiz</button>
+</div>
+<div class="spacer"><p>Some article text about racing.</p></div>
+<section id="quiz-section"><h2>The quiz</h2><button type="button" id="start">Start the quiz</button></section>
+
+<div id="modal" role="dialog" aria-modal="true">
+  <div class="box"><div class="viewport"><div class="track" id="track">
+    <div class="slide"><h3>Which city hosts the Monaco Grand Prix?</h3>
+      <div class="answers" data-correct="Monte Carlo">
+        <quiz-choice><span>A</span><span>Nice</span></quiz-choice>
+        <quiz-choice><span>B</span><span>Monte Carlo</span></quiz-choice>
+        <quiz-choice><span>C</span><span>Cannes</span></quiz-choice>
+      </div></div>
+    <div class="slide"><h3>How many laps is the race?</h3>
+      <div class="answers" data-correct="78">
+        <quiz-choice><span>A</span><span>44</span></quiz-choice>
+        <quiz-choice><span>B</span><span>58</span></quiz-choice>
+        <quiz-choice><span>C</span><span>78</span></quiz-choice>
+      </div></div>
+    <!-- The entry form is on the last slide: present from the start, but clipped out of view until the quiz is done. -->
+    <div class="slide"><h3>Submit your details</h3>
+      <form id="f">
+        <label>First name <input name="fn" required></label>
+        <label>Email <input type="email" name="em" required></label>
+        <label><input type="checkbox" name="tc" required> I accept the terms and conditions</label>
+        <button type="submit">Submit</button>
+      </form>
+      <p id="out"></p></div>
+  </div></div></div>
+</div>
+<div id="layer"><div class="msg"><p id="layer-text"></p><button type="button" id="layer-btn"></button></div></div>
+<script>
+let slide = 0, correct = 0, onLayer = null;
+const track = document.getElementById('track');
+const layer = document.getElementById('layer'), lt = document.getElementById('layer-text'), lb = document.getElementById('layer-btn');
+document.getElementById('take').onclick = () => document.getElementById('quiz-section').scrollIntoView();
+document.getElementById('start').onclick = () => document.getElementById('modal').classList.add('open');
+lb.onclick = () => { layer.classList.remove('open'); if (onLayer) onLayer(); };
+document.querySelectorAll('.answers').forEach(a => a.querySelectorAll('quiz-choice').forEach(c => c.onclick = () => {
+  const ok = c.lastElementChild.textContent === a.dataset.correct;
+  a.querySelectorAll('quiz-choice').forEach(x => x.className = '');
+  c.className = (ok ? 'correct' : 'incorrect') + ' selected';
+  if (ok) {
+    lt.textContent = 'Correct!'; lb.textContent = 'Next question';
+    onLayer = () => { correct++; slide++; track.style.transform = `translateX(${-700 * slide}px)`; };
+  } else {
+    lt.textContent = 'Not quite.'; lb.textContent = 'Retry';
+    onLayer = () => { c.className = ''; };
+  }
+  layer.classList.add('open');
+}));
+document.getElementById('f').onsubmit = e => {
+  e.preventDefault();
+  document.getElementById('out').textContent = correct === 2 ? 'Thank you for entering, good luck!' : 'Error: please answer every question first';
+};
+</script>
+</body></html>

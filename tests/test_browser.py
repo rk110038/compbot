@@ -211,3 +211,49 @@ def test_live_view_off_writes_nothing(browser, fixture_server, profile, tmp_path
     browser.enter(f"{fixture_server}/comp_form.html", Ctx(profile=profile, answers=["Charquemont"]),
                   _settings(entry_mode="dry_run", live_view=False, respect_automation_clauses=False), "lv2", {})
     assert not (tmp_path / "off").exists()
+
+
+def test_tile_quiz_in_a_carousel_with_retry(browser, fixture_server, profile):
+    # 'Take the quiz' only scrolls; 'Start the quiz' opens a pop-up carousel of answer tiles. The entry form sits on
+    # the last slide (clipped out of view until the quiz is done); wrong answers show a 'Retry' layer on top.
+    res = browser.enter(f"{fixture_server}/tile_quiz.html", Ctx(profile=profile, answers=["Monte Carlo"]),
+                        _settings(entry_mode="auto"), "q1", {})
+    assert res.result == "entered", (res.message, res.details["steps"])
+    steps = "\n".join(res.details["steps"])
+    assert "clicked 'Take the quiz'" in steps and "clicked 'Start the quiz'" in steps
+    assert "\u201cMonte Carlo\u201d (the MSE post)" in steps
+    assert "clicked 'Retry'" in steps and "was wrong - trying" in steps
+    assert res.details["quiz"]["answered"] == 2
+
+
+def test_gated_quiz_reveals_and_follows_the_prize_draw_link(browser, fixture_server, profile):
+    res = browser.enter(f"{fixture_server}/gated_quiz.html", Ctx(profile=profile, answers=["Whitby", "Thorpe Park"]),
+                        _settings(entry_mode="dry_run"), "q2", {})
+    assert res.result == "dry_run_ok", (res.message, res.details["steps"])
+    steps = "\n".join(res.details["steps"])
+    assert "ticked 'I've read the rules" in steps
+    assert "clicked 'Reveal question 2'" in steps and "clicked 'Enter the prize draw'" in steps
+    assert "gated_form" in (res.final_url or "")
+    assert any(f["label"].lower().startswith("email") for f in res.details["fields"])
+
+
+def test_gated_quiz_score_too_low(browser, fixture_server, profile):
+    res = browser.enter(f"{fixture_server}/gated_quiz.html", Ctx(profile=profile), _settings(entry_mode="dry_run"),
+                        "q3", {})
+    assert res.result == "failed" and "Quiz score too low" in res.message, (res.message, res.details["steps"])
+
+
+def test_quizzes_can_be_switched_off(browser, fixture_server, profile):
+    res = browser.enter(f"{fixture_server}/tile_quiz.html", Ctx(profile=profile, answers=["Monte Carlo"]),
+                        _settings(entry_mode="dry_run", play_quizzes=False), "q4", {})
+    assert res.result == "failed" and "quiz" not in res.details
+
+
+def test_match_quiz_option():
+    from app.entry.browser import _match_quiz_option as m
+    heights = ["2,135 meters", "2,285 meters", "2,305 meters", "2,360 meters"]
+    assert m(heights, ["2,285 m"], 70) == "2,285 meters"
+    assert m(heights, ["2,200 meters"], 70) is None          # never a near-miss number
+    assert m(heights, ["C"], 70) == "2,305 meters"            # a letter answer
+    assert m(["Scarborough", "Whitby", "Filey"], ["2015", "Whitby"], 92) == "Whitby"
+    assert m(["Max Verstappen", "Lewis Hamilton"], ["Verstappen"], 70) == "Max Verstappen"

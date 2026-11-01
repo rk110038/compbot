@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Prize draw entry</title></head>
+<body>
+<h1>You qualified to enter our prize draw</h1>
+<form id="d">
+  <label>First name <input name="fn" required></label>
+  <label>Email <input type="email" name="em" required></label>
+  <label><input type="checkbox" name="tc" required> I agree to the terms and conditions</label>
+  <button type="submit">Enter the draw</button>
+</form>
+<p id="out"></p>
+<script>
+document.getElementById('d').onsubmit = e => { e.preventDefault(); document.getElementById('out').textContent = 'Thank you for entering, good luck!'; };
+</script>
+</body></html>

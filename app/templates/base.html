@@ -4,6 +4,18 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}compbot{% endblock %} · compbot</title>
+  <script>
+  // Light/dark: the header button stores 'light' or 'dark'; with no choice stored the system setting is followed.
+  (function () {
+    const mq = matchMedia('(prefers-color-scheme: dark)');
+    const pick = () => { let t = null; try { t = localStorage.getItem('cb-theme'); } catch (e) {}
+      return t === 'light' || t === 'dark' ? t : null; };
+    const apply = () => { document.documentElement.dataset.theme = pick() || (mq.matches ? 'dark' : 'light'); };
+    apply();
+    mq.addEventListener('change', apply);
+    window.cbTheme = { pick, apply };
+  })();
+  </script>
   <link rel="stylesheet" href="/static/style.css?v={{ version }}">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏆</text></svg>">
 </head>
@@ -23,6 +35,7 @@
   </nav>
   <div class="right">
     {% for name, prog in running.items() %}<span class="running"><span class="spinner"></span>{{ name }}: {{ prog }}</span> {% endfor %}
+    <button type="button" class="theme-btn" id="theme-btn" aria-label="Colour theme"></button>
   </div>
 </div></header>
 <main>
@@ -33,6 +46,22 @@
 </main>
 <footer>compbot {{ version }} · times shown in {{ cfg.tz }}</footer>
 <script>
+(function () {
+  const btn = document.getElementById('theme-btn');
+  const next = {null: 'light', light: 'dark', dark: null};  // Auto -> Light -> Dark -> Auto
+  const show = () => {
+    const t = cbTheme.pick();
+    btn.innerHTML = t === 'light' ? '☀️<small>Light</small>' : t === 'dark' ? '🌙<small>Dark</small>' : '🌓<small>Auto</small>';
+    btn.title = (t ? `${t[0].toUpperCase()}${t.slice(1)} mode` : 'Following your system setting') + ' - click to change';
+  };
+  btn.addEventListener('click', () => {
+    const n = next[cbTheme.pick()];
+    try { n ? localStorage.setItem('cb-theme', n) : localStorage.removeItem('cb-theme'); } catch (e) {}
+    cbTheme.apply();
+    show();
+  });
+  show();
+})();
 document.addEventListener('click', e => {
   const el = e.target.closest('[data-copy]');
   if (!el) return;

@@ -46,6 +46,17 @@ def test_checkboxes(profile):
     assert map_field(third, nl).kind == "uncheck"
 
 
+def test_i_agree_to_marketing_is_not_terms(profile):
+    # "I agree" in front of a marketing consent doesn't make it the T&Cs box (DHL's F1 quiz form).
+    c = ctx(profile)
+    mkt = Field("1", "input", "checkbox", label="I agree that my contact details may be used for future "
+                                                "communication from DHL via email.")
+    assert map_field(mkt, c).kind == "uncheck"
+    both = Field("2", "input", "checkbox", label="I have read and accepted the terms and conditions and agree to "
+                                                 "future communication by email", required=True)
+    assert map_field(both, c).kind == "check"
+
+
 def test_radio_and_select_matching(profile):
     c = ctx(profile, answers=["39G"])
     radio = Field("r", "radio", "radio", label="How much protein per serving?", required=True,

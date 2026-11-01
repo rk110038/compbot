@@ -133,7 +133,12 @@ TERMS_RE = re.compile(
 MARKETING_RE = re.compile(
     r"newsletter|marketing|offers|promotions?\b|\bnews\b|updates|hear (about|from|more)|keep (me )?(up to date|in "
     r"touch|informed|posted)|contact me|e ?mail me|send me|sign me up|subscribe|third ?part|partners|carefully "
-    r"selected|by (e ?mail|sms|text|post|phone)|opt ?in|exclusive|discounts|latest")
+    r"selected|by (e ?mail|sms|text|post|phone)|opt ?in|exclusive|discounts|latest|future communications?|"
+    r"communications? from|via (e ?mail|sms|text|post|phone)|contact you (about|with|by|via)")
+# What makes a box genuinely about entering (not just "I agree ..." in front of a marketing consent).
+TERMS_CORE_RE = re.compile(
+    r"terms|t ?& ?c|t s ?& ?c|\btcs\b|conditions|\brules\b|over (the age of )?1[68]|aged? 1[68]|1[68] ?(\+|or over|years)|"
+    r"eligible|uk resident|resident (of|in)|i am over")
 OPTOUT_RE = re.compile(r"(do not|don ?t|not) (wish|want|like) to|opt ?out|unsubscribe|if you (do not|don ?t)|prefer not")
 THIRD_PARTY_RE = re.compile(r"third ?part|partners|carefully selected|other (companies|brands)|associated brands|sister")
 HEAR_RE = re.compile(r"how did you (hear|find|see)|where did you (hear|see|find)|how you heard|source|referr")
@@ -339,6 +344,8 @@ def map_checkbox(f: Field, ctx: Ctx) -> Action:
         want = ctx.want_marketing and label in ("e mail", "email", "by email", "by e mail")
         return Action("check" if want else "skip", source="rule", note="contact channel")
     is_terms, is_mkt, optout = bool(TERMS_RE.search(d)), bool(MARKETING_RE.search(d)), bool(OPTOUT_RE.search(d))
+    if is_mkt and is_terms and not TERMS_CORE_RE.search(d):
+        is_terms = False  # "I agree that my details may be used for future communication by email" is marketing
     if optout:
         return Action("uncheck" if ctx.want_marketing else "check", source="rule", note="marketing opt-out box")
     if is_mkt and not is_terms:

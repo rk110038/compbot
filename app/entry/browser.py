@@ -56,10 +56,21 @@ const __cbVis = (el) => {
   const r = el.getBoundingClientRect();
   if (r.width < 2 || r.height < 2) return false;
   if (r.right + window.scrollX < 0 || r.bottom + window.scrollY < 0) return false;
+  let clip = s.position !== 'fixed';
   let p = el.parentElement;
   while (p && p !== document.body) {
     const ps = getComputedStyle(p);
     if (ps.display === 'none' || ps.visibility === 'hidden' || parseFloat(ps.opacity || '1') < 0.05) return false;
+    if (clip) {
+      // Cut off by an overflow:hidden box, e.g. the other slides of a carousel quiz (or a collapsed panel).
+      const cx = /hidden|clip/.test(ps.overflowX), cy = /hidden|clip/.test(ps.overflowY);
+      if (cx || cy) {
+        const pr = p.getBoundingClientRect();
+        if (cx && (r.right <= pr.left + 1 || r.left >= pr.right - 1)) return false;
+        if (cy && (r.bottom <= pr.top + 1 || r.top >= pr.bottom - 1)) return false;
+      }
+      if (ps.position === 'fixed') clip = false;
+    }
     p = p.parentElement;
   }
   return true;
@@ -213,7 +224,7 @@ JS_MARK_SUBMIT = "(idx) => {\n" + JS_HELPERS + r"""
   let root = el && el.form ? el.form : null;
   if (!root && el) { let n = el.parentElement; while (n && !n.querySelector('button, input[type=submit], [role=button]')) n = n.parentElement; root = n; }
   if (!root) root = document.body;
-  const good = /^(enter|submit|send|sign ?up|subscribe|register|join|go|count me in|take part|enter now|enter competition|enter the (competition|draw|prize draw)|submit entry|enter draw|i'?m in|done|continue|next|confirm|win|enter to win|let'?s go|play)\b/i;
+  const good = /^(enter|submit|send|sign ?up|subscribe|register|join|go|count me in|take part|enter now|enter competition|enter the (competition|draw|prize draw)|submit entry|enter draw|i'?m in|done|continue|next|confirm|win|enter to win|let'?s go|play|ok)\b/i;
   const bad = /cancel|reset|back|close|log ?in|sign ?in|search|menu|cookie|accept all|reject|share|facebook|twitter|instagram|print|basket|cart/i;
   let best = null, bestScore = -99;
   for (const b of root.querySelectorAll('button, input[type=submit], input[type=image], [role=button], a.button, a.btn')) {
@@ -322,16 +333,34 @@ JS_TERMS_LINKS = r"""
 """
 
 JS_REVEAL = "(dryRun) => {\n" + JS_HELPERS + r"""
-  const vis = __cbVis, txt = __cbTxt;
+  const vis = __cbVis;
+  const txt = el => __cbTxt(el).replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}\u{200D}]/gu, '').replace(/\s+/g, ' ').trim();
   // Buttons that only open the entry form or quiz: safe to press even in a dry run.
-  const safe = /^((let'?s )?(start|begin|take|do|play|try)( the| our| this| a)?( quiz| game| competition| challenge| test)?( now| here)?|get started|let'?s (go|start|play)|show (the )?(form|questions?)|reveal (the )?(form|question))!?$/i;
+  const safe = /^((let'?s )?(start|begin|take|do|play|try)( the| our| this| a)?( quiz| game| competition| challenge| test)?( now| here)?|get started|let'?s (go|start|play)|show (the )?(form|questions?)|reveal (the )?(form|question)|continue)!?$/i;
   // Buttons that might themselves submit an entry: only pressed for real entries.
   const enter = /^(enter( now| here| the competition| competition| the (prize )?draw| to win| now for free| the giveaway| giveaway| the quiz| quiz)?|click (here )?to enter|take part|enter (&|and) win|i want to win|join (in|now)|count me in)!?$/i;
+  // A start button greyed out until "I've read the rules" is ticked: that box is the gate.
+  const gateRe = /\b(read|understood?|accept|agree|ready|rules|terms|t'?s? ?(&|and) ?c'?s|conditions|over (the age of )?18|18 or over|aged 18)\b/i;
+  const notGate = /marketing|newsletter|offers|partners|third|e-?mail me|contact me|keep me (updated|informed)|updates|news\b/i;
+  const isDisabled = b => b.disabled || b.getAttribute('aria-disabled') === 'true' || /(^|\s)(is-)?disabled(\s|$)/.test(typeof b.className === 'string' ? b.className : '');
+  const findGate = b => {
+    let n = b.parentElement;
+    for (let i = 0; i < 5 && n; i++, n = (n === document.body ? null : n.parentElement)) {
+      for (const c of n.querySelectorAll('input[type=checkbox]')) {
+        if (c.checked || c.disabled) continue;
+        const lab = (c.labels && c.labels[0]) || c.closest('label');
+        if (!(vis(c) || (lab && vis(lab)))) continue;
+        const t = txt(lab) || txt(c.parentElement);
+        if (gateRe.test(t) && !notGate.test(t)) return c;
+      }
+    }
+    return null;
+  };
   const h1 = document.querySelector('h1');
   const top0 = h1 ? h1.getBoundingClientRect().top + scrollY : 0;
-  let best = null, bestScore = -1e9;
+  let best = null, bestScore = -1e9, bestGate = null;
   for (const b of document.querySelectorAll('button, a, [role=button], input[type=button]')) {
-    if (!vis(b)) continue;
+    if (!vis(b) || b.hasAttribute('data-cb-tried')) continue;
     // Never press anything that could submit a form.
     if (b.closest('form') || (b.getAttribute('type') || '').toLowerCase() === 'submit') continue;
     const t = (txt(b) || b.value || '').trim();
@@ -340,18 +369,202 @@ JS_REVEAL = "(dryRun) => {\n" + JS_HELPERS + r"""
     const isSafe = safe.test(t), isEnter = enter.test(t);
     if (!isSafe && !isEnter) continue;
     if (isEnter && !isSafe && dryRun && !isLink) continue;
+    let gate = null;
+    if (isDisabled(b)) { gate = findGate(b); if (!gate) continue; }
     let s = 0;
     if (/quiz|competition|draw|giveaway|enter/i.test(t)) s += 6;
     if (/^(play|play now|start|begin|try)!?$/i.test(t)) s -= 4;          // generic: could be a game or video
+    if (/^continue$/i.test(t)) s -= 3;                                    // e.g. a form's welcome screen
     if (offsite && /^(play|start|begin|try|take)/i.test(t)) s -= 8;       // e.g. a fantasy-game promo
     if (b.closest('main, article, [role=main]')) s += 2;
     if (b.closest('header, nav, footer, aside, [role=navigation], [role=banner], [role=contentinfo]')) s -= 8;
     s -= Math.min(6, Math.abs(b.getBoundingClientRect().top + scrollY - top0) / 600);  // nearer the headline
-    if (s > bestScore) { best = b; bestScore = s; }
+    if (s > bestScore) { best = b; bestScore = s; bestGate = gate; }
   }
   if (!best || bestScore < -6) return null;
+  document.querySelectorAll('[data-cb-reveal],[data-cb-gate]').forEach(e => { e.removeAttribute('data-cb-reveal'); e.removeAttribute('data-cb-gate'); });
   best.setAttribute('data-cb-reveal', '1');
-  return (txt(best) || best.value || '').trim();
+  best.setAttribute('data-cb-tried', '1');  // if it doesn't lead anywhere, the next-best button gets a turn
+  let gateLabel = null;
+  if (bestGate) {
+    bestGate.setAttribute('data-cb-gate', '1');
+    const lab = (bestGate.labels && bestGate.labels[0]) || bestGate.closest('label');
+    gateLabel = (txt(lab) || txt(bestGate.parentElement)).slice(0, 120);
+  }
+  return {label: (txt(best) || best.value || '').trim(), gate: gateLabel};
+}
+"""
+
+# Click-to-answer quizzes: a question (text with "?") followed by a set of answer buttons/tiles that aren't form
+# fields. Marks each group's options [data-cb-opt=gNoM] and the best "next/reveal/see results" button [data-cb-next].
+JS_QUIZ_SCAN = "([skip, focus, dryRun]) => {\n" + JS_HELPERS + r"""
+  const vis = __cbVis;
+  const clean = s => (s || '').replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}\u{200D}\u{20E3}]/gu, ' ').replace(/\s+/g, ' ').trim();
+  const txt = el => clean(el ? (el.innerText || el.textContent || '') : '');
+  const cls = el => String((el && (typeof el.className === 'string' ? el.className : (el.getAttribute && el.getAttribute('class')))) || '');
+  const tok = (el, words) => new RegExp('(^|[\\s_-])(' + words + ')([\\s_-]|$)', 'i').test(cls(el));
+  const OFF = 'header, nav, footer, aside, [role=navigation], [role=banner], [role=contentinfo]';
+  const DIALOG = '[role=dialog], [aria-modal=true], dialog, [class*=modal i]';
+  const CLICKY = 'button, [role=button], [role=radio], [role=option], [role=checkbox], [role=menuitemradio], label, a';
+  const CONSENT = /cookie|consent|gdpr|onetrust|didomi|cookiebot|sp_message|privacy-?(mgmt|manager|center|centre)/i;
+  const NOT_QUIZ = /\b(was (this|it) (page |article |answer )?(helpful|useful)|feedback|rate (this|our|us)|how did we do|recommend us|cookies?|newsletter|log ?in|sign ?in|search|forgot (your )?password)\b/i;
+  const BAD_OPT = /^(share|tweet|facebook|twitter|instagram|whatsapp|e-?mail|copy link|print|close|cancel|back|menu|search|log ?in|sign ?in|accept( all)?|reject( all)?|cookie settings|read more)$/i;
+  const WRONG = 'incorrect|wrong|is-wrong|false|error|fail|failed|invalid';
+  const RIGHT = 'correct|is-correct|right|success|true|valid';
+  const SEL = 'selected|chosen|picked|checked|is-selected|is-active|active';
+  const LOCK = 'locked|disabled|answered|complete|completed|done|is-locked|is-disabled|is-answered';
+  const entryForm = el => { const f = el.closest('form'); return !!(f && Array.from(f.querySelectorAll('input[type=text], input[type=email], input[type=tel], input:not([type]), textarea')).some(vis)); };
+  const isDis = el => !!(el.disabled || el.getAttribute('aria-disabled') === 'true' || tok(el, 'disabled|locked|is-disabled|is-locked') || el.closest('fieldset[disabled]'));
+  // Is this the element a person would actually click at its centre? (false = something covers or clips it;
+  // null = it's off-screen, so we can't tell)
+  const hits = el => {
+    const r = el.getBoundingClientRect();
+    const x = r.left + r.width / 2, y = r.top + Math.min(r.height / 2, 20);
+    if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) return null;
+    const h = document.elementFromPoint(x, y);
+    return !!h && (el === h || el.contains(h));
+  };
+  // Pop-ups that are open now (e.g. the quiz itself, or its "correct! / next question" layer).
+  const openDialogs = Array.from(document.querySelectorAll(DIALOG)).filter(d => {
+    if (!vis(d)) return false;
+    const st = getComputedStyle(d), r = d.getBoundingClientRect();
+    return (st.position === 'fixed' || st.position === 'absolute') && r.width * r.height > 0.2 * innerWidth * innerHeight;
+  });
+  const reachable = el => { const h = hits(el); return h === true || (h === null && (!openDialogs.length || openDialogs.some(d => d.contains(el)))); };
+  document.querySelectorAll('[data-cb-opt],[data-cb-next],[data-cb-retry]').forEach(e => { e.removeAttribute('data-cb-opt'); e.removeAttribute('data-cb-next'); e.removeAttribute('data-cb-retry'); });
+  if (!document.body) return {groups: [], next: null, retry: null, quizNext: false};
+
+  // Question elements: the block holding a "?" (innermost, so not the whole card).
+  const qList = [];
+  const seen = new Set();
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT,
+    {acceptNode: n => n.nodeValue.indexOf('?') >= 0 ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT});
+  let tn;
+  while ((tn = walker.nextNode()) && qList.length < 300) {
+    let el = tn.parentElement;
+    while (el && /^(SPAN|B|STRONG|EM|I|U|SMALL|MARK|FONT|SUP|SUB)$/.test(el.tagName) && el.parentElement && txt(el.parentElement).length <= 300) el = el.parentElement;
+    if (!el || seen.has(el) || /^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE|TEXTAREA|OPTION|TITLE)$/.test(el.tagName)) continue;
+    seen.add(el);
+    if (el.closest(CLICKY) || el.closest(OFF)) continue;
+    const t = txt(el);
+    if (t.length < 8 || t.length > 300 || t.indexOf('?') < 0 || NOT_QUIZ.test(t) || !vis(el)) continue;
+    let bad = false;
+    for (let a = el, k = 0; a && k < 10; a = a.parentElement, k++) if (CONSENT.test((a.id || '') + ' ' + cls(a))) { bad = true; break; }
+    if (!bad && !entryForm(el)) qList.push(el);
+  }
+
+  const explicit = el => el.matches('button, [role=button], [role=radio], [role=option], [role=checkbox], [role=menuitemradio], label, [onclick]') || el.tagName.indexOf('-') > 0 || !!el.querySelector('input[type=radio], input[type=checkbox]');
+  const optionLike = el => {
+    if (el.matches('input, select, textarea, option, img, svg, path, br, hr, iframe, script, style, source, picture')) return false;
+    if (el.querySelector('input:not([type=radio]):not([type=checkbox]):not([type=hidden]), select, textarea')) return false;
+    const t = txt(el);
+    if (!t || t.length > 160 || BAD_OPT.test(t) || /\?$/.test(t)) return false;
+    if (el.hasAttribute('aria-expanded') || el.hasAttribute('aria-haspopup')) return false;  // accordions, menus
+    if (el.tagName === 'A') { const h = el.getAttribute('href') || ''; if (h && !/^(#|javascript:)/i.test(h)) return false; }
+    if (!vis(el)) return false;
+    if (explicit(el) || el.matches('[tabindex]:not([tabindex="-1"])')) return true;
+    return getComputedStyle(el).cursor === 'pointer';
+  };
+  const follows = (a, b) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+  const findGroup = (q, nextQ) => {
+    let a = q.parentElement;
+    for (let lvl = 0; lvl < 5 && a && a !== document.documentElement; lvl++, a = a.parentElement) {
+      const els = a.querySelectorAll('*');
+      if (els.length > 2500) break;
+      const byParent = new Map();
+      for (const e of els) {
+        if (!follows(q, e) || q.contains(e) || e.contains(q)) continue;
+        if (nextQ && !follows(e, nextQ)) continue;
+        const p = e.parentElement;
+        if (!p || p.closest(CLICKY)) continue;  // e.g. the letter + text inside one answer button
+        if (!optionLike(e)) continue;
+        if (!byParent.has(p)) byParent.set(p, []);
+        byParent.get(p).push(e);
+      }
+      let pick = null;
+      for (const [p, kids] of byParent) {
+        const tag = kids[0].tagName;
+        const same = kids.filter(k => k.tagName === tag);
+        if (same.length < 2 || same.length > 10) continue;
+        const ex = same.every(explicit);
+        if (!pick || (ex && !pick.ex)) pick = {parent: p, opts: same, ex};
+        if (pick.ex) break;
+      }
+      if (pick) return pick;
+    }
+    return null;
+  };
+  const optText = o => {
+    const kids = Array.from(o.children).filter(c => txt(c));
+    if (kids.length >= 2 && /^[A-Ha-h1-9][\).:]?$/.test(txt(kids[0]))) { const rest = clean(kids.slice(1).map(txt).join(' ')); if (rest) return rest.slice(0, 160); }
+    const t = txt(o), m = t.match(/^([A-Ha-h])[\).:\-]\s+(\S.*)$/);
+    return (m ? m[2] : t).slice(0, 160);
+  };
+
+  const groups = [];
+  let focusEl = null, scrolled = false;
+  for (let i = 0; i < qList.length && groups.length < 6; i++) {
+    const q = qList[i], question = txt(q);
+    if (focus && question === focus) focusEl = q;
+    if ((skip || []).includes(question)) continue;
+    const g = findGroup(q, qList[i + 1]);
+    if (!g) continue;
+    let locked = g.opts.every(isDis);
+    for (let a = g.parent, k = 0; a && k < 3 && !locked; a = a.parentElement, k++) if (tok(a, LOCK)) locked = true;
+    if (!locked && !scrolled) {
+      // Bring the question into view by scrolling the window only (scrolling the quiz's own box would shift a
+      // carousel to a slide it isn't on), so we can check nothing covers the answers.
+      scrolled = true;
+      const r = q.getBoundingClientRect(), last = g.opts[g.opts.length - 1].getBoundingClientRect();
+      if (r.top < 0 || last.bottom > innerHeight) window.scrollBy(0, r.top - Math.max(40, (innerHeight - (last.bottom - r.top)) / 2));
+    }
+    const area = g.parent.parentElement || g.parent;
+    let rest = txt(area);
+    for (const o of g.opts) rest = rest.replace(txt(o), ' ');
+    const gi = groups.length;
+    const options = g.opts.map((o, k) => {
+      o.setAttribute('data-cb-opt', `g${gi}o${k}`);
+      const wrong = tok(o, WRONG) || o.getAttribute('aria-invalid') === 'true';
+      return {key: `g${gi}o${k}`, text: optText(o), wrong, right: !wrong && tok(o, RIGHT), dis: isDis(o),
+              sel: tok(o, SEL) || ['aria-pressed', 'aria-checked', 'aria-selected'].some(x => o.getAttribute(x) === 'true') || !!o.querySelector('input:checked')};
+    });
+    groups.push({question, options, locked, dialog: !!q.closest(DIALOG),
+                 covered: !g.opts.every(reachable),
+                 wrongHint: /\b(incorrect|wrong answer|not quite|try again|not (quite )?right|unlucky|oops)\b/i.test(rest.slice(0, 800))});
+  }
+
+  // The button that moves the quiz on: next / reveal / see results / (for real entries) enter the draw.
+  const NEXT = /^(next( question| step)?|continue|reveal( the)?( next)?( question)?( \d+)?|show( me)?( the)?( next)? question( \d+)?|(tap|click) (here )?to reveal|check( my| the)? answers?|submit( my| your)? answers?|confirm( my)?( answer)?|lock (it |answer )?in|(see|show|get|view|reveal) (my |your |the )?(results?|score)|finish( the)?( quiz)?|done|ok|start( the)? quiz|begin( the)? quiz|let'?s go)!?$/i;
+  const ENTER = /^(enter( now| here)?|enter( the)?( prize)? (draw|competition|giveaway)|claim( your)?( prize| entry)?|complete (your )?(prize draw )?entry|go to( the)? (entry|form|draw))!?$/i;
+  const RETRY = /^(retry|try again|have another go|another go|go again|try another answer)!?$/i;
+  const QUIZY = /question|quiz|reveal|result|score|answer/i;
+  const fy = focusEl ? focusEl.getBoundingClientRect().top + scrollY : scrollY + innerHeight / 3;
+  let next = null, nextScore = -1e9, retry = null;
+  for (const b of document.querySelectorAll('button, a, [role=button], input[type=button], input[type=submit]')) {
+    if (b.closest('[data-cb-opt]') || !vis(b) || b.closest(OFF) || entryForm(b)) continue;
+    if (b.disabled || b.getAttribute('aria-disabled') === 'true' || !reachable(b)) continue;
+    const t = clean(b.innerText || b.value || '');
+    if (RETRY.test(t)) { if (!retry) retry = b; continue; }
+    const isNext = NEXT.test(t), isEnter = ENTER.test(t);
+    if (!isNext && !isEnter) continue;
+    const href = b.tagName === 'A' ? (b.getAttribute('href') || '') : '';
+    const realLink = !!href && !/^(#|javascript:)/i.test(href);
+    const offsite = realLink && new URL(b.href, location.href).host !== location.host;
+    if (isEnter && !isNext && dryRun && !realLink) continue;  // might be a one-click entry: dry runs only follow links
+    if (isNext && !isEnter && offsite) continue;
+    let s = 0;
+    if (QUIZY.test(t)) s += 3;
+    if (isEnter) s += 2;
+    if (b.closest(DIALOG)) s += 2;
+    const by = b.getBoundingClientRect().top + scrollY;
+    s -= Math.abs(by - fy) / 800;
+    if (focusEl && by < fy - 50) s -= 2;  // above (behind) the question just answered
+    if (s > nextScore) { next = b; nextScore = s; }
+  }
+  let nextLabel = null, retryLabel = null;
+  if (next) { next.setAttribute('data-cb-next', '1'); nextLabel = clean(next.innerText || next.value || '').slice(0, 60) || 'next'; }
+  if (retry) { retry.setAttribute('data-cb-retry', '1'); retryLabel = clean(retry.innerText || retry.value || '').slice(0, 60); }
+  return {groups, next: nextLabel, retry: retryLabel, quizNext: !!nextLabel && QUIZY.test(nextLabel)};
 }
 """
 
@@ -640,6 +853,8 @@ def _score_container(c: dict, ctx: Ctx | None = None) -> float:
         s -= 50  # cookie / privacy-preference dialogs are never the entry form
     if len(fields) == 1 and re.search(r"search|^q$", fields[0].get("name", "") + " " + fields[0].get("type", ""), re.I):
         s -= 25
+    if all(f.get("type") == "checkbox" for f in fields):
+        s -= 8  # just tick boxes (e.g. "I've read the rules" before a quiz): not an entry form on its own
     if not c.get("isForm"):
         s -= 1
     return s
@@ -816,6 +1031,240 @@ def _click_submit(page, frame) -> str:
     return f"failed: {first_error}"
 
 
+def _click_sel(frame, selector: str, timeout: int = 4000) -> bool:
+    """Real click on an element our scripts marked; a script click if something covers it."""
+    try:
+        frame.locator(selector).first.click(timeout=timeout)
+        return True
+    except Exception:  # noqa: BLE001
+        return bool(_safe_eval(frame, "(sel) => { const b = document.querySelector(sel); if (b) b.click(); return !!b; }",
+                               selector, default=False))
+
+
+def _click_follow(context, page, frame, selector: str, live, wait_s: float = 1.2):
+    """Click, then follow the click into a new tab if it opened one (e.g. 'Enter the prize draw' links)."""
+    n_pages = len(context.pages)
+    ok = _click_sel(frame, selector, timeout=5000)
+    _pause(page, wait_s)
+    if len(context.pages) > n_pages:
+        page = context.pages[-1]
+        live.attach(page)
+        try:
+            page.wait_for_load_state("domcontentloaded", timeout=15000)
+        except Exception:  # noqa: BLE001
+            pass
+        _wait_settle(page, 6000)
+        dismiss_cookies(page)
+    return page, ok
+
+
+def _tick_gate(page, frame) -> bool:
+    """Tick the 'I've read the rules' box that unlocks a start button (a real click on the box itself)."""
+    loc = frame.locator('[data-cb-gate="1"]').first
+    try:
+        loc.check(timeout=4000)
+        ok = True
+    except Exception:  # noqa: BLE001
+        ok = bool(_safe_eval(frame, "() => { const c = document.querySelector('[data-cb-gate=\"1\"]'); if (!c) return false;"
+                                    " if (!c.checked) c.click(); if (!c.checked) { c.checked = true;"
+                                    " c.dispatchEvent(new Event('input', {bubbles: true}));"
+                                    " c.dispatchEvent(new Event('change', {bubbles: true})); } return c.checked; }",
+                             default=False))
+    _pause(page, 0.6)
+    return ok
+
+
+QUIZ_MAX_ACTIONS = 100
+QUIZ_BUDGET_S = 420  # a 15-question timed quiz with the AI thinking on a CPU fits; ENTRY_TIMEOUT_S is the hard cap
+QUIZ_FAIL_RE = re.compile(
+    r"didn'?t (?:quite )?(?:reach|qualify|score enough|get enough)|not (?:quite )?(?:qualif|enough (?:correct|right))|"
+    r"you need(?:ed)? to (?:score|get) (?:at least )?\d+|better luck next time|you didn'?t make it", re.I)
+_LETTER_RE = re.compile(r"^\(?([A-Ha-h])\)?[.:]?$")
+_DIGITS_RE = re.compile(r"\d+")
+
+
+def _quiz_scan(page, skip=None, focus=None, dry_run: bool = False):
+    """Find the quiz on the page (any frame): returns (frame, scan) - scan has 'groups', 'next', 'quizNext'."""
+    with_next = (None, None)
+    for fr in _all_frames(page):
+        s = _safe_eval(fr, JS_QUIZ_SCAN, [list(skip or []), focus, dry_run])
+        if not s:
+            continue
+        if s.get("groups"):
+            return fr, s
+        if s.get("next") and with_next[0] is None:
+            with_next = (fr, s)
+    return with_next
+
+
+def _quiz_present(scan) -> bool:
+    return bool(scan and (scan.get("groups") or scan.get("quizNext")))
+
+
+def _match_quiz_option(texts: list[str], candidates: list[str], fuzzy: int) -> str | None:
+    """Pick the option matching an answer. Numbers must match exactly ('2,135 m' is not '2,285 m')."""
+    opts = [{"text": t, "value": t} for t in texts]
+    for c in candidates:
+        m = _LETTER_RE.match(c.strip())
+        if m and "abcdefgh".index(m.group(1).lower()) < len(texts):
+            return texts["abcdefgh".index(m.group(1).lower())]
+        digits = _DIGITS_RE.findall(c.replace(",", ""))
+        if digits:
+            same = [t for t in texts if _DIGITS_RE.findall(t.replace(",", "")) == digits]
+            if len(same) == 1:
+                return same[0]
+            if any(_DIGITS_RE.search(t) for t in texts):
+                continue  # a numeric answer that matches none (or several) of the numeric options: don't guess
+        nc = normalise(c)
+        for t in texts:
+            if normalise(t) == nc:
+                return t
+        o = choose_option(opts, [c], threshold=fuzzy)
+        if o:
+            return o["text"]
+    return None
+
+
+def _quiz_order(g: dict, ctx: Ctx, settings: dict, comp_context: dict, page_text: str,
+                details: dict) -> tuple[list[str], str]:
+    """Options in the order to try them: the known answer (MSE post), else the AI's pick, then the rest."""
+    texts = [o["text"] for o in g["options"] if o["text"] and not o["dis"]]
+    first, source = None, "a guess"
+    if ctx.answers:
+        first = _match_quiz_option(texts, list(ctx.answers), fuzzy=92)
+        if first:
+            source = "the MSE post"
+    if first is None and llm.enabled(settings) and settings.get("ai_answers", True):
+        res = llm.answer_question(g["question"], texts, page_text, comp_context, settings)
+        rec = {"question": g["question"][:200], "options": texts[:12], "used": False}
+        if res:
+            rec.update(answer=res["answer"], confidence=res["confidence"], source=res["source"], reason=res["reason"])
+            if res["answer"]:
+                first = _match_quiz_option(texts, [res["answer"]], fuzzy=70)
+                if first:
+                    # In a click quiz a wrong pick only costs that question, so the AI's best guess is used whatever
+                    # its confidence (the confidence is still logged).
+                    source = f"AI, {res['confidence']}% sure"
+                    rec["used"] = True
+        details.setdefault("ai", []).append(rec)
+    return ([first] if first else []) + [t for t in texts if t != first], source
+
+
+def play_quiz(page, context, live, ctx: Ctx, settings: dict, comp_context: dict, details: dict, dry_run: bool,
+              done_idx: set[str], deadline: float, gen: list[int]):
+    """Play a click-to-answer quiz (answer tiles/buttons rather than form fields) until an entry form appears.
+
+    Answers come from the MSE post, then the AI, then a guess; when the quiz says a pick was wrong and lets you try
+    again, the next option is tried. Returns (page, best_form_or_None, summary).
+    """
+    steps = details["steps"]
+    asked: dict[str, dict] = {}
+    order: list[str] = []
+    last_q: str | None = None
+    last_next, streak, idle = None, 0, 0
+    just_answered = False
+    page_text = None
+    stats = details.setdefault("quiz", {"answered": 0, "retries": 0})
+
+    def summary(extra: str = "") -> str:
+        s = f"{stats['answered']} question{'s' if stats['answered'] != 1 else ''} answered"
+        if stats["retries"]:
+            s += f", {stats['retries']} retr{'ies' if stats['retries'] != 1 else 'y'}"
+        return s + (f"; {extra}" if extra else "")
+
+    def form_ready():
+        gen[0] += 1
+        b = find_best_form(page, ctx, gen[0])
+        if b and b[2] >= 4 and any(f["idx"] not in done_idx for f in b[1].get("fields", [])):
+            return b
+        return None
+
+    for _ in range(QUIZ_MAX_ACTIONS):
+        if time.time() > deadline:
+            return page, None, summary("ran out of time")
+        fr, scan = _quiz_scan(page, [q for q in order if q != last_q][-60:], last_q, dry_run)
+        groups = (scan or {}).get("groups") or []
+        cur = next((g for g in groups if g["question"] == last_q), None)
+        if cur and not cur["locked"]:
+            st = asked[last_q]
+            picked = st["tried"][-1]
+            mine = next((o for o in cur["options"] if o["text"] == picked), None)
+            wrong = st.get("retrying") or bool(mine and mine["wrong"]) or (
+                cur["wrongHint"] and not any(o["right"] for o in cur["options"]))
+            if wrong:
+                alt = next((t for t in st["order"] if t not in st["tried"]
+                            and any(o["text"] == t and not o["dis"] for o in cur["options"])), None)
+                if alt and len(st["tried"]) < 6 and cur["covered"] and scan.get("retry") and not st.get("retrying"):
+                    # A "wrong - retry" message sits on top of the answers: press its Retry first.
+                    steps.append(f"quiz: clicked '{scan['retry']}'")
+                    _click_sel(fr, '[data-cb-retry="1"]')
+                    st["retrying"] = True
+                    _pause(page, 1.0)
+                    continue
+                if alt and len(st["tried"]) < 6 and not cur["covered"]:
+                    key = next(o["key"] for o in cur["options"] if o["text"] == alt)
+                    if _click_sel(fr, f'[data-cb-opt="{key}"]'):
+                        st["tried"].append(alt)
+                        st["retrying"] = False
+                        stats["retries"] += 1
+                        steps.append(f"quiz: \u201c{picked[:40]}\u201d was wrong - trying \u201c{alt[:40]}\u201d")
+                        idle = 0
+                        just_answered = True
+                        _pause(page, 1.2)
+                        continue
+        b = form_ready()
+        if b:
+            return page, b, summary()
+        new = [g for g in groups if g["question"] not in asked and not g["locked"] and not g["covered"]]
+        if new:
+            g = next((g for g in new if g["dialog"]), new[0])
+            if page_text is None:
+                page_text = _page_context(page, fr)
+            live.status(f"Quiz question {stats['answered'] + 1}: {g['question'][:90]}")
+            opts, source = _quiz_order(g, ctx, settings, comp_context, page_text, details)
+            asked[g["question"]] = {"order": opts, "tried": opts[:1]}
+            order.append(g["question"])
+            last_q = g["question"]
+            if not opts:
+                continue
+            # The AI may have taken a while: the page could have re-rendered, so find the option again by its text.
+            fr2, scan2 = _quiz_scan(page, [q for q in order if q != last_q][-60:], last_q, dry_run)
+            g2 = next((x for x in ((scan2 or {}).get("groups") or []) if x["question"] == last_q), None)
+            key = next((o["key"] for o in (g2 or {}).get("options", []) if o["text"] == opts[0]), None)
+            if not key or not _click_sel(fr2, f'[data-cb-opt="{key}"]'):
+                steps.append(f"quiz: couldn't click \u201c{opts[0][:40]}\u201d")
+                continue
+            stats["answered"] += 1
+            idle = streak = 0
+            just_answered = True
+            steps.append(f"quiz Q{stats['answered']}: \u201c{g['question'][:90]}\u201d \u2192 \u201c{opts[0][:50]}\u201d "
+                         f"({source})")
+            _pause(page, 1.2)
+            continue
+        if scan and scan.get("next"):
+            if just_answered:
+                # Many quizzes move on by themselves after showing the result; pressing "Next" as well would
+                # skip a question.
+                just_answered = False
+                _pause(page, 1.5)
+                continue
+            label = scan["next"]
+            streak = streak + 1 if label == last_next else 1
+            last_next = label
+            if streak > 3:
+                return page, None, summary(f"'{label}' didn't move the quiz on")
+            steps.append(f"quiz: clicked '{label}'")
+            live.status(f"Quiz: {label}")
+            page, _ok = _click_follow(context, page, fr, '[data-cb-next="1"]', live)
+            idle = 0
+            continue
+        idle += 1
+        if idle > 4:
+            break
+        _pause(page, 1.5)
+    return page, None, summary()
+
+
 def reveal_consented_embed(page) -> str | None:
     """If the entry form is a third-party embed waiting for consent ("Want to see this content?"), allow it."""
     for fr in _all_frames(page):
@@ -988,6 +1437,8 @@ class Browser:
         details["steps"] = _LiveSteps(live)
         gen = [0]
         checked_urls: set[str] = set()
+        quiz_deadline = time.time() + QUIZ_BUDGET_S
+        play_quizzes = bool(settings.get("play_quizzes", True))
 
         def best_form():
             gen[0] += 1
@@ -1058,37 +1509,62 @@ class Browser:
                 best = best_form()
                 if best and best[2] >= 4:
                     details["steps"].append("form appeared after scrolling the page")
-            if not best or best[2] < 4:
-                # Click an "Enter now"-style reveal. Never a submit button; in dry-run only plain links.
-                for fr in _all_frames(page):
-                    label = _safe_eval(fr, JS_REVEAL, dry_run)
-                    if label:
-                        details["steps"].append(f"clicked '{label}'")
-                        n_pages = len(context.pages)
-                        try:
-                            fr.locator('[data-cb-reveal="1"]').first.click(timeout=5000)
-                        except Exception:  # noqa: BLE001
-                            _safe_eval(fr, "() => { const b = document.querySelector('[data-cb-reveal=\"1\"]'); "
-                                           "if (b) b.click(); return !!b; }")
-                        _pause(page, 2.5)
-                        if len(context.pages) > n_pages:
-                            page = context.pages[-1]
-                            live.attach(page)
-                            page.wait_for_load_state("domcontentloaded", timeout=15000)
-                        _wait_settle(page, 6000)
-                        dismiss_cookies(page)
-                        clause = clause_check()
-                        if clause:
-                            res.result = "tc_blocked"
-                            res.message = f"T&Cs ban automated entries: \u201c{clause[:300]}\u201d"
-                            return res
-                        best = best_form()
+            quiz_ready = False
+            if (not best or best[2] < 4) and play_quizzes:
+                quiz_ready = bool((_quiz_scan(page, dry_run=dry_run)[1] or {}).get("groups"))
+            if (not best or best[2] < 4) and not quiz_ready:
+                # Click an "Enter now"/"Start the quiz"-style reveal. Never a submit button; in dry-run only plain
+                # links and quiz/form openers. If one leads nowhere (e.g. it only scrolls), try the next-best one.
+                for _attempt in range(3):
+                    hit = None
+                    for fr in _all_frames(page):
+                        r = _safe_eval(fr, JS_REVEAL, dry_run)
+                        if r:
+                            hit = (fr, r)
+                            break
+                    if not hit:
                         break
+                    fr, r = hit
+                    if r.get("gate"):
+                        ticked = _tick_gate(page, fr)
+                        details["steps"].append(f"ticked '{r['gate'][:80]}' to unlock '{r['label']}'" if ticked
+                                                else f"couldn't tick '{r['gate'][:80]}'")
+                    details["steps"].append(f"clicked '{r['label']}'")
+                    page, _ok = _click_follow(context, page, fr, '[data-cb-reveal="1"]', live, wait_s=2.5)
+                    _wait_settle(page, 6000)
+                    dismiss_cookies(page)
+                    clause = clause_check()
+                    if clause:
+                        return tc_blocked()
+                    best = best_form()
+                    if best and best[2] >= 4:
+                        break
+                    if play_quizzes and _quiz_present(_quiz_scan(page, dry_run=dry_run)[1]):
+                        break
+            quiz_summary = None
+            if (not best or best[2] < 4) and play_quizzes:
+                _qf, qscan = _quiz_scan(page, dry_run=dry_run)
+                if _quiz_present(qscan):
+                    live.status("Playing the quiz")
+                    page, qbest, quiz_summary = play_quiz(page, context, live, ctx, settings, comp_context, details,
+                                                          dry_run, set(), quiz_deadline, gen)
+                    details["steps"].append(f"quiz: {quiz_summary}")
+                    if qbest:
+                        best = qbest
+                        details["steps"].append("the entry form appeared after the quiz")
             if not best or best[2] < 4:
-                if CLOSED_RE.search(_page_text(page)):
+                text = _page_text(page)
+                if CLOSED_RE.search(text):
                     res.result, res.message = "closed", "Page says the competition has closed"
+                elif quiz_summary is not None and QUIZ_FAIL_RE.search(text):
+                    m = QUIZ_FAIL_RE.search(text)
+                    res.result = "failed"
+                    res.message = f"Quiz score too low to unlock the entry ({quiz_summary}): \u201c{m.group(0)}\u201d"
+                elif quiz_summary is not None:
+                    res.result, res.message = "failed", f"Played the quiz ({quiz_summary}) but no entry form appeared"
                 else:
                     res.result, res.message = "failed", "No entry form found on the page"
+                res.final_url = page.url
                 res.screenshot_before = _shot(page, cfg.screenshot_dir / f"{shot_prefix}_noform.jpg")
                 return res
 
@@ -1184,6 +1660,7 @@ class Browser:
                 res.screenshot_before = _shot(page, cfg.screenshot_dir / f"{shot_prefix}_s{step}_before.jpg")
                 if dry_run:
                     res.result = "dry_run_ok"
+                    res.final_url = page.url
                     res.message = f"Dry run: filled {sum(1 for _, a in plan_all if a.kind != 'skip')} fields; not submitted"
                     return res
 
@@ -1238,8 +1715,10 @@ class Browser:
                 nxt = best_form()
                 nsig = _form_sig(nxt[1]) if nxt else frozenset()
                 same_form = bool(nxt) and any(_same_form(nsig, s) for s in submitted_sigs)
+                # Fields never seen before (one-question-at-a-time forms keep earlier questions on the page).
+                fresh = bool(nsig - frozenset().union(*submitted_sigs))
                 new_fields = [f for f in (nxt[1]["fields"] if nxt else []) if f["idx"] not in done_idx]
-                if new_fields and nxt[2] >= 4 and not err and not same_form:
+                if new_fields and nxt[2] >= 4 and not err and (not same_form or fresh):
                     clause = clause_check()
                     if clause:
                         res.result = "tc_blocked"
@@ -1251,6 +1730,36 @@ class Browser:
                     best = nxt
                     details["steps"].append(f"step {step + 1}: another form page")
                     continue
+                if not err and play_quizzes:
+                    # The next screen is a click-to-answer question (a quiz, or a "rate us 1-5" step).
+                    _qf, qscan = _quiz_scan(page, dry_run=dry_run)
+                    if qscan and qscan.get("groups"):
+                        details["steps"].append(f"step {step + 1}: questions to answer")
+                        page, qbest, qsum = play_quiz(page, context, live, ctx, settings, comp_context, details,
+                                                      dry_run, done_idx, quiz_deadline, gen)
+                        details["steps"].append(f"quiz: {qsum}")
+                        if qbest:
+                            clause = clause_check()
+                            if clause:
+                                return tc_blocked(f" on step {step + 1}")
+                            if detect_captcha(page):
+                                res.result, res.message = "captcha", f"CAPTCHA on form step {step + 1} - finish manually"
+                                return res
+                            best = qbest
+                            continue
+                        new_text = read_outcome()
+                        res.final_url = page.url
+                        res.screenshot_after = _shot(page, cfg.screenshot_dir / f"{shot_prefix}_s{step}_quiz.jpg")
+                        if ALREADY_RE.search(new_text):
+                            res.result, res.message = "entered", "Site says you've already entered"
+                            return res
+                        if SUCCESS_RE.search(new_text):
+                            m = SUCCESS_RE.search(new_text)
+                            res.result, res.message = "entered", f"Confirmation seen: \u201c{m.group(0)[:120]}\u201d"
+                            return res
+                        res.result = "unverified"
+                        res.message = f"Submitted and answered the follow-up questions ({qsum}); no explicit confirmation"
+                        return res
                 if err:
                     # "This field is required": tick the obvious option in untouched groups and send once more,
                     # like a person correcting the form.
@@ -1308,7 +1817,7 @@ def result_as_dict(r: AttemptResult) -> dict:
 
 # --------------------------------------------------------------------------- isolation / watchdog
 
-ENTRY_TIMEOUT_S = 300  # includes time for the AI to answer questions on CPU
+ENTRY_TIMEOUT_S = 600  # includes time for the AI to answer questions (and play whole quizzes) on a CPU
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 

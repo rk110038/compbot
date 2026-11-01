@@ -129,6 +129,7 @@ DEFAULT_SETTINGS: dict = {
     "ai_double_check": True,             # a second AI pass must not judge the answer wrong before it's used
     "ai_tiebreakers": False,             # let the AI write short tie-breaker / "tell us why" answers
     "live_view": True,                   # stream the browser to the Live page while entering
+    "play_quizzes": True,                # answer click-to-answer quizzes (tiles/buttons) that unlock the entry form
     "delay_min_seconds": 20,
     "delay_max_seconds": 60,
     "skip_keywords": "",                 # comma-separated; titles containing any are skipped
