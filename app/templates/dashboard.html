@@ -11,8 +11,8 @@
 <div class="grid stats">
   <div class="card stat"><div class="label">Discovered</div><div class="value">{{ stats.discovered }}</div></div>
   <div class="card stat"><div class="label">Queued</div><div class="value">{{ stats.queued }}</div></div>
-  <div class="card stat"><div class="label">Entered</div><div class="value green">{{ stats.entered }}</div></div>
-  <div class="card stat"><div class="label">{{ 'Entered today' if settings.entry_mode == 'auto' else 'Dry runs today' }}</div><div class="value">{{ stats.today }}<span class="small muted"> / {{ settings.daily_entry_cap }}</span></div>{% if settings.entry_mode != 'auto' %}<div class="small muted">not submitted</div>{% endif %}</div>
+  <div class="card stat"><div class="label">Competitions entered</div><div class="value green">{{ stats.entered }}</div><div class="small muted">all time{% if stats.by_you %} · {{ stats.by_you }} by you{% endif %}</div></div>
+  <div class="card stat"><div class="label">{{ 'Auto entries today' if settings.entry_mode == 'auto' else 'Dry runs today' }}</div><div class="value">{{ stats.today }}<span class="small muted"> / {{ settings.daily_entry_cap }}</span></div><div class="small muted">{{ 'since midnight · daily cap' if settings.entry_mode == 'auto' else 'not submitted' }}</div></div>
   <div class="card stat"><div class="label">Manual queue</div><div class="value amber"><a href="/manual">{{ stats.manual }}</a></div></div>
   <div class="card stat"><div class="label">Won</div><div class="value gold">{{ stats.won }}</div>{% if stats.won_value %}<div class="small muted">£{{ '{:,.0f}'.format(stats.won_value) }} of prizes</div>{% endif %}</div>
   <div class="card stat"><div class="label">Lost</div><div class="value">{{ stats.lost }}</div><div class="small muted">{{ stats.pending }} awaiting result</div></div>

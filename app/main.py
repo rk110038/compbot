@@ -206,6 +206,8 @@ def dashboard(request: Request):
             "pending": count(Competition.outcome == "pending", Competition.status == "entered"),
             "review": count(Competition.needs_review.is_(True)),
             "today": entries_today(s, cfg.tz, get_settings(s).get("entry_mode") != "auto"),
+            "by_you": s.scalar(select(func.count(func.distinct(EntryAttempt.competition_id)))
+                               .where(EntryAttempt.mode == "manual", EntryAttempt.result == "entered")) or 0,
             "won_value": s.scalar(select(func.sum(Competition.prize_value)).where(Competition.outcome == "won")) or 0,
         }
         decided = stats["won"] + stats["lost"]
