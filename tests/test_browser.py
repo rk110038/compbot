@@ -331,3 +331,15 @@ def test_wayin_link_submit_and_country_field(browser, fixture_server, profile):
     assert res.result == "entered", (res.message, res.details["steps"])
     acts = {f["label"]: (f["action"], f["source"]) for f in res.details["fields"]}
     assert acts["Country"] == ("fill", "country"), acts
+
+
+def test_promo_teasers_after_submit_are_not_a_follow_up_quiz(browser, fixture_server, profile):
+    # Yours magazine: after submitting, a "Want to hear about the latest competitions...? Click here" box and cards for
+    # other comps were played as a quiz, and compbot clicked through to another competition. County got the answer too.
+    res = browser.enter(f"{fixture_server}/promo_after_submit.html", Ctx(profile=profile, answers=["53"]),
+                        _settings(entry_mode="auto"), "pa1", {})
+    steps = "\n".join(res.details["steps"])
+    assert "questions to answer" not in steps and "quiz" not in steps, steps
+    assert "other.html" not in (res.final_url or "")
+    acts = {f["label"]: (f["action"], f["source"]) for f in res.details["fields"]}
+    assert acts["County"] == ("fill", "county"), acts

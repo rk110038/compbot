@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Win £100</title>
+<style>.card{cursor:pointer;display:inline-block;width:200px;border:1px solid #ccc;margin:4px;padding:8px}</style></head>
+<body>
+<h1>Win £100</h1>
+<form id="f">
+  <label>On which page did you see Sammy? <input name="q" required></label>
+  <label>First name <input name="fn" required></label>
+  <label>Email Address <input type="email" name="em" required></label>
+  <label>County <input name="county"></label>
+  <button type="submit">Enter</button>
+</form>
+<!-- Like Yours magazine: a promo with a "?" followed by clickable teaser cards for other competitions. After a
+     submit with no confirmation, these must not be "answered" as a follow-up quiz (Nov 2026). -->
+<aside>
+  <p>Want to hear about the latest competitions before anyone else? Click here to keep us at the top of your Google feed.</p>
+  <div><div class="card" onclick="location.href='other.html'">515 – Win! Prize Crossword Enter now for your chance to win a Cash prize!</div>
+       <div class="card" onclick="location.href='other.html'">516 – Win! Wordsearch Enter now for your chance to win!</div></div>
+</aside>
+<script>document.getElementById('f').onsubmit = e => e.preventDefault();</script>
+</body></html>

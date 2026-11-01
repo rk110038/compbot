@@ -298,8 +298,8 @@ JS_COOKIES = "() => {\n" + JS_HELPERS + r"""
     'truste-consent-required', 'truste-consent-button', 'cookie-reject', 'cookie-accept'];
   const mark = b => { document.querySelectorAll('[data-cb-cookie]').forEach(e => e.removeAttribute('data-cb-cookie')); b.setAttribute('data-cb-cookie', '1'); };
   for (const id of ids) { const b = document.getElementById(id); if (b && vis(b)) { mark(b); return id; } }
-  const reject = /^(reject all|reject|reject all cookies|decline|decline all|necessary only|only necessary|essential only|use necessary cookies only|refuse all|deny|disagree|continue without accepting)$/i;
-  const accept = /^(accept all|accept|accept all cookies|accept cookies|i accept|agree|i agree|allow all|allow all cookies|allow cookies|got it|ok|okay|agree and close|accept & close|accept and close|yes,? i'?m happy|i understand|understood|ok,? got it|that'?s fine|accept (and|&) continue|accept all (and|&) continue|agree (and|&) continue)$/i;
+  const reject = /^(reject all|reject|reject all cookies|decline|decline all|necessary only|only necessary|essential only|use necessary cookies only|refuse all|deny|disagree|do not consent|continue without accepting)$/i;
+  const accept = /^(accept all|accept|accept all cookies|accept cookies|i accept|agree|i agree|allow all|allow all cookies|allow cookies|got it|ok|okay|agree and close|accept & close|accept and close|yes,? i'?m happy|i understand|understood|ok,? got it|that'?s fine|accept (and|&) continue|accept all (and|&) continue|agree (and|&) continue|consent)$/i;
   const banner = '[id*=cookie i],[class*=cookie i],[id*=consent i],[class*=consent i],[id*=gdpr i],[class*=gdpr i],[class*=cmp i],[id*=cmp i],[aria-label*=cookie i],[aria-label*=consent i],[id*=privacy i],[class*=privacy i],[role=dialog],[aria-modal=true]';
   // Only a consent-manager *iframe* counts as "all of this frame is the banner" - never the competition page itself.
   const framey = window !== window.top && /sp_message|consent|cookie|privacy-mgmt|cmp/i.test(location.href);
@@ -365,7 +365,7 @@ JS_REVEAL = "(dryRun) => {\n" + JS_HELPERS + r"""
   // Buttons that only open the entry form or quiz: safe to press even in a dry run.
   const safe = /^((let'?s )?(start|begin|take|do|play|try)( the| our| this| a)?( quiz| game| competition| challenge| test)?( now| here)?|get started|let'?s (go|start|play)|show (the )?(form|questions?)|reveal (the )?(form|question)|continue)!?$/i;
   // Buttons that might themselves submit an entry: only pressed for real entries.
-  const enter = /^(enter( now| here| the competition| competition| the (prize )?draw| to win| now for free| the giveaway| giveaway| the quiz| quiz)?|click (here )?to enter|take part|enter (&|and) win|i want to win|join (in|now)|(join|sign ?up|subscribe|register|opt in)( now)? to enter|count me in)!?$/i;
+  const enter = /^(enter( now| here| (the |this |our )?(competition|comp|giveaway|prize draw|draw|quiz)| to win| now for free)?|click (here )?to enter|take part|enter (&|and) win|i want to win|join (in|now)|(join|sign ?up|subscribe|register|opt in)( now)? to enter|count me in)!?$/i;
   // A start button greyed out until "I've read the rules" is ticked: that box is the gate.
   const gateRe = /\b(read|understood?|accept|agree|ready|rules|terms|t'?s? ?(&|and) ?c'?s|conditions|over (the age of )?18|18 or over|aged 18)\b/i;
   const notGate = /marketing|newsletter|offers|partners|third|e-?mail me|contact me|keep me (updated|informed)|updates|news\b/i;
@@ -434,8 +434,11 @@ JS_QUIZ_SCAN = "([skip, focus, dryRun]) => {\n" + JS_HELPERS + r"""
   const DIALOG = '[role=dialog], [aria-modal=true], dialog, [class*=modal i]';
   const CLICKY = 'button, [role=button], [role=radio], [role=option], [role=checkbox], [role=menuitemradio], label, a';
   const CONSENT = /cookie|consent|gdpr|onetrust|didomi|cookiebot|sp_message|privacy-?(mgmt|manager|center|centre)/i;
-  const NOT_QUIZ = /\b(was (this|it) (page |article |answer )?(helpful|useful)|feedback|rate (this|our|us)|how did we do|recommend us|cookies?|newsletter|log ?in|sign ?in|search|forgot (your )?password)\b/i;
+  const NOT_QUIZ = /\b(was (this|it) (page |article |answer )?(helpful|useful)|feedback|rate (this|our|us)|how did we do|recommend us|cookies?|newsletter|log ?in|sign ?in|search|forgot (your )?password|click here|tap here|before anyone else|google (feed|news|discover)|follow us|sign ?up|subscribe|don'?t miss)\b/i;
   const BAD_OPT = /^(share|tweet|facebook|twitter|instagram|whatsapp|e-?mail|copy link|print|close|cancel|back|menu|search|log ?in|sign ?in|accept( all)?|reject( all)?|cookie settings|read more)$/i;
+  // Teaser cards for other articles or competitions ("515 - Win! Prize Crossword. Enter now for your chance..."),
+  // not answers (seen on Yours magazine after submitting an entry).
+  const TEASER = /\b(enter now|read more|find out more|learn more|see more|shop now|buy now|for your chance to win|chance to win)\b/i;
   const WRONG = 'incorrect|wrong|is-wrong|false|error|fail|failed|invalid';
   const RIGHT = 'correct|is-correct|right|success|true|valid';
   const SEL = 'selected|chosen|picked|checked|is-selected|is-active|active';
@@ -485,7 +488,7 @@ JS_QUIZ_SCAN = "([skip, focus, dryRun]) => {\n" + JS_HELPERS + r"""
     if (el.matches('input, select, textarea, option, img, svg, path, br, hr, iframe, script, style, source, picture')) return false;
     if (el.querySelector('input:not([type=radio]):not([type=checkbox]):not([type=hidden]), select, textarea')) return false;
     const t = txt(el);
-    if (!t || t.length > 160 || BAD_OPT.test(t) || /\?$/.test(t)) return false;
+    if (!t || t.length > 160 || BAD_OPT.test(t) || TEASER.test(t) || /\?$/.test(t)) return false;
     if (el.hasAttribute('aria-expanded') || el.hasAttribute('aria-haspopup')) return false;  // accordions, menus
     if (el.tagName === 'A') { const h = el.getAttribute('href') || ''; if (h && !/^(#|javascript:)/i.test(h)) return false; }
     if (!vis(el)) return false;
@@ -1222,11 +1225,12 @@ def _quiz_order(g: dict, ctx: Ctx, settings: dict, comp_context: dict, page_text
 
 
 def play_quiz(page, context, live, ctx: Ctx, settings: dict, comp_context: dict, details: dict, dry_run: bool,
-              done_idx: set[str], deadline: float, gen: list[int]):
+              done_idx: set[str], deadline: float, gen: list[int], skip_questions: list[str] | None = None):
     """Play a click-to-answer quiz (answer tiles/buttons rather than form fields) until an entry form appears.
 
     Answers come from the MSE post, then the AI, then a guess; when the quiz says a pick was wrong and lets you try
-    again, the next option is tried. Returns (page, best_form_or_None, summary).
+    again, the next option is tried. `skip_questions` are never played (e.g. ones already on the page before the
+    entry was submitted). Returns (page, best_form_or_None, summary).
     """
     steps = details["steps"]
     asked: dict[str, dict] = {}
@@ -1253,7 +1257,7 @@ def play_quiz(page, context, live, ctx: Ctx, settings: dict, comp_context: dict,
     for _ in range(QUIZ_MAX_ACTIONS):
         if time.time() > deadline:
             return page, None, summary("ran out of time")
-        fr, scan = _quiz_scan(page, [q for q in order if q != last_q][-60:], last_q, dry_run)
+        fr, scan = _quiz_scan(page, [q for q in order if q != last_q][-60:] + list(skip_questions or []), last_q, dry_run)
         groups = (scan or {}).get("groups") or []
         cur = next((g for g in groups if g["question"] == last_q), None)
         if cur and not cur["locked"]:
@@ -1858,12 +1862,16 @@ class Browser:
                     details["steps"].append(f"step {step + 1}: another form page")
                     continue
                 if not err and play_quizzes:
-                    # The next screen is a click-to-answer question (a quiz, or a "rate us 1-5" step).
+                    # The next screen is a click-to-answer question (a quiz, or a "rate us 1-5" step). Only questions
+                    # that appeared after submitting count: ones already on the page (promo boxes, other comps) don't.
                     _qf, qscan = _quiz_scan(page, dry_run=dry_run)
-                    if qscan and qscan.get("groups"):
+                    shown_after = " ".join(new_text.split())
+                    qgroups = (qscan or {}).get("groups") or []
+                    stale = [g["question"] for g in qgroups if g["question"][:50] not in shown_after]
+                    if len(stale) < len(qgroups):
                         details["steps"].append(f"step {step + 1}: questions to answer")
                         page, qbest, qsum = play_quiz(page, context, live, ctx, settings, comp_context, details,
-                                                      dry_run, done_idx, quiz_deadline, gen)
+                                                      dry_run, done_idx, quiz_deadline, gen, skip_questions=stale)
                         details["steps"].append(f"quiz: {qsum}")
                         if qbest:
                             clause = clause_check()
