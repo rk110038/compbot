@@ -9,6 +9,7 @@ import re
 import secrets
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from html import escape as html_escape
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlparse
 from zoneinfo import ZoneInfo
@@ -18,20 +19,25 @@ from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, Red
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, or_, select
+from sqlalchemy.exc import OperationalError
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from . import __version__, jobs
 from .config import DEFAULT_PROFILE, DEFAULT_SETTINGS, get_config
 from .db import (
+    DISK_BUSY_MESSAGE,
     Competition,
     Email,
     EntryAttempt,
     Event,
     JobRun,
+    disk_stalled,
+    disk_status,
     entries_today,
     get_profile,
     get_settings,
     init_db,
+    is_busy_error,
     log_event,
     save_profile,
     save_settings,
@@ -133,6 +139,7 @@ def render(request: Request, name: str, **ctx) -> HTMLResponse:
     ctx["running"] = {n: jobs.progress(n) or "running" for n in ("discover", "enter", "inbox", "maintenance")
                       if jobs.is_running(n)}
     ctx["auth_disabled"] = not cfg.web_password
+    ctx["disk"] = disk_status()
     return templates.TemplateResponse(request, name, ctx)
 
 
@@ -182,12 +189,27 @@ class AuthMiddleware(BaseHTTPMiddleware):
 app.add_middleware(AuthMiddleware)
 
 
+@app.exception_handler(OperationalError)
+async def database_busy(request: Request, exc: OperationalError):
+    """A database lock timeout means the disk is too slow: say so (without touching the database) instead of a 500."""
+    if not is_busy_error(exc):
+        log.error("database error on %s", request.url.path, exc_info=exc)
+        return PlainTextResponse("Internal Server Error", status_code=500)
+    log.warning("database busy on %s %s: %s", request.method, request.url.path, exc)
+    page = ("<!doctype html><html lang='en-GB'><head><meta charset='utf-8'><title>Database busy · compbot</title>"
+            "<link rel='stylesheet' href='/static/style.css'></head><body><main><h1>Database busy</h1>"
+            f"<div class='banner warn'>⚠️ {html_escape(DISK_BUSY_MESSAGE)}</div>"
+            "<p><a class='btn' href='/'>Back to the dashboard</a></p></main></body></html>")
+    return HTMLResponse(page, status_code=503, headers={"Retry-After": "60"})
+
+
 # --------------------------------------------------------------------------- lifecycle
 
 
 @app.get("/healthz")
 def healthz():
-    return {"ok": True, "version": __version__}
+    disk = disk_status()
+    return {"ok": True, "version": __version__, "disk_slow": bool(disk), "disk": disk["message"] if disk else None}
 
 
 # --------------------------------------------------------------------------- dashboard
@@ -246,9 +268,9 @@ def dashboard(request: Request):
 def run_job(request: Request, job: str):
     if job not in ("discover", "enter", "inbox", "maintenance"):
         raise HTTPException(404)
-    started = jobs.run_in_background(job)
-    with session_scope() as s:
-        log_event(s, "user", f"Manual run requested: {job}")
+    if disk_stalled():
+        return back(request, "/", f"{job.title()} not started: " + (disk_status() or {}).get("message", ""), warn=True)
+    started = jobs.run_in_background(job, note=f"Manual run requested: {job}")
     return back(request, "/", f"{job.title()} started" if started else f"{job.title()} is already running")
 
 

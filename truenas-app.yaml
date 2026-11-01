@@ -48,7 +48,9 @@ services:
           memory: 2g
 
   ollama:
-    image: ollama/ollama:latest          # AMD (ROCm) cards: use ollama/ollama:rocm
+    # compbot's Ollama image = official Ollama + NVIDIA Vulkan support (older GTX cards on TrueNAS's 550 driver).
+    # AMD (ROCm) cards: use ollama/ollama:rocm instead.
+    image: ghcr.io/rk110038/compbot:ollama-latest
     pull_policy: always                  # stop/start the app to get Ollama fixes too (new models often need them)
     container_name: compbot-ollama
     restart: unless-stopped
@@ -61,9 +63,9 @@ services:
       OLLAMA_CONTEXT_LENGTH: "8192"
       OLLAMA_FLASH_ATTENTION: "1"
       OLLAMA_KV_CACHE_TYPE: q8_0
-      # NVIDIA only:
+      # NVIDIA only (graphics = the driver's Vulkan library, used for GTX 9xx/10xx cards):
       NVIDIA_VISIBLE_DEVICES: all
-      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility,graphics
     # --- GPU: keep the block for your card, delete the others ---
     # NVIDIA (first tick Apps -> Configuration -> Settings -> "Install NVIDIA Drivers"):
     deploy:

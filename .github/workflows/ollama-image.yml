@@ -1,0 +1,75 @@
+name: Build Ollama image
+
+# compbot's Ollama image (ollama-image/): official Ollama + NVIDIA Vulkan support for older NVIDIA cards.
+# Rebuilt daily so it follows new Ollama releases (new models often need them). Published to the compbot package
+# (already public) as :ollama-latest and :ollama-<version>.
+on:
+  push:
+    branches: [main]
+    paths: ["ollama-image/**", ".github/workflows/ollama-image.yml"]
+  schedule:
+    - cron: "23 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: ollama-image
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Latest Ollama release
+        id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(gh api repos/ollama/ollama/releases/latest --jq .tag_name | sed 's/^v//')
+          echo "Ollama $version"
+          docker manifest inspect "ollama/ollama:$version" > /dev/null
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          image="ghcr.io/${{ github.repository_owner }}/compbot:ollama-$version"
+          if [ "${{ github.event_name }}" = "schedule" ] && docker manifest inspect "$image" > /dev/null 2>&1; then
+            echo "$image already published"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Free disk space (the Ollama base image is ~8 GB)
+        if: steps.v.outputs.skip != 'true'
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - uses: docker/build-push-action@v7
+        if: steps.v.outputs.skip != 'true'
+        with:
+          context: ollama-image
+          pull: true
+          load: true
+          push: false
+          build-args: OLLAMA_TAG=${{ steps.v.outputs.version }}
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/compbot:ollama-latest
+            ghcr.io/${{ github.repository_owner }}/compbot:ollama-${{ steps.v.outputs.version }}
+      - name: Check the image starts and serves
+        if: steps.v.outputs.skip != 'true'
+        run: |
+          docker run -d --name ollama-check ghcr.io/${{ github.repository_owner }}/compbot:ollama-latest
+          ok=; for i in $(seq 1 30); do docker exec ollama-check ollama list > /dev/null 2>&1 && ok=1 && break; sleep 2; done
+          docker logs ollama-check 2>&1 | tail -20
+          [ -n "$ok" ] || { echo "Ollama didn't start"; exit 1; }
+          docker exec ollama-check ollama --version
+          docker exec ollama-check sh -c 'command -v vulkaninfo'
+          docker rm -f ollama-check
+      - uses: docker/login-action@v4
+        if: steps.v.outputs.skip != 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish
+        if: steps.v.outputs.skip != 'true'
+        run: |
+          docker push ghcr.io/${{ github.repository_owner }}/compbot:ollama-${{ steps.v.outputs.version }}
+          docker push ghcr.io/${{ github.repository_owner }}/compbot:ollama-latest

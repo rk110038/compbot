@@ -16,6 +16,7 @@ from app.entry.forms import Ctx
 class FakeOllama(http.server.BaseHTTPRequestHandler):
     chats: list = []
     chat_error: tuple[int, dict] | None = None  # make /api/chat fail like a real Ollama would
+    ps_vram = 100  # bytes of the loaded model (size 100) that are on the GPU
     models = [{"name": "gemma4:12b", "size": 7_700_000_000,
                "details": {"parameter_size": "12B", "quantization_level": "Q4_K_M"}}]
 
@@ -36,7 +37,7 @@ class FakeOllama(http.server.BaseHTTPRequestHandler):
         if self.path == "/api/tags":
             return self._json({"models": self.models})
         if self.path == "/api/ps":
-            return self._json({"models": [{"name": "gemma4:12b", "size": 100, "size_vram": 100}]})
+            return self._json({"models": [{"name": "gemma4:12b", "size": 100, "size_vram": FakeOllama.ps_vram}]})
         return self._json({"error": "not found"}, 404)
 
     def do_POST(self):
@@ -81,6 +82,7 @@ class FakeOllama(http.server.BaseHTTPRequestHandler):
 def fake_ollama(monkeypatch):
     FakeOllama.chats = []
     FakeOllama.chat_error = None
+    FakeOllama.ps_vram = 100
     llm.clear_ai_pause()
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FakeOllama)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
@@ -115,7 +117,26 @@ def test_model_comes_from_settings_and_ai_off_without_model(fake_ollama):
 
 def test_self_test_reports_success(fake_ollama):
     ok, msg = llm.self_test(AI)
-    assert ok and "answered \u201cEdinburgh\u201d" in msg
+    assert ok and "answered \u201cEdinburgh\u201d" in msg and msg.endswith("running on the GPU")
+
+
+def test_self_test_says_where_the_model_runs(fake_ollama):
+    # Seen on the NAS: Ollama silently fell back to the CPU (driver too old for CUDA on a GTX 1070).
+    FakeOllama.ps_vram = 0
+    ok, msg = llm.self_test(AI)
+    assert ok and "running on the CPU only" in msg and "inference compute" in msg
+    FakeOllama.ps_vram = 60
+    ok, msg = llm.self_test(AI)
+    assert ok and "60% on the GPU, the rest on the CPU" in msg
+
+
+def test_self_test_explains_out_of_memory_kill(fake_ollama):
+    # Seen on the NAS: the kernel's OOM killer stopped llama-server while the model loaded into RAM.
+    FakeOllama.chat_error = (500, {"error": "llama-server process has terminated: signal: killed"})
+    ok, msg = llm.self_test(AI)
+    assert not ok and "signal: killed" in msg
+    assert "out-of-memory killer" in msg and "ran out of RAM" in msg and "ZFS cache" in msg
+    assert "try a smaller one" not in msg  # the generic VRAM hint would point the wrong way
 
 
 def test_self_test_shows_ollamas_error(fake_ollama):

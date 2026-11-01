@@ -35,7 +35,7 @@ In **Datasets**, create e.g. `tank/apps/compbot` (the "Apps" preset is fine). It
 
 **Option A: GitHub Container Registry (default in `truenas-app.yaml`)**
 
-Every push to `main` runs `.github/workflows/docker.yml` on GitHub's free hosted runners (no self-hosted runner needed). It runs the tests, then publishes `ghcr.io/rk110038/compbot:latest`. Because the repo is public, the package is public too, so TrueNAS can pull it without credentials. (If you ever make the repo private, either make the package public under **github.com/rk110038 → Packages → compbot → Package settings**, or add a GHCR credential in TrueNAS.) To update, push, wait for the Action to go green, then stop and start the app in TrueNAS so it re-pulls the image. The Ollama service also has `pull_policy: always`, so the same stop/start picks up Ollama fixes too (new models such as Gemma 4 often need a recent Ollama). If you installed from an older copy of the YAML, add that line to the `ollama` service.
+Every push to `main` runs `.github/workflows/docker.yml` on GitHub's free hosted runners (no self-hosted runner needed). It runs the tests, then publishes `ghcr.io/rk110038/compbot:latest`. Because the repo is public, the package is public too, so TrueNAS can pull it without credentials. (If you ever make the repo private, either make the package public under **github.com/rk110038 → Packages → compbot → Package settings**, or add a GHCR credential in TrueNAS.) To update, push, wait for the Action to go green, then stop and start the app in TrueNAS so it re-pulls the image. The Ollama service (`compbot:ollama-latest`, rebuilt daily from the latest Ollama by `.github/workflows/ollama-image.yml`) also has `pull_policy: always`, so the same stop/start picks up Ollama fixes too (new models such as Gemma 4 often need a recent Ollama). If you installed from an older copy of the YAML, add that line to the `ollama` service.
 
 **Option B: build on the NAS**
 
@@ -111,6 +111,7 @@ Secrets and infrastructure go in environment variables (in the YAML). Everything
 | `DISCOVER_CRON`, `ENTER_CRON`, `INBOX_CRON`, `MAINTENANCE_CRON` | see above | Standard 5-field cron |
 | `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY` | — | Only to use a different OpenAI-compatible endpoint instead of the bundled Ollama |
 | `OLLAMA_URL` | set by `docker-compose.yml` | Where the bundled Ollama runs (`http://ollama:11434`) |
+| `OLLAMA_TAG` | `latest` | (Compose) pin the bundled Ollama to a published version, e.g. `0.40.13` |
 | `COMPBOT_UID` / `COMPBOT_GID` | `568` | (Compose) user compbot runs as; must own `./data` |
 | `COMPOSE_FILE` | `docker-compose.yml` | (Compose) add your GPU file, see the AI section |
 | `TZ` | `Europe/London` | |
@@ -131,9 +132,16 @@ GUI settings include the daily entry cap (default 25), delays between entries, r
 
 | GPU | `.env` line | TrueNAS prerequisite |
 |---|---|---|
-| NVIDIA (GTX 9xx / RTX 20xx and newer) | `COMPOSE_FILE=docker-compose.yml:docker-compose.gpu-nvidia.yml` | **Apps → Configuration → Settings → Install NVIDIA Drivers**, then check `nvidia-smi` works in the shell |
+| NVIDIA (GTX 9xx and newer) | `COMPOSE_FILE=docker-compose.yml:docker-compose.gpu-nvidia.yml` | **Apps → Configuration → Settings → Install NVIDIA Drivers**, then check `nvidia-smi` works in the shell |
 | AMD Radeon RX 6800+ / 7000 / 9000 (ROCm) | `COMPOSE_FILE=docker-compose.yml:docker-compose.gpu-amd.yml` | none (uses `/dev/kfd` + `/dev/dri`) |
 | Intel Arc / Iris Xe, older AMD (Vulkan) | `COMPOSE_FILE=docker-compose.yml:docker-compose.gpu-vulkan.yml` | none (uses `/dev/dri`) |
+
+**Older NVIDIA cards (GTX 9xx / 10xx) use Vulkan.** Ollama's CUDA build only supports these cards with NVIDIA driver 570 or newer, and TrueNAS ships 550. So the bundled Ollama is compbot's own image, `ghcr.io/rk110038/compbot:ollama-latest`: official Ollama plus the pieces NVIDIA's Vulkan driver needs inside a container. The NVIDIA file passes the driver's `graphics` libraries through to it. Newer cards and drivers still use CUDA, because Ollama prefers it when both see the GPU. The image is rebuilt daily from the latest Ollama release (`.github/workflows/ollama-image.yml`). To check which one your card is using:
+
+```bash
+sudo docker logs compbot-ollama 2>&1 | grep -iE "compbot-ollama|inference compute"   # look for library=Vulkan or CUDA
+sudo docker exec compbot-ollama vulkaninfo --summary                                 # should list your GeForce card
+```
 
 **Choose a model** in **Settings → AI models → Download** (progress is shown there), then select it under **AI helper → Model** and **Save**. Or from the shell: `sudo docker exec compbot-ollama ollama pull gemma4:12b`.
 
@@ -144,7 +152,9 @@ GUI settings include the daily entry cap (default 25), delays between entries, r
 | `qwen3.5:4b` | 3.3 GB | 4–6 GB VRAM or CPU | Small and quick. In testing it answered page questions well but needed the double-check |
 | `gemma4:26b` / `qwen3.5:27b` | 16–17 GB | 24 GB VRAM | Most knowledgeable |
 
-Use **Test the chosen model** in Settings to see an answer and how long it took. To confirm the GPU is being used, check that `sudo docker exec compbot-ollama ollama ps` shows `100% GPU` while a model is loaded; Settings also shows "% on GPU". Without a GPU it still works, at about 20–30 seconds per question for a 4B model.
+Use **Test the chosen model** in Settings to see an answer, how long it took, and whether the model ran on the GPU, the CPU or both. You can also check that `sudo docker exec compbot-ollama ollama ps` shows `100% GPU` while a model is loaded; Settings also shows "% on GPU". Without a GPU it still works, at about 20–30 seconds per question for a 4B model. If the test says **"signal: killed"**, Linux ran out of RAM and stopped the model: usually it was loading into ordinary memory instead of the graphics card. On TrueNAS the ZFS cache can take nearly all the RAM, so consider capping it (for example to 8 GiB with a *Post Init* command in **System → Advanced → Init/Shutdown Scripts**: `echo 8589934592 > /sys/module/zfs/parameters/zfs_arc_max`).
+
+**Slow disk.** compbot's database lives on the same pool as your other apps. If one of them floods the pool with writes, compbot shows a 🐢 banner saying the disk is slow. It also won't start new runs while a database write is stuck, and pages show "Database busy" instead of hanging. These clear on their own once the disk catches up.
 
 ## Privacy & safety
 

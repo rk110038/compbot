@@ -32,7 +32,10 @@ services:
       - ollama
 
   ollama:
-    image: ollama/ollama:${OLLAMA_TAG:-latest}
+    # compbot's Ollama image: official Ollama plus NVIDIA Vulkan support, so older NVIDIA cards (GTX 9xx/10xx on
+    # drivers below 570) still use the GPU. Rebuilt daily from the latest Ollama. OLLAMA_TAG in .env can pin a
+    # version that has been published (ollama-<version> tags), e.g. OLLAMA_TAG=0.40.13
+    image: ghcr.io/rk110038/compbot:ollama-${OLLAMA_TAG:-latest}
     pull_policy: always                 # new models often need a newer Ollama
     container_name: compbot-ollama
     restart: unless-stopped

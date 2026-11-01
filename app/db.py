@@ -2,7 +2,11 @@
 from __future__ import annotations
 
 import copy
+import logging
 import os
+import sqlite3
+import threading
+import time
 from contextlib import contextmanager
 from datetime import date, datetime, timezone
 from typing import Iterator
@@ -21,9 +25,12 @@ from sqlalchemy import (
     event,
     select,
 )
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
 
 from .config import DEFAULT_PROFILE, DEFAULT_SETTINGS, get_config
+
+log = logging.getLogger("compbot.db")
 
 
 def utcnow() -> datetime:
@@ -171,6 +178,86 @@ class Setting(Base):
 _engine = None
 _SessionLocal: sessionmaker | None = None
 
+# --------------------------------------------------------------------------- slow-disk detection
+# When another app floods the pool holding /data, SQLite's writes can wait minutes for the disk. Rather than hang
+# silently, compbot times its writes, gives up on lock waits quickly, and says what's going on.
+BUSY_TIMEOUT_S = 10.0   # how long a write waits for another (stuck) writer before failing with "database is locked"
+SLOW_WRITE_S = 5.0      # a commit slower than this means the disk is struggling
+STALLED_S = 30.0        # a commit waiting this long: don't start new jobs until the disk catches up
+SLOW_SHOW_S = 900       # keep the "disk was slow" warning up for 15 minutes
+
+_inflight: dict[int, float] = {}  # thread id -> when its current commit started
+_inflight_lock = threading.Lock()
+_last_slow: dict | None = None    # {"mono", "at", "seconds", "kind"} for the most recent slow write or lock timeout
+
+
+def _note_slow(kind: str, seconds: float) -> None:
+    global _last_slow
+    _last_slow = {"mono": time.monotonic(), "at": datetime.now(timezone.utc), "seconds": seconds, "kind": kind}
+    log.warning("Disk slow: %s (%.0f s)", "a database write took" if kind == "write" else
+                "gave up waiting for the database lock", seconds)
+
+
+class _TimedConnection(sqlite3.Connection):
+    """sqlite3 connection that times commits, which is where SQLite waits for the disk."""
+
+    def commit(self):  # noqa: D102
+        key, t0 = threading.get_ident(), time.monotonic()
+        with _inflight_lock:
+            _inflight[key] = t0
+        try:
+            return super().commit()
+        finally:
+            with _inflight_lock:
+                _inflight.pop(key, None)
+            took = time.monotonic() - t0
+            if took >= SLOW_WRITE_S:
+                _note_slow("write", took)
+
+
+def is_busy_error(exc: BaseException) -> bool:
+    """A lock timeout or disk error from SQLite, i.e. the disk is too slow, not a bug."""
+    if not isinstance(exc, (OperationalError, sqlite3.OperationalError)):
+        return False
+    msg = str(exc).lower()
+    return "database is locked" in msg or "database table is locked" in msg or "disk i/o error" in msg
+
+
+def write_waiting_s() -> float:
+    """How long the oldest database write in progress has been waiting for the disk (0 if none)."""
+    now = time.monotonic()
+    with _inflight_lock:
+        return max((now - t for t in _inflight.values()), default=0.0)
+
+
+def disk_stalled() -> bool:
+    return write_waiting_s() >= STALLED_S
+
+
+def disk_status() -> dict | None:
+    """{'waiting': bool, 'seconds': int, 'message': str} while the disk holding /data is slow, else None."""
+    waiting = write_waiting_s()
+    if waiting >= SLOW_WRITE_S:
+        return {"waiting": True, "seconds": int(waiting), "message": (
+            f"The disk holding compbot's data is responding slowly: a database write has been waiting {waiting:.0f} s. "
+            "Usually another app on the same pool is writing heavily. compbot carries on once the disk catches up, "
+            "and won't start new runs while it's stuck.")}
+    last = _last_slow
+    if last and time.monotonic() - last["mono"] < SLOW_SHOW_S:
+        from zoneinfo import ZoneInfo
+
+        at = last["at"].astimezone(ZoneInfo(get_config().tz)).strftime("%H:%M")
+        what = (f"a database write took {last['seconds']:.0f} s" if last["kind"] == "write" else
+                f"a database write gave up after waiting {last['seconds']:.0f} s for another one stuck on the disk")
+        return {"waiting": False, "seconds": int(last["seconds"]), "message": (
+            f"The disk holding compbot's data was slow at {at}: {what}. Usually another app on the same pool is "
+            "writing heavily; runs may crawl or fail until it recovers.")}
+    return None
+
+
+DISK_BUSY_MESSAGE = ("compbot's database is busy because the disk holding its data is responding slowly (usually "
+                     "another app on the same pool writing heavily). Nothing was lost; try again in a minute.")
+
 
 def init_db(url: str | None = None) -> None:
     global _engine, _SessionLocal
@@ -189,12 +276,17 @@ def init_db(url: str | None = None) -> None:
                 f"On the host, give that user the data folder, e.g.: sudo chown -R {uid}:{gid} /path/to/data"
             ) from exc
         url = f"sqlite:///{cfg.db_path.as_posix()}"
-    _engine = create_engine(url, connect_args={"check_same_thread": False, "timeout": 30})
+    _engine = create_engine(url, connect_args={"check_same_thread": False, "timeout": BUSY_TIMEOUT_S,
+                                               "factory": _TimedConnection})
 
     @event.listens_for(_engine, "connect")
     def _pragmas(dbapi_conn, _):  # noqa: ANN001
         cur = dbapi_conn.cursor()
         cur.execute("PRAGMA journal_mode=WAL")
+        # In WAL mode NORMAL only syncs to disk at checkpoints, not on every commit, so a busy pool (whose sync
+        # writes queue for seconds) no longer holds up each write. Still corruption-safe; a power cut can lose
+        # the last few writes.
+        cur.execute("PRAGMA synchronous=NORMAL")
         cur.execute("PRAGMA foreign_keys=ON")
         cur.close()
 
@@ -233,7 +325,9 @@ def session_scope() -> Iterator[Session]:
     try:
         yield session
         session.commit()
-    except Exception:
+    except Exception as exc:
+        if is_busy_error(exc):
+            _note_slow("lock", BUSY_TIMEOUT_S)
         session.rollback()
         raise
     finally:

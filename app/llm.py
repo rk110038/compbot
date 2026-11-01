@@ -415,6 +415,13 @@ def classify_email(from_addr: str, subject: str, snippet: str, matched_comp: str
 
 _MEMORY_RE = re.compile(r"more system memory|out of memory|\boom\b|runner process (?:has )?(?:terminated|no longer)|"
                         r"unexpectedly stopped|resource limitations|cudaMalloc|failed to allocate", re.I)
+# "signal: killed" = Linux's out-of-memory killer stopped Ollama's model process: the machine ran out of RAM.
+_OOM_KILL_RE = re.compile(r"signal: killed|oom.?kill", re.I)
+OOM_KILL_HINT = ("\u201csignal: killed\u201d means Linux's out-of-memory killer stopped the model: the machine ran out "
+                 "of RAM, usually because the model was loading into ordinary memory instead of the graphics card. "
+                 "Check Ollama can use your GPU (sudo docker logs compbot-ollama 2>&1 | grep -iE "
+                 "'inference compute|vulkan'), free some RAM (on TrueNAS, cap the ZFS cache), or pick a smaller "
+                 "model such as qwen3.5:4b.")
 
 DRAFT_FIX_VERSION = (0, 40, 4)  # github.com/ollama/ollama/issues/18898
 UPDATE_OLLAMA_HINT = ("Update the Ollama container: on TrueNAS, edit the app's YAML so the ollama service has "
@@ -436,6 +443,28 @@ def _ollama_version() -> str | None:
         return None
 
 
+def model_placement(model: str | None) -> str | None:
+    """Where Ollama has the loaded model: on the GPU, the CPU, or split between them (None if unknown)."""
+    base = ollama_url()
+    if not (base and model):
+        return None
+    try:
+        loaded = httpx.get(f"{base}/api/ps", timeout=5).json().get("models") or []
+    except Exception:  # noqa: BLE001
+        return None
+    names = {model, model if ":" in model else model + ":latest"}
+    m = next((m for m in loaded if m.get("name") in names or m.get("model") in names), None)
+    if not m or not m.get("size"):
+        return None
+    pct = round(100 * (m.get("size_vram") or 0) / m["size"])
+    if pct >= 99:
+        return "running on the GPU"
+    if pct <= 0:
+        return ("running on the CPU only: Ollama isn't using a graphics card (see sudo docker logs compbot-ollama "
+                "2>&1 | grep -iE 'inference compute|vulkan')")
+    return f"{pct}% on the GPU, the rest on the CPU (the model doesn't fit in the graphics card's memory)"
+
+
 def self_test(settings: dict | None = None) -> tuple[bool, str]:
     """Quick end-to-end check used by the Settings page: (worked, message)."""
     clear_ai_pause()  # always really try; a failure pauses the AI again, a success lets entries use it straight away
@@ -446,7 +475,9 @@ def self_test(settings: dict | None = None) -> tuple[bool, str]:
     model = model_name(settings)
     if not res:
         why = last_error() or "the reply didn't contain an answer"
-        if _MEMORY_RE.search(why):
+        if _OOM_KILL_RE.search(why):
+            hint = OOM_KILL_HINT
+        elif _MEMORY_RE.search(why):
             hint = ("The model didn't fit in the memory Ollama has: try a smaller one (gemma4:e4b or qwen3.5:4b), "
                     "or close whatever else is using the GPU.")
         elif DRAFT_WARNING_NOTE in why:
@@ -467,5 +498,7 @@ def self_test(settings: dict | None = None) -> tuple[bool, str]:
     if not res["answer"]:
         return False, (f"{model} replied in {secs:.1f}s but couldn't answer the test question "
                        f"({res['reason'] or 'no reason given'}) - it may be too small to be useful.")
+    where = model_placement(model)
     return True, (f"{model} answered \u201c{res['answer']}\u201d ({res['confidence']}% sure, from "
-                  f"{res['source']}) in {secs:.1f}s" + (" - the first call includes loading the model" if secs > 8 else ""))
+                  f"{res['source']}) in {secs:.1f}s" + (" - the first call includes loading the model" if secs > 8 else "")
+                  + (f"; {where}" if where else ""))

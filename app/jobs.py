@@ -15,14 +15,18 @@ from . import llm
 from .analyse import apply_analysis, analyse, registrable_domain
 from .config import get_config
 from .db import (
+    DISK_BUSY_MESSAGE,
     Competition,
     Email,
     EntryAttempt,
     JobRun,
+    disk_stalled,
+    disk_status,
     entries_today,
     get_profile,
     get_settings,
     get_state,
+    is_busy_error,
     log_event,
     session_scope,
     set_state,
@@ -49,16 +53,23 @@ def today_local() -> date:
     return datetime.now(ZoneInfo(get_config().tz)).date()
 
 
-def _run(name: str, fn, *args, _held: bool = False, **kwargs) -> str:
+def _run(name: str, fn, *args, _held: bool = False, _note: str | None = None, **kwargs) -> str:
     """Run a job under its single-flight lock. `_held=True` means the caller already acquired the lock."""
     lock = _locks[name]
     if not _held and not lock.acquire(blocking=False):
         return f"{name} is already running"
     run_id = None
     try:
+        if disk_stalled():
+            # A write is stuck on the disk: starting now would just queue behind it and look like a hung run.
+            msg = f"{name} not started: " + (disk_status() or {}).get("message", "the disk holding /data is stuck")
+            log.warning(msg)
+            return msg
         with session_scope() as s:
             jr = JobRun(job=name)
             s.add(jr)
+            if _note:
+                log_event(s, "user", _note)
             s.flush()
             run_id = jr.id
         summary = fn(*args, **kwargs) or ""
@@ -67,35 +78,45 @@ def _run(name: str, fn, *args, _held: bool = False, **kwargs) -> str:
             jr.finished_at, jr.status, jr.summary = utcnow(), "ok", summary[:2000]
         return summary
     except Exception as exc:  # noqa: BLE001
-        log.exception("%s failed", name)
-        with session_scope() as s:
-            if run_id:
-                jr = s.get(JobRun, run_id)
-                jr.finished_at, jr.status, jr.summary = utcnow(), "error", f"{type(exc).__name__}: {exc}"[:2000]
-            log_event(s, "system", f"{name} job failed: {exc}", "error")
-        return f"error: {exc}"
+        why = f"{type(exc).__name__}: {exc}"
+        if is_busy_error(exc):
+            why = "Stopped: " + DISK_BUSY_MESSAGE
+            log.warning("%s stopped: database busy (%s)", name, exc)
+        else:
+            log.exception("%s failed", name)
+        try:
+            with session_scope() as s:
+                if run_id:
+                    jr = s.get(JobRun, run_id)
+                    jr.finished_at, jr.status, jr.summary = utcnow(), "error", why[:2000]
+                log_event(s, "system", f"{name} job failed: {why}", "error")
+        except Exception:  # noqa: BLE001
+            log.warning("couldn't record that %s failed (database still busy)", name)
+        return f"error: {why}"
     finally:
         _progress.pop(name, None)
         lock.release()
 
 
-def start(name: str, fn, *args, **kwargs) -> bool:
+def start(name: str, fn, *args, _note: str | None = None, **kwargs) -> bool:
     """Atomically reserve the job lock, then run `fn` in a background thread. False if already running."""
     lock = _locks[name]
     if not lock.acquire(blocking=False):
         return False
     try:
-        threading.Thread(target=_run, args=(name, fn, *args), kwargs={"_held": True, **kwargs}, daemon=True,
-                         name=f"job-{name}").start()
+        threading.Thread(target=_run, args=(name, fn, *args), kwargs={"_held": True, "_note": _note, **kwargs},
+                         daemon=True, name=f"job-{name}").start()
     except Exception:
         lock.release()
         raise
     return True
 
 
-def run_in_background(name: str) -> bool:
+def run_in_background(name: str, note: str | None = None) -> bool:
+    """Start a job in a background thread; `note` is logged with it (from the job thread, so a slow disk can't
+    hold up the web page that asked for it)."""
     target = {"discover": _discover, "enter": _enter, "inbox": _inbox, "maintenance": _maintenance}[name]
-    return start(name, target)
+    return start(name, target, _note=note)
 
 
 # --------------------------------------------------------------------------- discovery

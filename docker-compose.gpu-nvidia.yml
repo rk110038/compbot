@@ -1,4 +1,6 @@
-# NVIDIA GPU for Ollama (GeForce GTX 9xx / RTX 20xx and newer, driver 550+).
+# NVIDIA GPU for Ollama (GeForce GTX 9xx and newer, driver 550+).
+# GTX 9xx / 10xx cards need driver 570+ for Ollama's CUDA build; on older drivers (TrueNAS ships 550) compbot's
+# Ollama image runs them through Vulkan instead, which needs the "graphics" capability below.
 # TrueNAS: Apps -> Configuration -> Settings -> tick "Install NVIDIA Drivers" first, then check `nvidia-smi` works
 # in the TrueNAS shell. Enable with COMPOSE_FILE=docker-compose.yml:docker-compose.gpu-nvidia.yml in .env
 services:
@@ -12,4 +14,4 @@ services:
               capabilities: [gpu]
     environment:
       NVIDIA_VISIBLE_DEVICES: all
-      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility,graphics   # graphics = the driver's Vulkan library
