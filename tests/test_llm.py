@@ -287,3 +287,12 @@ def test_double_check_rejects_wrong_answer(fake_ollama, fixture_server, profile)
     assert res.result == "needs_input" and "failed its second check" in res.message
     rec = res.details["ai"][0]
     assert rec["check"] == "incorrect" and not rec["used"]
+
+
+def test_missing_phone_is_not_sent_to_the_ai_and_keeps_its_reason(fake_ollama, fixture_server, profile):
+    # Horse&Rider: the AI spent 61 s on a required phone box it can't fill, and its empty reply hid the reason
+    # ("Phone number ()"), so the manual queue didn't file it under "Needs a phone number".
+    with Browser() as b:
+        res = b.enter(f"{fixture_server}/phone_required.html", Ctx(profile=dict(profile, phone="")), AI, "ph1", {})
+    assert res.result == "needs_input" and "Phone number (profile has no phone)" in res.message, res.message
+    assert not any("PROFILE_KEYS" in c["messages"][1]["content"] for c in FakeOllama.chats)

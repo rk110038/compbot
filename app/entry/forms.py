@@ -121,7 +121,7 @@ PERSONAL_Q_RE = re.compile(
     r"country|title|gender)\b")
 QUESTION_START_RE = re.compile(
     r"^(q ?\d*\b|question|name (one|a|the|an)\b|which|what|who|where|when|how (many|much|long|old is)|unscramble|"
-    r"complete|fill in|spot|count|identify|guess|true or false)")
+    r"complete|fill in|spot|count|identify|guess|true or false)\b")  # \b: "Country" isn't "count...", nor "WhatsApp"
 ANSWER_FIELD_RE = re.compile(r"\banswer|\bquestion\b|\bq ?\d\b|\bquiz\b|\bguess\b|solution|code ?word|secret word")
 CREATIVE_RE = re.compile(
     r"tie ?break|in (\d+|ten|twenty|fifty|25|15) words|tell us|why (do|would|should|you)|caption|slogan|sentence|"
@@ -303,8 +303,33 @@ def profile_value(key: str, p: dict, f: Field | None = None) -> str:
     return str(p.get(key, "") or "")
 
 
+UK_COUNTY_ABBREV = {
+    "beds": "Bedfordshire", "berks": "Berkshire", "bucks": "Buckinghamshire", "cambs": "Cambridgeshire",
+    "derbys": "Derbyshire", "glos": "Gloucestershire", "gloucs": "Gloucestershire", "hants": "Hampshire",
+    "herts": "Hertfordshire", "lancs": "Lancashire", "leics": "Leicestershire", "lincs": "Lincolnshire",
+    "middx": "Middlesex", "northants": "Northamptonshire", "northd": "Northumberland", "notts": "Nottinghamshire",
+    "oxon": "Oxfordshire", "salop": "Shropshire", "shrops": "Shropshire", "staffs": "Staffordshire",
+    "warks": "Warwickshire", "wilts": "Wiltshire", "worcs": "Worcestershire", "yorks": "Yorkshire",
+}
+
+
+def county_candidates(county: str) -> list[str]:
+    """'Berks' -> ['Berks', 'Berkshire'], 'Berkshire' -> ['Berkshire', 'Berks'] (lists use either form, or
+    regions such as 'Bucks & Oxon')."""
+    if not county:
+        return []
+    n = normalise(county).rstrip(".")
+    out = [county]
+    if n in UK_COUNTY_ABBREV:
+        out.append(UK_COUNTY_ABBREV[n])
+    out += [abbr.title() for abbr, full in UK_COUNTY_ABBREV.items() if normalise(full) == n]
+    return list(dict.fromkeys(out))
+
+
 def option_candidates(key: str, p: dict) -> list[str]:
     dob = _parse_dob(p)
+    if key == "county":
+        return county_candidates(str(p.get("county") or ""))
     if key == "country":
         c = p.get("country") or "United Kingdom"
         uk = ["United Kingdom", "UK", "Great Britain", "GB", "England", "United Kingdom of Great Britain and Northern Ireland"]

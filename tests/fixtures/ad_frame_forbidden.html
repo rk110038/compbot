@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Win a tech bundle</title></head>
+<body>
+<h1>Win a BIG tech bundle</h1>
+<!-- An advert frame that says "403 Forbidden" must not make the whole page look like a bot-check (Rayo, Nov 2026). -->
+<iframe src="forbidden_frame.html" width="300" height="250" title="advert"></iframe>
+<form id="f">
+  <label>First name <input name="fn" required></label>
+  <label>Email <input type="email" name="em" required></label>
+  <button type="submit">Enter now</button>
+</form>
+<p id="out"></p>
+<script>
+document.getElementById('f').onsubmit = e => { e.preventDefault(); document.getElementById('out').textContent = 'Thank you for entering, good luck!'; };
+</script>
+</body></html>

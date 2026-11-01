@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Win a vest</title></head>
+<body>
+<h1>Enter for a chance to win</h1>
+<!-- Like Klaviyo sign-up forms on Shopify stores: the API refuses the entry and the page only says "an error occurred". -->
+<form id="f">
+  <input name="fn" placeholder="First Name">
+  <input type="email" name="em" placeholder="Email Address" required>
+  <button type="submit">ENTER</button>
+</form>
+<p id="out"></p>
+<script>
+document.getElementById('f').onsubmit = async e => {
+  e.preventDefault();
+  const r = await fetch('/api/subscribe', {method: 'POST', body: '{}'});
+  document.getElementById('out').textContent = r.ok ? 'Thanks for entering!' : 'An error occurred when submitting. Please try again later.';
+};
+</script>
+</body></html>

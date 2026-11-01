@@ -151,3 +151,29 @@ def test_forced_retry_tries_blocked_site_once(monkeypatch):
     tried.clear()
     jobs._enter([cid])  # without the override the platform is skipped again
     assert tried == [] and _get(cid).status == "manual"
+
+
+def test_site_that_ever_loaded_is_not_treated_as_blocking():
+    # Rayo: two false "bot-check" verdicts got the whole site skipped, though its pages had loaded fine (the entries
+    # then stopped on a T&C rule or a question). Only sites that never let compbot's browser in are skipped.
+    from app.db import EntryAttempt
+    init_db()
+    with session_scope() as s:
+        c = Competition(source="test", source_id="bd-1", thread_url="x", title="bd", method="web_form", status="queued",
+                        entry_urls=["https://www.loadsonce.co.uk/a"])
+        s.add(c)
+        s.flush()
+        for url, result, mode in [("https://www.loadsonce.co.uk/a", "blocked", "auto"),
+                                  ("https://www.loadsonce.co.uk/b", "blocked", "auto"),
+                                  ("https://www.loadsonce.co.uk/c", "needs_input", "auto"),
+                                  ("https://www.loadsonce2.co.uk/a", "blocked", "auto"),
+                                  ("https://www.loadsonce2.co.uk/b", "tc_blocked", "auto"),
+                                  ("https://www.loadsonce2.co.uk/c", "blocked", "auto"),
+                                  ("https://www.alwaysblocks.co.uk/a", "blocked", "auto"),
+                                  ("https://www.alwaysblocks.co.uk/b", "blocked", "auto"),
+                                  ("https://www.alwaysblocks.co.uk/c", "entered", "manual")]:  # you entered it yourself
+            s.add(EntryAttempt(competition_id=c.id, url=url, mode=mode, result=result))
+    with session_scope() as s:
+        b = jobs.blocked_domains(s)
+    assert "alwaysblocks.co.uk" in b
+    assert "loadsonce.co.uk" not in b and "loadsonce2.co.uk" not in b

@@ -229,13 +229,19 @@ def _urls_to_try(comp: Competition, blocked: set[str] | None = None) -> list[str
 
 
 BLOCK_MEMORY_DAYS = 21
+# Results that prove the site let compbot's browser load the page (whatever happened next).
+PAGE_LOADED_RESULTS = ["entered", "unverified", "dry_run_ok", "failed", "needs_input", "tc_blocked", "closed"]
 
 
 def blocked_domains(s) -> set[str]:
-    """Sites that refused compbot's browser at least twice recently and never let an entry through."""
+    """Sites that refused compbot's browser at least twice recently and never once let it load the page.
+
+    A site that loaded even once (the entry then failed, needed input or hit a T&C rule...) doesn't block automated
+    browsers - an occasional refusal there is a blip, or a false alarm - so it keeps being tried."""
     since = utcnow() - timedelta(days=BLOCK_MEMORY_DAYS)
     rows = s.execute(select(EntryAttempt.url, EntryAttempt.result).where(
-        EntryAttempt.started_at >= since, EntryAttempt.result.in_(["blocked", "entered", "unverified"]))).all()
+        EntryAttempt.started_at >= since, EntryAttempt.mode != "manual",
+        EntryAttempt.result.in_(["blocked", *PAGE_LOADED_RESULTS]))).all()
     blocked, ok = collections.Counter(), set()
     for url, result in rows:
         d = registrable_domain(url or "")
@@ -281,8 +287,9 @@ def _enter(comp_ids: list[int] | None = None, force: bool = False) -> str:
                 done_some = bool(comp.entered_urls)
                 comp.status = "manual"
                 comp.status_reason = ("Entered on some sites; the rest " if done_some else "This site ") + \
-                    "blocks automated entry - enter it yourself"
-                log_event(s, "entry", f"Skipped (site blocks automated entry): {comp.title[:80]}", "warn", cid)
+                    "blocks automated entry (refused compbot's browser, not a T&C rule) - enter it yourself"
+                log_event(s, "entry", f"Skipped (site refused compbot's browser before - not a T&C rule): "
+                                      f"{comp.title[:80]}", "warn", cid)
                 stats["skipped_blocked_site"] = stats.get("skipped_blocked_site", 0) + 1
                 continue
         if method == "email":

@@ -181,3 +181,19 @@ def test_single_radio_consent(profile):
     f = Field("r", "radio", "radio", label="I agree to the terms and conditions.", options=[
         {"value": "yes", "text": "Terms and conditions: https://example.com/terms", "idx": "t1"}])
     assert map_field(f, ctx(profile)).value == "t1"
+
+
+def test_county_abbreviations_match_select_options(profile):
+    # Muddy Stilettos: profile county "Berks" didn't match "Berkshire", the select was skipped and submit stayed disabled.
+    opts = [{"value": "", "text": "-- Select your country or county"}, {"value": "4", "text": "Bucks & Oxon"},
+            {"value": "5", "text": "Berkshire"}, {"value": "9", "text": "Glos & Worcs"}]
+    sel = Field("1", "select", "select", name="county", label="Select country or county", options=opts)
+    assert map_field(sel, ctx(dict(profile, county="Berks"))).value == "5"
+    assert map_field(sel, ctx(dict(profile, county="Oxfordshire"))).value == "4"
+    assert map_field(sel, ctx(dict(profile, county="Worcestershire"))).value == "9"
+
+
+def test_country_box_is_not_a_quiz_question(profile):
+    # CinemaBlend: "Country" starts with "count" and was filled with the quiz answer.
+    a = map_field(Field("1", "input", "text", name="country", label="Country"), ctx(profile, answers=["Festive Road"]))
+    assert a.kind == "fill" and a.value == "United Kingdom"

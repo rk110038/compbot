@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Win a Mr Benn collector's edition</title></head>
+<body>
+<h1>Win a Mr Benn collector's edition</h1>
+<!-- Like the Wayin (Cheetah Digital) forms on Future plc sites: the submit "button" is a styled link. -->
+<form id="f" class="xForm">
+  <fieldset><legend>What was the name of the street where Mr Benn lived?</legend>
+    <label><input type="radio" name="q" value="1"> Acacia Avenue</label>
+    <label><input type="radio" name="q" value="2"> Festive Road</label>
+  </fieldset>
+  <label>First <input name="name_Firstname" required></label>
+  <label>Last <input name="name_Lastname" required></label>
+  <label>Email <input type="email" name="email" required></label>
+  <label>Country <input name="country"></label>
+  <a href="#" class="xCTA xButton xInput" id="go">Submit</a>
+</form>
+<p id="out"></p>
+<script>
+document.getElementById('go').onclick = e => {
+  e.preventDefault();
+  const f = document.getElementById('f');
+  const ok = f.q.value === '2' && f.country.value === 'United Kingdom' && f.email.value;
+  document.getElementById('out').textContent = ok ? 'Thank you for entering!' : 'Please check your answers - error';
+};
+</script>
+</body></html>

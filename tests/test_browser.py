@@ -299,3 +299,35 @@ def test_shadow_dom_widget_dry_run_never_opens_join_button(browser, fixture_serv
     res = browser.enter(f"{fixture_server}/shadow_widget.html", Ctx(profile=profile), _settings(entry_mode="dry_run"),
                         "sw2", {})
     assert res.result != "entered" and not any("JOIN TO ENTER" in s for s in res.details["steps"])
+
+
+def test_advert_frame_saying_forbidden_is_not_a_bot_check(browser, fixture_server, profile):
+    # Rayo: a small frame saying "403 Forbidden / Access denied" made a normal page with its form count as blocked.
+    res = browser.enter(f"{fixture_server}/ad_frame_forbidden.html", Ctx(profile=profile), _settings(entry_mode="auto"),
+                        "bc1", {})
+    assert res.result == "entered", (res.result, res.message)
+
+
+def test_real_access_denied_page_is_still_blocked(browser, fixture_server, profile):
+    res = browser.enter(f"{fixture_server}/forbidden_frame.html", Ctx(profile=profile), _settings(entry_mode="auto"),
+                        "bc2", {})
+    assert res.result == "blocked" and "bot-check" in res.message, (res.result, res.message)
+
+
+def test_server_refusal_after_submit_is_reported(browser, fixture_server, profile):
+    # Klaviyo forms (Arctic Fit, Pooky, Groove...) only say "An error occurred"; show what the server actually said.
+    res = browser.enter(f"{fixture_server}/api_error.html", Ctx(profile=profile, tags=["nl"]), _settings(entry_mode="auto"),
+                        "se1", {})
+    assert res.result == "failed" and "An error occurred" in res.message, res.message
+    assert "the site's server replied HTTP 501 from 127.0.0.1" in res.message and "/api/subscribe" in res.message
+    assert res.details["server_errors"].startswith("HTTP 501")
+
+
+def test_wayin_link_submit_and_country_field(browser, fixture_server, profile):
+    # CinemaBlend (Future plc / Wayin): Submit is <a class="xCTA xButton">, and "Country" got the quiz answer
+    # because it starts with "count".
+    res = browser.enter(f"{fixture_server}/wayin_form.html", Ctx(profile=profile, answers=["Festive Road"]),
+                        _settings(entry_mode="auto"), "wy1", {})
+    assert res.result == "entered", (res.message, res.details["steps"])
+    acts = {f["label"]: (f["action"], f["source"]) for f in res.details["fields"]}
+    assert acts["Country"] == ("fill", "country"), acts

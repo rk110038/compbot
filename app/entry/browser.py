@@ -206,7 +206,7 @@ JS_EXTRACT = "(prefix) => {\n" + JS_HELPERS + r"""
       if (el.tagName === 'SELECT') f.options = Array.from(el.options).map(o => ({value: o.value, text: (o.text || '').trim()}));
       fields.push(f);
     }
-    const btns = __cbAll(root, 'button, input[type=submit], input[type=image], input[type=button], [role=button], a.button, a.btn').filter(vis);
+    const btns = __cbAll(root, 'button, input[type=submit], input[type=image], input[type=button], [role=button], a.button, a.btn, a[class*=button i], a[class*=btn i], a[class*=cta i]').filter(vis);
     let formId = '';
     if (root !== document.body) {
       // Lets a paged form (Next -> Next -> Submit inside one <form>) be recognised on its later pages.
@@ -246,7 +246,8 @@ JS_MARK_SUBMIT = "(idx) => {\n" + JS_HELPERS + r"""
   const good = /^(enter|submit|send|sign ?up|subscribe|register|join|go|count me in|take part|enter now|enter competition|enter the (competition|draw|prize draw)|submit entry|enter draw|i'?m in|done|continue|next|confirm|win|enter to win|let'?s go|play|ok)\b/i;
   const bad = /cancel|reset|back|close|log ?in|sign ?in|search|menu|cookie|accept all|reject|share|facebook|twitter|instagram|print|basket|cart/i;
   let best = null, bestScore = -99;
-  for (const b of root.querySelectorAll('button, input[type=submit], input[type=image], input[type=button], [role=button], a.button, a.btn')) {
+  // Link-style buttons count too, e.g. Wayin/Cheetah forms' <a class="xCTA xButton">Submit</a> (Future plc comps).
+  for (const b of root.querySelectorAll('button, input[type=submit], input[type=image], input[type=button], [role=button], a.button, a.btn, a[class*=button i], a[class*=btn i], a[class*=cta i]')) {
     if (!vis(b)) continue;
     const t = (txt(b) || b.value || b.getAttribute('aria-label') || '').trim();
     const type = (b.getAttribute('type') || '').toLowerCase();
@@ -340,6 +341,12 @@ JS_CAPTCHA = "() => {\n" + JS_HELPERS + r"""
                      'input[name*="captcha" i]:not([type=hidden])', '#captcha', '.captcha']) {
     for (const el of __cbAll(document, sel)) if (shown(el)) return sel;
   }
+  // A bot-check page replaces the whole site, so only the main page counts, and only when it shows no form. Adverts
+  // and widgets in their own small frames sometimes say "access denied" / "403 forbidden" (seen on Rayo's pages,
+  // which then got wrongly treated as blocking compbot).
+  if (window !== window.top) return null;
+  const formInputs = __cbAll(document, 'input[type=text], input[type=email], input[type=tel], input:not([type]), textarea').filter(__cbVis);
+  if (formInputs.length >= 2) return null;
   const head = (document.title + ' ' + (document.body ? document.body.innerText.slice(0, 600) : '')).toLowerCase();
   if (/just a moment|verify you are human|checking your browser|are you a robot|attention required|access denied|request blocked|unusual traffic|verification failed|403 forbidden|pardon our interruption/.test(head)) return 'challenge-page';
   return null;
@@ -1457,6 +1464,24 @@ def _wait_settle(page, ms: int = 8000) -> None:
         pass
 
 
+def _server_errors(responses: list) -> str:
+    """'HTTP 403 from a.klaviyo.com/client/subscriptions: {...}' for error replies seen after submitting."""
+    from urllib.parse import urlparse
+
+    out = []
+    for r in responses[-3:]:
+        try:
+            u = urlparse(r.url)
+            try:
+                body = re.sub(r"\s+", " ", r.text())[:220]
+            except Exception:  # noqa: BLE001
+                body = ""
+            out.append(f"HTTP {r.status} from {u.netloc}{u.path[:60]}" + (f": {body}" if body else ""))
+        except Exception:  # noqa: BLE001
+            continue
+    return "; ".join(out)
+
+
 # --------------------------------------------------------------------------- main entry routine
 
 class Browser:
@@ -1496,6 +1521,19 @@ class Browser:
         context.route("**/*", lambda route: route.continue_() if is_public_url(route.request.url, allow_inline=True)
                       else route.abort("blockedbyclient"))
         page = context.new_page()
+        # Server errors after we press submit (e.g. a sign-up API refusing the entry): the page itself often only says
+        # "An error occurred", so keep the real reply to show with the result.
+        sent_errors: list = []
+        watching = [False]
+
+        def _on_response(r) -> None:
+            try:
+                if watching[0] and r.status >= 400 and r.request.resource_type in ("xhr", "fetch", "document"):
+                    sent_errors.append(r)
+            except Exception:  # noqa: BLE001
+                pass
+
+        context.on("response", _on_response)
         live = LiveView(context, bool(settings.get("live_view", True)), str(comp_context.get("title") or ""))
         live.attach(page)
         live.status(f"Opening {url[:120]}")
@@ -1663,15 +1701,21 @@ class Browser:
                         plan = _ai_fill(page, frame, plan, settings, comp_context, details)
                     unknown = [(f, a) for f, a in plan if a.kind == "unknown"]
                     if unknown and llm.enabled(settings) and settings.get("llm_for_forms", True):
+                        # A field already recognised (e.g. your phone, which isn't in your profile) is beyond the AI:
+                        # it can only map fields to profile details. Don't spend its time on those.
                         payload = [{"id": f.idx, "type": f.type if f.tag != "radio" else "radio",
                                     "label": f.human_label, "required": f.required, "context": f.context[:200],
                                     "options": [o.get("text") for o in f.options][:40]}
-                                   for f, a in unknown if not a.note.startswith(("captcha", "AI "))]
+                                   for f, a in unknown
+                                   if not a.note.startswith(("captcha", "AI ", "profile has no"))]
                         suggestions = llm.map_fields(payload, comp_context, PROFILE_KEYS, settings) if payload else {}
                         new_plan = []
                         for f, a in plan:
                             if a.kind == "unknown" and f.idx in suggestions:
-                                a = apply_llm_action(f, suggestions[f.idx], ctx)
+                                suggested = apply_llm_action(f, suggestions[f.idx], ctx)
+                                if suggested.kind == "unknown" and not suggested.note:
+                                    suggested.note = a.note  # keep the reason the rules gave
+                                a = suggested
                             new_plan.append((f, a))
                         plan = new_plan
                         unknown = [(f, a) for f, a in plan if a.kind == "unknown"]
@@ -1744,6 +1788,8 @@ class Browser:
                 submitted_sigs.append(_form_sig(container))
                 details["steps"].append(f"step {step}: clicked '{submit_label}'")
                 n_pages = len(context.pages)
+                sent_errors.clear()
+                watching[0] = True
                 how = _click_submit(page, frame)
                 if how.startswith("failed"):
                     res.result, res.message = "failed", f"Submit click failed: {how[7:]}"[:500]
@@ -1779,6 +1825,9 @@ class Browser:
                     res.result, res.message = "entered", f"Confirmation seen: \u201c{m.group(0)[:120]}\u201d"
                     return res
                 err = ERROR_RE.search(new_text)
+                server = _server_errors(sent_errors)
+                if server:
+                    details["server_errors"] = server
                 nxt = best_form()
                 # A paged form (Next -> Next -> Submit) carries on in the same <form>, even when the next page is
                 # only tick boxes, which wouldn't look like an entry form on its own.
@@ -1860,12 +1909,15 @@ class Browser:
                             best = (frame, cur, score)
                             continue
                     snippet = new_text[max(0, err.start() - 60): err.end() + 80].replace("\n", " ")
-                    res.result, res.message = "failed", f"Form reported a problem: \u201c{snippet.strip()}\u201d"
+                    res.result, res.message = "failed", f"Form reported a problem: \u201c{snippet.strip()}\u201d" + (
+                        f" - the site's server replied {server}" if server else "")
+                    res.message = res.message[:900]
                     return res
                 if page.url.split("#")[0] != before_url.split("#")[0] or not same_form:
                     res.result, res.message = "unverified", "Submitted; page changed but no explicit confirmation text"
                     return res
-                res.result, res.message = "failed", "Submitted but nothing changed on the page"
+                res.result, res.message = "failed", ("Submitted but nothing changed on the page" + (
+                    f" - the site's server replied {server}" if server else ""))[:900]
                 return res
             res.result, res.message = "unverified", f"Gave up after {MAX_FORM_PAGES} form pages"
             return res
