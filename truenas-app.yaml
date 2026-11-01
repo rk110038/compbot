@@ -49,6 +49,7 @@ services:
 
   ollama:
     image: ollama/ollama:latest          # AMD (ROCm) cards: use ollama/ollama:rocm
+    pull_policy: always                  # stop/start the app to get Ollama fixes too (new models often need them)
     container_name: compbot-ollama
     restart: unless-stopped
     volumes:

@@ -24,12 +24,28 @@ def last_error() -> str | None:
     return getattr(_last, "error", None)
 
 
+# llama.cpp logs this for Gemma 4's built-in draft ("assistant") model on every load, even when it then loads fine.
+# Repeated, it fills the error Ollama returns and hides the line that says what actually went wrong.
+_DRAFT_NOISE_RE = re.compile(r"(?:llama_init_from_model: )?(?:failed to initialize the context: )?\w+ requires ctx_other "
+                             r"to be set \(this warning is normal during memory fitting\)[:\s]*", re.I)
+DRAFT_WARNING_NOTE = "only Gemma 4 draft-model warnings in the log"
+
+
+def _clean_ollama_error(msg: str) -> str:
+    if "requires ctx_other" not in msg:
+        return msg
+    cleaned = re.sub(r"[:\s]+$", "", _DRAFT_NOISE_RE.sub("", msg)).strip()
+    if re.search(r"terminated(?: \(exit status \d+\)|: exit status \d+)?$", cleaned) or not cleaned:
+        cleaned = (cleaned + " " if cleaned else "") + f"({DRAFT_WARNING_NOTE})"
+    return cleaned
+
+
 def _http_error(r: httpx.Response) -> str:
     try:
         msg = r.json().get("error")
     except Exception:  # noqa: BLE001
         msg = None
-    return f"HTTP {r.status_code}: {(msg or r.text or '').strip()[:300]}"
+    return f"HTTP {r.status_code}: {_clean_ollama_error((msg or r.text or '').strip())[:400]}"
 
 # Shown in the Settings model picker. Sizes are the Ollama download sizes (Q4 quantisation).
 RECOMMENDED_MODELS: list[dict] = [
@@ -338,6 +354,25 @@ def classify_email(from_addr: str, subject: str, snippet: str, matched_comp: str
 _MEMORY_RE = re.compile(r"more system memory|out of memory|\boom\b|runner process (?:has )?(?:terminated|no longer)|"
                         r"unexpectedly stopped|resource limitations|cudaMalloc|failed to allocate", re.I)
 
+DRAFT_FIX_VERSION = (0, 40, 4)  # github.com/ollama/ollama/issues/18898
+UPDATE_OLLAMA_HINT = ("Update the Ollama container: on TrueNAS, edit the app's YAML so the ollama service has "
+                      "pull_policy: always (as in truenas-app.yaml), save, then stop and start the app; with Compose, "
+                      "sudo docker compose pull && sudo docker compose up -d.")
+
+
+def _version_tuple(v: str | None) -> tuple[int, ...]:
+    return tuple(int(x) for x in re.findall(r"\d+", v or "")[:3])
+
+
+def _ollama_version() -> str | None:
+    base = ollama_url()
+    if not base:
+        return None
+    try:
+        return httpx.get(f"{base}/api/version", timeout=5).json().get("version")
+    except Exception:  # noqa: BLE001
+        return None
+
 
 def self_test(settings: dict | None = None) -> tuple[bool, str]:
     """Quick end-to-end check used by the Settings page: (worked, message)."""
@@ -351,6 +386,13 @@ def self_test(settings: dict | None = None) -> tuple[bool, str]:
         if _MEMORY_RE.search(why):
             hint = ("The model didn't fit in the memory Ollama has: try a smaller one (gemma4:e4b or qwen3.5:4b), "
                     "or close whatever else is using the GPU.")
+        elif DRAFT_WARNING_NOTE in why:
+            ver = _ollama_version()
+            if ver and _version_tuple(ver) < DRAFT_FIX_VERSION:
+                hint = f"Your Ollama is {ver}; versions before 0.40.4 can't load Gemma 4's built-in draft model. "
+            else:
+                hint = f"Ollama{' ' + ver if ver else ''} couldn't load the model's built-in draft model. "
+            hint += UPDATE_OLLAMA_HINT + " Or pick a non-Gemma model such as qwen3.5:9b."
         elif re.search(r"not found|pull", why, re.I):
             hint = "Download the model under AI models first."
         elif "can't reach" in why:

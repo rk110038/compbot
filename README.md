@@ -35,7 +35,7 @@ In **Datasets**, create e.g. `tank/apps/compbot` (the "Apps" preset is fine). It
 
 **Option A: GitHub Container Registry (default in `truenas-app.yaml`)**
 
-Every push to `main` runs `.github/workflows/docker.yml` on GitHub's free hosted runners (no self-hosted runner needed). It runs the tests, then publishes `ghcr.io/rk110038/compbot:latest`. Because the repo is public, the package is public too, so TrueNAS can pull it without credentials. (If you ever make the repo private, either make the package public under **github.com/rk110038 → Packages → compbot → Package settings**, or add a GHCR credential in TrueNAS.) To update, push, wait for the Action to go green, then stop and start the app in TrueNAS so it re-pulls the image.
+Every push to `main` runs `.github/workflows/docker.yml` on GitHub's free hosted runners (no self-hosted runner needed). It runs the tests, then publishes `ghcr.io/rk110038/compbot:latest`. Because the repo is public, the package is public too, so TrueNAS can pull it without credentials. (If you ever make the repo private, either make the package public under **github.com/rk110038 → Packages → compbot → Package settings**, or add a GHCR credential in TrueNAS.) To update, push, wait for the Action to go green, then stop and start the app in TrueNAS so it re-pulls the image. The Ollama service also has `pull_policy: always`, so the same stop/start picks up Ollama fixes too (new models such as Gemma 4 often need a recent Ollama). If you installed from an older copy of the YAML, add that line to the `ollama` service.
 
 **Option B: build on the NAS**
 
@@ -61,7 +61,7 @@ sudo mkdir -p data ollama && sudo chown -R "$(grep ^COMPBOT_UID .env | cut -d= -
 sudo docker compose up -d
 ```
 
-Update later with `sudo docker compose pull && sudo docker compose up -d`.
+Update later with `sudo docker compose pull && sudo docker compose up -d` (this updates Ollama as well as compbot).
 
 ### 4. Install the app
 

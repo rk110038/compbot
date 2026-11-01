@@ -125,6 +125,29 @@ def test_self_test_shows_ollamas_error(fake_ollama):
     assert not ok and "not found" in msg and "Download the model" in msg
 
 
+NOISE = ("llama_init_from_model: failed to initialize the context: Gemma4Assistant requires ctx_other to be set "
+         "(this warning is normal during memory fitting)")
+
+
+def test_self_test_hides_gemma4_draft_warning_noise(fake_ollama, monkeypatch):
+    # Seen on the NAS: the repeated warning filled the message and hid the real cause.
+    FakeOllama.chat_error = (500, {"error": f"llama-server process has terminated: {NOISE}: {NOISE}: "
+                                            "cudaMalloc failed: out of memory"})
+    ok, msg = llm.self_test(AI)
+    assert not ok and "ctx_other" not in msg
+    assert "HTTP 500: llama-server process has terminated: cudaMalloc failed: out of memory" in msg
+    assert "try a smaller one" in msg
+    # Nothing but the warning: say so, and point at the Ollama version.
+    FakeOllama.chat_error = (500, {"error": f"llama-server process has terminated: {NOISE}: {NOISE}"})
+    monkeypatch.setattr(llm, "_ollama_version", lambda: "0.40.2")
+    ok, msg = llm.self_test(AI)
+    assert not ok and "ctx_other" not in msg and llm.DRAFT_WARNING_NOTE in msg
+    assert "Your Ollama is 0.40.2" in msg and "pull_policy: always" in msg
+    monkeypatch.setattr(llm, "_ollama_version", lambda: "0.40.13")
+    ok, msg = llm.self_test(AI)
+    assert "Ollama 0.40.13 couldn't load" in msg and "Your Ollama is" not in msg
+
+
 def test_self_test_when_ollama_is_down(monkeypatch):
     monkeypatch.setattr(get_config(), "ollama_url", "http://127.0.0.1:9")
     monkeypatch.setattr(get_config(), "llm_base_url", "http://127.0.0.1:9/v1")

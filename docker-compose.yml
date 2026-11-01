@@ -33,6 +33,7 @@ services:
 
   ollama:
     image: ollama/ollama:${OLLAMA_TAG:-latest}
+    pull_policy: always                 # new models often need a newer Ollama
     container_name: compbot-ollama
     restart: unless-stopped
     volumes:
