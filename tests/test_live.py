@@ -36,3 +36,26 @@ def test_live_requires_login(tmp_path, monkeypatch):
     with TestClient(app) as c:
         assert c.get("/live").status_code == 401
         assert c.get("/live/stream?max_frames=1").status_code == 401
+
+
+def test_manual_page_breakdown_and_retry_route(tmp_path, monkeypatch):
+    from app.db import Competition, EntryAttempt, init_db, session_scope
+    from app.main import app
+    init_db()
+    with session_scope() as s:
+        c = Competition(source="t", source_id="live-man-1", thread_url="x", title="Win a lamp", method="web_form",
+                        status="manual", entry_urls=["https://e.example/win-lamp"], status_reason="Needs you: CAPTCHA")
+        s.add(c)
+        s.flush()
+        s.add(EntryAttempt(competition_id=c.id, url="https://e.example/win-lamp", mode="auto", result="captcha",
+                           message="CAPTCHA on the form"))
+        cid = c.id
+    with TestClient(app) as cl:
+        page = cl.get("/manual", headers=H).text
+        assert "Retry automatically" in page and "CAPTCHA" in page and 'value="captcha"' in page
+        assert "Win a lamp" in cl.get("/manual?reason=captcha", headers=H).text
+        r = cl.post("/manual/retry", data={"cat": ["captcha"]}, headers={**H, "Origin": "http://testserver"},
+                    follow_redirects=False)
+        assert r.status_code == 303 and "Re-queued" in r.headers["location"].replace("+", " ")
+    with session_scope() as s:
+        assert s.get(Competition, cid).status == "queued"

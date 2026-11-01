@@ -251,6 +251,9 @@ def _enter(comp_ids: list[int] | None = None, force: bool = False) -> str:
             comp = s.get(Competition, cid)
             pending = _pending_urls(comp)
             urls = _urls_to_try(comp, blocked) or (list(comp.entry_urls or []) if force else [])
+            if comp.force_next:  # you asked to retry this one: try every site once, block memory or not
+                urls = pending or list(comp.entry_urls or [])
+                comp.force_next = False
             method = comp.method
             _progress["enter"] = f"{n}/{len(comp_ids_ordered)}: {comp.title[:60]}"
             if method == "web_form" and pending and not urls:
@@ -559,54 +562,131 @@ def _click_confirm(url: str) -> str:
 
 RETRYABLE_RESULTS = {"failed", "needs_input", "error"}
 
+# Why a competition is in the manual queue -> label, help text, and whether compbot can retry it.
+RETRY_CATEGORIES: dict[str, dict] = {
+    "question": {"label": "Question the post didn't answer", "retry": True,
+                 "help": "The AI (if you've chosen a model) will try to answer it from the page and its knowledge."},
+    "failed": {"label": "No form found / submit problem / form error", "retry": True,
+               "help": "Often fixed by newer versions of compbot - worth retrying after an update."},
+    "error": {"label": "Page error or time-out", "retry": True, "help": "Usually temporary."},
+    "needs_input": {"label": "A field compbot couldn't fill", "retry": True,
+                    "help": "Retry after updating compbot or adding missing details to your profile."},
+    "phone": {"label": "Needs a phone number", "retry": True,
+              "help": "Add your phone number in Settings first, then retry."},
+    "captcha": {"label": "CAPTCHA", "retry": True,
+                "help": "compbot now ignores invisible reCAPTCHA badges, so some of these may go through now. Real "
+                        "\u201cI'm not a robot\u201d checks will come straight back here."},
+    "blocked": {"label": "Site blocks automated browsers", "retry": True,
+                "help": "Tried once more, even though the site blocked compbot before - most will be blocked again."},
+    "tc": {"label": "T&Cs ban automated entries", "retry": True,
+           "help": "The T&Cs are checked again on retry, so these come back unless the T&Cs have changed."},
+    "other": {"label": "Other", "retry": True, "help": ""},
+    "login": {"label": "Needs you to sign in", "retry": False, "help": "compbot can't log in to sites for you."},
+    "social": {"label": "Social media, Gleam, app, vote or magazine", "retry": False,
+               "help": "Not something compbot can enter automatically."},
+}
+CATEGORY_ORDER = ["question", "failed", "error", "needs_input", "phone", "captcha", "blocked", "tc", "other",
+                  "login", "social"]
+QUESTION_NOTES_RE = ("question with no known answer", "required choice with no known answer", "AI wasn't sure",
+                     "AI couldn't", "second check")
 
-def requeue_retryable() -> str:
-    """Give manual-queue competitions that failed for fixable reasons another automatic try.
 
-    Skips anything a site deliberately blocks (bot blocks, CAPTCHAs, T&Cs banning automation, logins).
-    """
-    from .analyse import ACCOUNT_URL_RE, BOT_BLOCKED_URL_RE
-    from .entry.forms import CIRCUMVENT_LIMIT_RE
+def manual_category(c: Competition, last: EntryAttempt | None) -> str:
+    """Why a manual-queue competition is there (see RETRY_CATEGORIES)."""
+    from .analyse import ACCOUNT_URL_RE
 
+    if c.method == "account" or (c.method == "web_form" and any(ACCOUNT_URL_RE.search(u) for u in (c.entry_urls or []))):
+        return "login"
+    if c.method in ("social", "widget", "magazine", "vote", "purchase"):
+        return "social"
+    reason = c.status_reason or ""
+    if last is None:
+        if reason.startswith(("Needs an answer", "Re-queued: the AI")) or "needs answers" in reason:
+            return "question"
+        if "blocks automated entry" in reason or "blocked compbot" in reason:
+            return "blocked"
+        return "other"
+    msg = last.message or ""
+    if "blocks automated entry" in reason and last.result not in ("blocked",):
+        return "blocked"
+    if last.result == "captcha":
+        return "captcha"
+    if last.result == "blocked":
+        return "blocked"
+    if last.result == "tc_blocked":
+        return "tc"
+    if last.result == "needs_input":
+        if "profile has no phone" in msg:
+            return "phone"
+        if any(k in msg for k in QUESTION_NOTES_RE):
+            return "question"
+        return "needs_input"
+    if last.result == "failed":
+        return "failed"
+    if last.result == "error":
+        return "error"
+    return "other"
+
+
+def manual_breakdown(s) -> tuple[dict[str, list[int]], dict[int, str]]:
+    """Open manual-queue competitions grouped by why they're there."""
     today = today_local()
-    requeued = reclassified = 0
-    with session_scope() as s:
-        settings = get_settings(s)
-        ai_on = bool(llm.enabled(settings) and settings.get("ai_answers", True))
-        blocked = blocked_domains(s)
-        comps = s.scalars(select(Competition).where(
-            Competition.status == "manual", Competition.method.in_(["web_form", "email"]),
-            or_(Competition.closes_on.is_(None), Competition.closes_on >= today))).all()
-        for c in comps:
-            urls = list(c.entry_urls or [])
-            if c.method == "web_form" and urls and any(ACCOUNT_URL_RE.search(u) for u in urls):
-                c.method, c.status_reason = "account", "Needs you to be signed in to an account on the site"
-                reclassified += 1
-                continue
-            if c.method == "web_form" and not [u for u in urls if not BOT_BLOCKED_URL_RE.search(u)
-                                                and registrable_domain(u) not in blocked]:
-                continue
-            last = s.scalars(select(EntryAttempt).where(EntryAttempt.competition_id == c.id,
+    comps = s.scalars(select(Competition).where(
+        Competition.status == "manual", or_(Competition.closes_on.is_(None), Competition.closes_on >= today))).all()
+    ids = [c.id for c in comps]
+    last: dict[int, EntryAttempt] = {}
+    if ids:
+        for att in s.scalars(select(EntryAttempt).where(EntryAttempt.competition_id.in_(ids),
                                                         EntryAttempt.mode != "dry_run")
-                             .order_by(EntryAttempt.id.desc())).first()
-            if last is None:
-                # Never tried because the post had no answer: the AI can now have a go.
-                if ai_on and c.method == "web_form" and (c.status_reason or "").startswith("Needs an answer"):
-                    c.status, c.failed_attempts, c.last_attempt_at = "queued", 0, None
-                    c.status_reason = "Re-queued: the AI will try to answer the question"
-                    requeued += 1
+                             .order_by(EntryAttempt.id.desc())).all():
+            last.setdefault(att.competition_id, att)
+    groups: dict[str, list[int]] = {k: [] for k in CATEGORY_ORDER}
+    by_id: dict[int, str] = {}
+    for c in comps:
+        cat = manual_category(c, last.get(c.id))
+        groups.setdefault(cat, []).append(c.id)
+        by_id[c.id] = cat
+    return groups, by_id
+
+
+def recommended_categories(settings: dict, profile: dict) -> set[str]:
+    rec = {"failed", "error", "needs_input", "captcha", "other"}
+    if llm.enabled(settings) and settings.get("ai_answers", True):
+        rec.add("question")
+    if profile.get("phone"):
+        rec.add("phone")
+    return rec
+
+
+def requeue_categories(categories: list[str] | set[str]) -> str:
+    """Send manual-queue competitions with the chosen reasons back to the queue."""
+    wanted = {c for c in categories if RETRY_CATEGORIES.get(c, {}).get("retry")}
+    if not wanted:
+        return "Nothing selected to retry"
+    counts: collections.Counter = collections.Counter()
+    with session_scope() as s:
+        _, by_id = manual_breakdown(s)
+        for cid, cat in by_id.items():
+            if cat not in wanted:
                 continue
-            ok = last.result in RETRYABLE_RESULTS or (
-                last.result == "tc_blocked" and CIRCUMVENT_LIMIT_RE.search(last.message or ""))
-            if not ok:
-                continue
-            c.status, c.failed_attempts, c.last_attempt_at = "queued", 0, None
-            c.status_reason = "Re-queued to retry with improved entry handling"
-            requeued += 1
-        msg = f"Re-queued {requeued} competitions for another try" + (
-            f"; {reclassified} marked as needing an account" if reclassified else "")
+            c = s.get(Competition, cid)
+            c.status, c.failed_attempts, c.last_attempt_at, c.needs_review = "queued", 0, None, False
+            c.force_next = cat == "blocked"
+            c.status_reason = f"Re-queued by you ({RETRY_CATEGORIES[cat]['label'].lower()})"
+            counts[cat] += 1
+        total = sum(counts.values())
+        detail = ", ".join(f"{n} {RETRY_CATEGORIES[k]['label'].lower()}" for k, n in counts.most_common())
+        msg = f"Re-queued {total} competition{'s' if total != 1 else ''}" + (f": {detail}" if detail else "")
         log_event(s, "user", msg)
     return msg
+
+
+def requeue_retryable() -> str:
+    """The 'recommended' retry: everything compbot may now manage."""
+    with session_scope() as s:
+        rec = recommended_categories(get_settings(s), get_profile(s))
+    return requeue_categories(rec)
+
 
 def clear_dry_runs(requeue_manual: bool = False) -> str:
     """Delete dry-run attempts + their screenshots and reset competitions that were only ever dry-run."""

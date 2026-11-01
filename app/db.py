@@ -72,6 +72,7 @@ class Competition(Base):
     last_entered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     entered_urls: Mapped[list] = mapped_column(JSON, default=list)
     needs_review: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    force_next: Mapped[bool] = mapped_column(Boolean, default=False)  # you asked to retry: skip block memory once
     entry_count: Mapped[int] = mapped_column(Integer, default=0)
     failed_attempts: Mapped[int] = mapped_column(Integer, default=0)
     won_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

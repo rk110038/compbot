@@ -331,6 +331,7 @@ def competition_action(request: Request, cid: int, action: str = Form(...), note
             c.status, c.failed_attempts = "queued", 0
             c.last_attempt_at = None
             c.needs_review = False
+            c.force_next = True  # an explicit retry tries the site even if it blocked compbot before
             c.status_reason = "Re-queued by you"
             msg = "Re-queued for the next entry run"
         elif action == "manual":
@@ -401,26 +402,44 @@ def manual_requeue(request: Request):
     return back(request, "/manual", jobs.requeue_retryable())
 
 
+@app.post("/manual/retry")
+async def manual_retry(request: Request):
+    form = await request.form()
+    if jobs.is_running("enter"):
+        return back(request, "/manual", "An entry run is in progress - try again when it finishes")
+    if form.get("all"):
+        cats = [k for k, v in jobs.RETRY_CATEGORIES.items() if v["retry"]]
+    else:
+        cats = [str(c) for c in form.getlist("cat")]
+    msg = jobs.requeue_categories(cats)
+    if form.get("run") and not msg.startswith(("Nothing", "Re-queued 0")):
+        jobs.run_in_background("enter")
+        msg += " - entry run started (watch it on the Live page)"
+    return RedirectResponse("/manual?" + urlencode({"msg": msg}), status_code=303)
+
+
 @app.get("/manual", response_class=HTMLResponse)
-def manual_queue(request: Request, method: str = ""):
+def manual_queue(request: Request, method: str = "", reason: str = ""):
     today = jobs.today_local()
     with session_scope() as s:
+        groups, by_id = jobs.manual_breakdown(s)
         stmt = select(Competition).where(Competition.status == "manual",
                                          or_(Competition.closes_on.is_(None), Competition.closes_on >= today))
         if method:
             stmt = stmt.where(Competition.method == method)
+        if reason:
+            stmt = stmt.where(Competition.id.in_(groups.get(reason) or [-1]))
         rows = s.scalars(stmt.order_by(Competition.closes_on.is_(None), Competition.closes_on).limit(300)).all()
-        by_method = s.execute(select(Competition.method, func.count(Competition.id))
-                              .where(Competition.status == "manual",
-                                     or_(Competition.closes_on.is_(None), Competition.closes_on >= today))
-                              .group_by(Competition.method)).all()
+        settings = get_settings(s)
         profile = get_profile(s)
         last_msgs = {}
         for c in rows:
             a = c.attempts[0] if c.attempts else None
             last_msgs[c.id] = a
-    return render(request, "manual.html", rows=rows, by_method=by_method, method=method, profile=profile,
-                  last_msgs=last_msgs)
+    breakdown = [(k, jobs.RETRY_CATEGORIES[k], len(groups.get(k) or [])) for k in jobs.CATEGORY_ORDER]
+    return render(request, "manual.html", rows=rows, method=method, reason=reason, profile=profile,
+                  last_msgs=last_msgs, breakdown=breakdown, by_id=by_id, categories=jobs.RETRY_CATEGORIES,
+                  recommended=jobs.recommended_categories(settings, profile), total=len(by_id))
 
 
 # --------------------------------------------------------------------------- inbox

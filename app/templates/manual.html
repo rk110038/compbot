@@ -2,12 +2,31 @@
 {% from "_macros.html" import badge with context %}
 {% block title %}Manual queue{% endblock %}
 {% block content %}
-<h1>Manual queue <span class="muted small">({{ rows|length }})</span></h1>
-<p class="muted">Competitions compbot can't (or shouldn't) enter for you: CAPTCHAs, T&amp;Cs that ban automated entries, social media, Gleam, accounts or unknown answers. Enter them yourself, then click <b>I've entered it</b> so the inbox checker can match any win.</p>
-<form method="post" action="/manual/requeue-retryable" class="actions" style="margin-bottom:12px" onsubmit="return confirm('Re-queue competitions that failed for fixable reasons (not CAPTCHAs, bot blocks, T&C bans or logins)?');">
-  <button class="btn">↻ Retry the ones compbot may now manage</button>
-  <span class="small muted">Use after updating compbot or adding missing profile details (e.g. phone number).</span>
-</form>
+<h1>Manual queue <span class="muted small">({{ total }})</span></h1>
+<p class="muted">Competitions compbot couldn't (or shouldn't) enter for you. Enter them yourself and click <b>I've entered it</b> so the inbox checker can match any win, or send them back for another automatic try below.</p>
+
+<div class="card" style="margin-bottom:14px">
+  <h2>Retry automatically</h2>
+  <p class="small muted">Pick which reasons to retry. Ticked = recommended now. Retried competitions go back to the queue and are entered on the next run (or straight away with the last button).</p>
+  <form method="post" action="/manual/retry">
+    <table class="small">
+      <tr><th></th><th>Why it's here</th><th>How many</th><th></th></tr>
+      {% for key, cat, n in breakdown if n %}
+      <tr>
+        <td><input type="checkbox" name="cat" value="{{ key }}" {{ 'checked' if key in recommended and n and cat.retry }} {{ 'disabled' if not cat.retry or not n }}></td>
+        <td><b>{{ cat.label }}</b>{% if cat.help %}<div class="muted">{{ cat.help }}</div>{% endif %}{% if not cat.retry %}<div class="muted"><i>Can't be retried automatically.</i></div>{% endif %}</td>
+        <td class="nowrap">{{ n }}</td>
+        <td class="nowrap">{% if n %}<a href="/manual?reason={{ key }}">show</a>{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    <div class="actions" style="margin-top:10px">
+      <button class="btn primary">↻ Retry selected</button>
+      <button class="btn" name="run" value="1">↻ Retry selected and run now</button>
+      <button class="btn" name="all" value="1" onclick="return confirm('Re-queue everything compbot can retry, including CAPTCHA, blocked-site and T&C-banned competitions? Most of those will come straight back here.');">Retry all retryable</button>
+    </div>
+  </form>
+</div>
 
 <div class="card" style="margin-bottom:14px">
   <h2>Your details <span class="small muted">(click to copy)</span></h2>
@@ -18,16 +37,18 @@
 </div>
 
 <div class="tabs">
-  <a href="/manual" class="{{ 'active' if not method }}">All</a>
-  {% for m, n in by_method %}<a href="/manual?method={{ m }}" class="{{ 'active' if method == m }}">{{ m.replace('_', ' ') }} ({{ n }})</a>{% endfor %}
+  <a href="/manual" class="{{ 'active' if not reason and not method }}">All ({{ total }})</a>
+  {% for key, cat, n in breakdown if n %}<a href="/manual?reason={{ key }}" class="{{ 'active' if reason == key }}">{{ cat.label }} ({{ n }})</a>{% endfor %}
 </div>
 
 <div class="grid">
 {% for c in rows %}
   {% set a = last_msgs.get(c.id) %}
+  {% set why = by_id.get(c.id) %}
   <div class="card manual-card">
     <div>
       <div><a href="/competitions/{{ c.id }}"><b>{{ c.prize or c.title }}</b></a> {{ badge(c.method) }}
+        {% if why %}<span class="badge b-manual">{{ categories[why].label }}</span>{% endif %}
         {% for t in c.tags %}<span class="badge">{{ t }}</span>{% endfor %}</div>
       <div class="small muted">Closes {{ c.closes_label }} ({{ c.closes_on | days_left }}) · {{ c.status_reason[:300] }}</div>
       {% if c.answers %}<div style="margin-top:6px">Answer{{ 's' if c.answers|length > 1 }}: {% for ans in c.answers %}<span class="copy" data-copy="{{ ans }}">{{ ans }}</span> {% endfor %}</div>{% endif %}
@@ -39,11 +60,12 @@
       {% if not c.entry_urls and c.other_links %}<a class="btn primary" href="{{ c.other_links[0] }}" target="_blank" rel="noopener noreferrer">Open link ↗</a>{% endif %}
       <a class="btn" href="{{ c.thread_url }}" target="_blank" rel="noopener noreferrer">Thread ↗</a>
       <form class="inline" method="post" action="/competitions/{{ c.id }}/action"><input type="hidden" name="action" value="mark_entered"><button class="btn green">I've entered it</button></form>
+      {% if why and categories[why].retry and c.method in ('web_form', 'email') %}<form class="inline" method="post" action="/competitions/{{ c.id }}/action"><input type="hidden" name="action" value="requeue"><button class="btn" title="Send back to the queue for another automatic try">↻ Retry</button></form>{% endif %}
       <form class="inline" method="post" action="/competitions/{{ c.id }}/action"><input type="hidden" name="action" value="skip"><button class="btn">Skip</button></form>
     </div>
   </div>
 {% else %}
-  <div class="card muted">Nothing in the manual queue. 🎉</div>
+  <div class="card muted">{{ 'Nothing here for this reason.' if reason else 'Nothing in the manual queue. 🎉' }}</div>
 {% endfor %}
 </div>
 {% endblock %}
