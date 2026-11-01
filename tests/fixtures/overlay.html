@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Overlay</title>
+<style>body{font-family:sans-serif;max-width:700px;margin:2rem auto}
+ #promo{position:fixed;left:0;right:0;bottom:0;height:100%;background:rgba(0,0,0,.02);z-index:999}</style></head>
+<body>
+<h1>Win a coffee machine</h1>
+<h2>Enter the competition</h2>
+<div class="klaviyo-form">
+  <input type="email" name="email" placeholder="Email" aria-label="Email">
+  <input name="first_name" placeholder="First name" aria-label="First name">
+  <button type="button" id="go" class="klaviyo-form-button">ENTER COMPETITION</button>
+</div>
+<!-- An invisible marketing layer covering the page swallows real mouse clicks (as on several Shopify shops). -->
+<div id="promo" role="text"></div>
+<script>
+window.__clicks = 0;
+document.getElementById('go').addEventListener('click', () => {
+  window.__clicks++;
+  const em = document.querySelector('[name=email]').value;
+  document.querySelector('.klaviyo-form').innerHTML = em ? '<p>Thanks for signing up! Good luck.</p>' : '<p>Email required</p>';
+});
+</script>
+</body></html>

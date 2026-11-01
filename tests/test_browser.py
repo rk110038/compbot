@@ -106,3 +106,53 @@ def test_isolated_entry_hard_timeout():
     res = enter_isolated("http://10.255.255.1/", Ctx(profile={}), _settings(entry_mode="auto"), "t12", {}, timeout=4)
     assert res.result == "error" and "Timed out" in res.message
     assert time.time() - t0 < 30
+
+
+# --- regressions from the first overnight run (1 Nov 2026) ---------------------------------------------------------
+
+def test_staged_fields_revealed_after_answer(browser, fixture_server, profile):
+    # Northern Life (Fluent Forms): name/email/consent and the submit button appear only after the answer.
+    ctx = Ctx(profile=profile, answers=["2026"], question="What year are the cushions from?", tags=["nl"])
+    res = browser.enter(f"{fixture_server}/staged.html", ctx, _settings(entry_mode="auto"), "r1", {})
+    assert res.result == "entered", (res.message, res.details)
+    assert any("more fields appeared" in s for s in res.details["steps"])
+
+
+def test_submit_covered_by_overlay(browser, fixture_server, profile):
+    res = browser.enter(f"{fixture_server}/overlay.html", Ctx(profile=profile, tags=["nl"]),
+                        _settings(entry_mode="auto"), "r2", {})
+    assert res.result == "entered", (res.message, res.details)
+    assert any("pop-up" in s for s in res.details["steps"])
+
+
+def test_redrawn_form_is_not_resubmitted(browser, fixture_server, profile):
+    # House of Bruar: the same form re-rendered after submitting was treated as "another page" and sent 3 times.
+    res = browser.enter(f"{fixture_server}/redraw.html", Ctx(profile=profile), _settings(entry_mode="auto"), "r3", {})
+    clicks = [s for s in res.details["steps"] if "clicked" in s]
+    assert len(clicks) == 1, res.details["steps"]
+    assert res.result == "failed" and "nothing changed" in res.message
+
+
+def test_consent_gated_embed_form(browser, fixture_server, profile):
+    # Gardeners' World: the entry form is a Riddle embed held back until "Accept and continue" is clicked.
+    res = browser.enter(f"{fixture_server}/embed_consent.html", Ctx(profile=profile), _settings(entry_mode="auto"), "r4", {})
+    assert res.result == "entered", (res.message, res.details)
+    assert any("allowed the embedded entry form" in s for s in res.details["steps"]) or res.details.get("cookies")
+
+
+def test_delayed_error_is_reported_not_unverified(browser, fixture_server, profile):
+    res = browser.enter(f"{fixture_server}/delayed_error.html", Ctx(profile=profile), _settings(entry_mode="auto"), "r5", {})
+    assert res.result == "failed" and "error occurred" in res.message, res.message
+
+
+def test_cookie_handler_never_presses_entry_form_buttons(browser, fixture_server, profile):
+    # A page whose URL contains "consent"/"cookie" must not make the cookie step click the form's "OK" submit.
+    res = browser.enter(f"{fixture_server}/cookie-consent-win.html", Ctx(profile=profile), _settings(entry_mode="dry_run"), "r6", {})
+    assert res.result == "dry_run_ok", res.message
+    assert not res.details.get("cookies")
+
+
+def test_invisible_recaptcha_is_not_a_captcha(browser, fixture_server, profile):
+    # Sainsbury's Magazine, Mailchimp, Heinz...: only an invisible reCAPTCHA badge - no challenge to solve.
+    res = browser.enter(f"{fixture_server}/captcha_invisible.html", Ctx(profile=profile), _settings(entry_mode="auto"), "r7", {})
+    assert res.result == "entered", (res.message, res.details)

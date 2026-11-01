@@ -4,6 +4,10 @@
 {% block content %}
 <h1>Manual queue <span class="muted small">({{ rows|length }})</span></h1>
 <p class="muted">Competitions compbot can't (or shouldn't) enter for you: CAPTCHAs, T&amp;Cs that ban automated entries, social media, Gleam, accounts or unknown answers. Enter them yourself, then click <b>I've entered it</b> so the inbox checker can match any win.</p>
+<form method="post" action="/manual/requeue-retryable" class="actions" style="margin-bottom:12px" onsubmit="return confirm('Re-queue competitions that failed for fixable reasons (not CAPTCHAs, bot blocks, T&C bans or logins)?');">
+  <button class="btn">↻ Retry the ones compbot may now manage</button>
+  <span class="small muted">Use after updating compbot or adding missing profile details (e.g. phone number).</span>
+</form>
 
 <div class="card" style="margin-bottom:14px">
   <h2>Your details <span class="small muted">(click to copy)</span></h2>

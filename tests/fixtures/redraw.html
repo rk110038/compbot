@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Redraw</title></head>
+<body>
+<h1>Win a cashmere bundle</h1>
+<h2>Enter the competition</h2>
+<div id="wrap"></div>
+<script>
+window.__submits = 0;
+function render() {
+  // Re-creates the same form from scratch (new DOM nodes), like some JS frameworks do after a failed request.
+  document.getElementById('wrap').innerHTML = `<form id="f"><label>First name <input name="fname" required></label>
+    <label>Email <input type="email" name="email" required></label><button type="submit">Submit</button></form>`;
+  document.getElementById('f').addEventListener('submit', e => { e.preventDefault(); window.__submits++; render(); });
+}
+render();
+</script>
+</body></html>

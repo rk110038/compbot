@@ -1,6 +1,7 @@
 """Background jobs: discover, enter, check inbox, maintenance. Each job is single-flight (one at a time)."""
 from __future__ import annotations
 
+import collections
 import logging
 import random
 import threading
@@ -108,6 +109,7 @@ def _discover() -> str:
         settings = get_settings(s)
         known = set(s.scalars(select(Competition.source_id)).all())
         last = get_state(s, "mse_last_run")
+        blocked = blocked_domains(s)
     since = mse.default_since(datetime.fromisoformat(last) if last else None, int(settings.get("backfill_days", 14)))
     _progress["discover"] = "Fetching threads from MSE"
     threads = mse.fetch_threads(known, since)
@@ -116,6 +118,9 @@ def _discover() -> str:
     for i, t in enumerate(reversed(threads), 1):  # oldest first so ids increase with time
         _progress["discover"] = f"Analysing {i}/{len(threads)}"
         a = analyse(t["title"], t["body"], settings, today_local())
+        if a.status == "queued" and a.method == "web_form" and a.entry_urls and all(
+                registrable_domain(u) in blocked for u in a.entry_urls):
+            a.status, a.reason = "manual", "This site has blocked compbot's browser before - enter it yourself"
         if use_llm and a.status == "manual" and a.method in ("unknown", "web_form") and not a.answers:
             hint = llm.analyse_post(t["title"], a.text, a.entry_urls + a.other_links)
             if hint:
@@ -186,12 +191,37 @@ def _due_competitions(s, settings: dict, comp_ids: list[int] | None) -> list[Com
     return list(s.scalars(q).all())
 
 
-def _urls_to_try(comp: Competition) -> list[str]:
+def _pending_urls(comp: Competition) -> list[str]:
     urls = list(comp.entry_urls or [])
     if comp.is_daily:
         return urls
     done = set(comp.entered_urls or [])
     return [u for u in urls if u not in done]
+
+
+def _urls_to_try(comp: Competition, blocked: set[str] | None = None) -> list[str]:
+    from .analyse import BOT_BLOCKED_URL_RE
+
+    blocked = blocked or set()
+    return [u for u in _pending_urls(comp) if not BOT_BLOCKED_URL_RE.search(u) and registrable_domain(u) not in blocked]
+
+
+BLOCK_MEMORY_DAYS = 21
+
+
+def blocked_domains(s) -> set[str]:
+    """Sites that refused compbot's browser at least twice recently and never let an entry through."""
+    since = utcnow() - timedelta(days=BLOCK_MEMORY_DAYS)
+    rows = s.execute(select(EntryAttempt.url, EntryAttempt.result).where(
+        EntryAttempt.started_at >= since, EntryAttempt.result.in_(["blocked", "entered", "unverified"]))).all()
+    blocked, ok = collections.Counter(), set()
+    for url, result in rows:
+        d = registrable_domain(url or "")
+        if result == "blocked":
+            blocked[d] += 1
+        else:
+            ok.add(d)
+    return {d for d, n in blocked.items() if n >= 2 and d not in ok and d}
 
 
 def _enter(comp_ids: list[int] | None = None, force: bool = False) -> str:
@@ -207,6 +237,8 @@ def _enter(comp_ids: list[int] | None = None, force: bool = False) -> str:
         done_today = entries_today(s, cfg.tz, settings.get("entry_mode") != "auto")
         comps = _due_competitions(s, settings, comp_ids)
         comp_ids_ordered = [c.id for c in comps]
+        blocked = blocked_domains(s)
+    run_blocks: collections.Counter = collections.Counter()
     budget = max(0, cap - done_today) if not force else max(1, len(comp_ids_ordered) * 6)
     if budget == 0:
         return f"Daily cap reached ({cap})"
@@ -216,9 +248,18 @@ def _enter(comp_ids: list[int] | None = None, force: bool = False) -> str:
             break
         with session_scope() as s:
             comp = s.get(Competition, cid)
-            urls = _urls_to_try(comp) or (list(comp.entry_urls or []) if force else [])
+            pending = _pending_urls(comp)
+            urls = _urls_to_try(comp, blocked) or (list(comp.entry_urls or []) if force else [])
             method = comp.method
             _progress["enter"] = f"{n}/{len(comp_ids_ordered)}: {comp.title[:60]}"
+            if method == "web_form" and pending and not urls:
+                done_some = bool(comp.entered_urls)
+                comp.status = "manual"
+                comp.status_reason = ("Entered on some sites; the rest " if done_some else "This site ") + \
+                    "blocks automated entry - enter it yourself"
+                log_event(s, "entry", f"Skipped (site blocks automated entry): {comp.title[:80]}", "warn", cid)
+                stats["skipped_blocked_site"] = stats.get("skipped_blocked_site", 0) + 1
+                continue
         if method == "email":
             result = _enter_email(cid, settings, profile, force=force)
             stats[result] = stats.get(result, 0) + 1
@@ -232,6 +273,11 @@ def _enter(comp_ids: list[int] | None = None, force: bool = False) -> str:
                 break
             results[url] = _enter_web(cid, url, settings, profile)
             budget -= 1
+            if results[url] == "blocked":
+                d = registrable_domain(url)
+                run_blocks[d] += 1
+                if run_blocks[d] >= 2:
+                    blocked.add(d)
             if len(urls) > 1:
                 time.sleep(random.uniform(3, 8))
         for o in results.values():
@@ -505,6 +551,50 @@ def _click_confirm(url: str) -> str:
 
 
 # --------------------------------------------------------------------------- maintenance
+
+RETRYABLE_RESULTS = {"failed", "needs_input", "error"}
+
+
+def requeue_retryable() -> str:
+    """Give manual-queue competitions that failed for fixable reasons another automatic try.
+
+    Skips anything a site deliberately blocks (bot blocks, CAPTCHAs, T&Cs banning automation, logins).
+    """
+    from .analyse import ACCOUNT_URL_RE, BOT_BLOCKED_URL_RE
+    from .entry.forms import CIRCUMVENT_LIMIT_RE
+
+    today = today_local()
+    requeued = reclassified = 0
+    with session_scope() as s:
+        blocked = blocked_domains(s)
+        comps = s.scalars(select(Competition).where(
+            Competition.status == "manual", Competition.method.in_(["web_form", "email"]),
+            or_(Competition.closes_on.is_(None), Competition.closes_on >= today))).all()
+        for c in comps:
+            urls = list(c.entry_urls or [])
+            if c.method == "web_form" and urls and any(ACCOUNT_URL_RE.search(u) for u in urls):
+                c.method, c.status_reason = "account", "Needs you to be signed in to an account on the site"
+                reclassified += 1
+                continue
+            if c.method == "web_form" and not [u for u in urls if not BOT_BLOCKED_URL_RE.search(u)
+                                                and registrable_domain(u) not in blocked]:
+                continue
+            last = s.scalars(select(EntryAttempt).where(EntryAttempt.competition_id == c.id,
+                                                        EntryAttempt.mode != "dry_run")
+                             .order_by(EntryAttempt.id.desc())).first()
+            if last is None:
+                continue
+            ok = last.result in RETRYABLE_RESULTS or (
+                last.result == "tc_blocked" and CIRCUMVENT_LIMIT_RE.search(last.message or ""))
+            if not ok:
+                continue
+            c.status, c.failed_attempts, c.last_attempt_at = "queued", 0, None
+            c.status_reason = "Re-queued to retry with improved entry handling"
+            requeued += 1
+        msg = f"Re-queued {requeued} competitions for another try" + (
+            f"; {reclassified} marked as needing an account" if reclassified else "")
+        log_event(s, "user", msg)
+    return msg
 
 def clear_dry_runs(requeue_manual: bool = False) -> str:
     """Delete dry-run attempts + their screenshots and reset competitions that were only ever dry-run."""

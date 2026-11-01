@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Invisible reCAPTCHA comp</title></head>
+<body>
+<h1>Win a hamper</h1>
+<h2>Enter the competition</h2>
+<form id="f">
+  <label>Name <input name="name" required></label>
+  <label>Email <input type="email" name="email" required></label>
+  <button type="submit">Enter</button>
+</form>
+<!-- Invisible reCAPTCHA: only a corner badge; scoring happens in the background, no puzzle to solve. -->
+<div style="position:fixed;right:0;bottom:14px;width:256px;height:60px">
+  <iframe title="reCAPTCHA" src="/recaptcha/api2/anchor?ar=1&k=test&size=invisible" width="256" height="60"></iframe>
+</div>
+<iframe title="recaptcha challenge expires in two minutes" src="/recaptcha/api2/bframe?k=test" style="visibility:hidden;position:absolute;top:-10000px" width="400" height="580"></iframe>
+<script>
+document.getElementById('f').addEventListener('submit', e => { e.preventDefault(); document.body.innerHTML = '<p>Thank you for entering!</p>'; });
+</script>
+</body></html>

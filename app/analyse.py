@@ -72,6 +72,15 @@ COMP_URL_HINT = re.compile(r"win|comp|competition|giveaway|prize|enter|draw|prom
 NON_ENTRY_URL_HINT = re.compile(r"terms|conditions|privacy|\bt-?and-?c|tandc|\bt-?cs?\b|/rules\b|policy|cookie", re.I)
 IMAGE_HOSTS = {"ibb.co", "imgur.com", "postimg.cc", "postimages.org", "prnt.sc", "gyazo.com", "imgbb.com",
                "tinypic.com", "photobucket.com", "flickr.com"}
+# The shared magazine competition platform behind most "(MD)" threads (comps.<magazine>/competition/<slug>/<n>.php)
+# refuses automated browsers outright (HTTP 403), so those go straight to the manual queue.
+BOT_BLOCKED_URL_RE = re.compile(r"^https?://(?:comps?|competitions)\.[^/]+/competition/[^/]+/\d+\.php", re.I)
+# Entry needs you to be signed in to an account (radio apps, airline/loyalty clubs, football club profiles...).
+ACCOUNT_URL_RE = re.compile(
+    r"https?://(?:[a-z0-9-]+\.)*(?:globalplayer\.com|smoothradio\.com|capitalfm\.com|capitalxtra\.com|heart\.co\.uk|"
+    r"classicfm\.com|radiox\.co\.uk|lbc\.co\.uk|goldradiouk\.com)/|britishairways\.com/content/the-british-airways-club|"
+    r"//profile\.[^/]+/|marksandspencer\.com/mysparks|itv\.com/win/|/my-?account/|/account/(?:prize|rewards|login)",
+    re.I)
 
 
 def link_kind(url: str) -> str:
@@ -194,6 +203,7 @@ def parse_body(body_html: str) -> dict:
         raw_links.append(a["href"].strip())
     for u in URL_RE.findall(text):
         raw_links.append(u.rstrip(").,;:!…"))
+    raw_links = [re.sub(r"^unsafe:", "", h, flags=re.I) for h in raw_links]
     links = list(dict.fromkeys(raw_links))
 
     emails = []
@@ -361,6 +371,11 @@ def analyse(title: str, body_html: str, settings: dict, today: date | None = Non
         method, status, reason = manual_or_skip("social_handling", "social", "Social media entry")
     elif not entry_urls and kinds["app"]:
         method, status, reason = "account", "manual", "App-only competition"
+    elif entry_urls and any(ACCOUNT_URL_RE.search(u) for u in entry_urls):
+        method, status, reason = "account", "manual", "Needs you to be signed in to an account on the site"
+    elif entry_urls and all(BOT_BLOCKED_URL_RE.search(u) for u in entry_urls):
+        method, status, reason = ("web_form", "manual", "This magazine competition site blocks automated entry - "
+                                  "enter it yourself (one entry per site listed)")
     elif entry_urls:
         method = "web_form"
         if b["needs_help"] or (b["question"] and not b["answers"]):

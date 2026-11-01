@@ -1,0 +1,28 @@
+﻿<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Staged form</title>
+<style>body{font-family:sans-serif;max-width:700px;margin:2rem auto} .hide{display:none} label{display:block;margin-top:.5rem}</style></head>
+<body>
+<h1>Win a festive cushion</h1>
+<h2>Enter This Competition</h2>
+<!-- Like Fluent Forms: later fields and the submit button only appear once the answer is given. -->
+<form id="ff">
+  <label for="a">Your Answer *</label><textarea id="a" name="description" required></textarea>
+  <div id="more" class="hide">
+    <label for="fn">First Name *</label><input id="fn" name="names[first_name]">
+    <label for="ln">Last Name *</label><input id="ln" name="names[last_name]">
+    <label for="em">Email *</label><input id="em" type="email" name="email">
+    <label><input type="checkbox" name="tc"> I agree to the terms and conditions *</label>
+    <button type="submit">Enter Competition</button>
+  </div>
+</form>
+<footer><form id="news"><input name="EMAIL" type="email" placeholder="Email"><button>Submit</button></form></footer>
+<script>
+document.getElementById('a').addEventListener('change', e => { if (e.target.value.trim()) document.getElementById('more').classList.remove('hide'); });
+document.getElementById('news').addEventListener('submit', e => { e.preventDefault(); document.body.innerHTML = '<p>WRONG FORM</p>'; });
+document.getElementById('ff').addEventListener('submit', e => {
+  e.preventDefault(); const f = e.target;
+  if (f.description.value !== '2026' || !f['names[first_name]'].value || !f.email.value || !f.tc.checked) { f.insertAdjacentHTML('beforeend', '<p>Please complete all fields</p>'); return; }
+  document.body.innerHTML = '<h2>Thank you for entering!</h2>';
+});
+</script>
+</body></html>

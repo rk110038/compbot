@@ -5,7 +5,8 @@
 <form>
   <label>Name <input name="name" required></label>
   <label>Email <input type="email" name="email" required></label>
-  <div class="g-recaptcha" data-sitekey="test" style="width:304px;height:78px;border:1px solid #ccc">I'm not a robot</div>
+  <!-- A visible "I'm not a robot" checkbox (the path mimics Google's anchor frame). -->
+  <iframe title="reCAPTCHA" src="/recaptcha/api2/anchor?ar=1&k=test&size=normal" width="304" height="78"></iframe>
   <button type="submit">Enter</button>
 </form>
 </body></html>

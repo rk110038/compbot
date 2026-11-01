@@ -96,9 +96,30 @@ JS_EXTRACT = "(prefix) => {\n" + JS_HELPERS + r"""
         const key = el.name || idx;
         if (!groups[key]) {
           let gl = '';
-          const fs = el.closest('fieldset'); if (fs) { const lg = fs.querySelector('legend'); if (lg) gl = txt(lg); }
           const rg = el.closest('[role=radiogroup]');
-          if (!gl && rg) { gl = rg.getAttribute('aria-label') || ''; const lb = rg.getAttribute('aria-labelledby'); if (!gl && lb) gl = txt(document.getElementById(lb)); }
+          if (rg) { gl = rg.getAttribute('aria-label') || ''; const lb = rg.getAttribute('aria-labelledby'); if (!gl && lb) gl = txt(document.getElementById(lb)); }
+          if (!gl) {
+            // The smallest container holding just this group: use its own question label, not an option label.
+            const isOptionLabel = l => l.querySelector('input') || (l.htmlFor && (document.getElementById(l.htmlFor) || {}).type === 'radio') || (l.closest('label') && l.closest('label').querySelector('input[type=radio]'));
+            let n = el.parentElement;
+            for (let i = 0; i < 6 && n; i++) {
+              const rs = Array.from(n.querySelectorAll('input[type=radio]'));
+              if (rs.length > 1 && rs.every(r => r.name === el.name)) {
+                const lab = Array.from(n.querySelectorAll('legend, label, [class*=label i]')).find(l => !isOptionLabel(l) && !l.querySelector('input[type=radio]') && txt(l));
+                if (lab) { gl = txt(lab); break; }
+                let prev = n.previousElementSibling;
+                if (prev && txt(prev) && txt(prev).length < 300 && !prev.querySelector('input,select,textarea')) { gl = txt(prev); break; }
+              }
+              if (n.querySelectorAll('input[type=radio]').length && Array.from(n.querySelectorAll('input[type=radio]')).some(r => r.name !== el.name)) break;
+              n = n.parentElement;
+            }
+          }
+          if (!gl) {
+            const fs = el.closest('fieldset');
+            if (fs && Array.from(fs.querySelectorAll('input')).every(r => r.type === 'radio' && r.name === el.name)) {
+              const lg = fs.querySelector('legend'); if (lg) gl = txt(lg);
+            }
+          }
           if (!gl) {
             let n = el.parentElement;
             for (let i = 0; i < 6 && n; i++) {
@@ -146,7 +167,7 @@ JS_EXTRACT = "(prefix) => {\n" + JS_HELPERS + r"""
     out.push({isForm: root.tagName === 'FORM', fields, hasPassword: !!root.querySelector('input[type=password]'),
       submitTexts: btns.map(b => (txt(b) || b.value || b.getAttribute('aria-label') || '').slice(0, 60)),
       text: txt(root).slice(0, 1500), heading, meta,
-      inFooter: root !== document.body && !!root.closest('footer, [class*=footer i], [id*=footer i]')});
+      inFooter: root !== document.body && !!root.closest('footer, [role=contentinfo], #footer, .footer, [id*=site-footer i], [class*=site-footer i], [class*=page-footer i], [id*=page-footer i]')});
   }
   return out;
 }
@@ -197,8 +218,9 @@ JS_VALIDITY = r"""
 (idx) => {
   const el = document.querySelector(`[data-cb-idx="${idx}"]`);
   const form = el && el.form;
-  if (!form) return [];
+  if (!form || form.noValidate) return [];  // the site validates itself
   return Array.from(form.elements).filter(e => e.willValidate && !e.checkValidity())
+    .filter(e => !(e.validity.patternMismatch && e.getAttribute('pattern') === '' && !e.validity.valueMissing))
     .map(e => ((e.labels && e.labels[0] ? e.labels[0].innerText : '') || e.name || e.id || e.type).trim().slice(0, 80));
 }
 """
@@ -208,16 +230,20 @@ JS_COOKIES = "() => {\n" + JS_HELPERS + r"""
   const ids = ['onetrust-reject-all-handler', 'onetrust-accept-btn-handler', 'CybotCookiebotDialogBodyButtonDecline',
     'CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll', 'didomi-notice-disagree-button', 'didomi-notice-agree-button',
     'truste-consent-required', 'truste-consent-button', 'cookie-reject', 'cookie-accept'];
-  for (const id of ids) { const b = document.getElementById(id); if (b && vis(b)) { b.click(); return id; } }
+  const mark = b => { document.querySelectorAll('[data-cb-cookie]').forEach(e => e.removeAttribute('data-cb-cookie')); b.setAttribute('data-cb-cookie', '1'); };
+  for (const id of ids) { const b = document.getElementById(id); if (b && vis(b)) { mark(b); return id; } }
   const reject = /^(reject all|reject|reject all cookies|decline|decline all|necessary only|only necessary|essential only|use necessary cookies only|refuse all|deny|disagree|continue without accepting)$/i;
-  const accept = /^(accept all|accept|accept all cookies|accept cookies|i accept|agree|i agree|allow all|allow all cookies|allow cookies|got it|ok|okay|agree and close|accept & close|accept and close|yes,? i'?m happy)$/i;
+  const accept = /^(accept all|accept|accept all cookies|accept cookies|i accept|agree|i agree|allow all|allow all cookies|allow cookies|got it|ok|okay|agree and close|accept & close|accept and close|yes,? i'?m happy|i understand|understood|ok,? got it|that'?s fine|accept (and|&) continue|accept all (and|&) continue|agree (and|&) continue)$/i;
   const banner = '[id*=cookie i],[class*=cookie i],[id*=consent i],[class*=consent i],[id*=gdpr i],[class*=gdpr i],[class*=cmp i],[id*=cmp i],[aria-label*=cookie i],[aria-label*=consent i],[id*=privacy i],[class*=privacy i],[role=dialog],[aria-modal=true]';
-  const framey = /sp_message|consent|cookie|privacy-mgmt|cmp/i.test(location.href);
-  const btns = Array.from(document.querySelectorAll('button, [role=button], a, input[type=button]')).filter(vis);
+  // Only a consent-manager *iframe* counts as "all of this frame is the banner" - never the competition page itself.
+  const framey = window !== window.top && /sp_message|consent|cookie|privacy-mgmt|cmp/i.test(location.href);
+  // Never press a button belonging to a real form (one with text/email fields): that could submit an entry.
+  const inEntryForm = b => { const f = b.closest('form'); return !!(f && f.querySelector('input[type=text],input[type=email],input:not([type]),textarea')); };
+  const btns = Array.from(document.querySelectorAll('button, [role=button], a, input[type=button]')).filter(b => vis(b) && !inEntryForm(b));
   for (const re of [reject, accept]) {
     for (const b of btns) {
       const t = (b.innerText || b.value || '').replace(/\s+/g, ' ').trim();
-      if (re.test(t) && (framey || b.closest(banner))) { b.click(); return t; }
+      if (re.test(t) && (framey || b.closest(banner))) { mark(b); return t; }
     }
   }
   return null;
@@ -226,15 +252,29 @@ JS_COOKIES = "() => {\n" + JS_HELPERS + r"""
 
 JS_CAPTCHA = r"""
 () => {
-  const sels = ['iframe[src*="recaptcha/api2/anchor"]', 'iframe[src*="recaptcha/enterprise/anchor"]',
-    'iframe[src*="recaptcha/api2/bframe"]', 'iframe[src*="hcaptcha.com"]', 'iframe[src*="challenges.cloudflare.com"]',
-    '.g-recaptcha:not([data-size="invisible"])', '.h-captcha', '.cf-turnstile', 'iframe[title*="captcha" i]',
-    '#px-captcha', '.frc-captcha', '[data-sitekey]:not([data-size="invisible"])', '#captcha', '.captcha'];
-  for (const s of sels) {
-    for (const el of document.querySelectorAll(s)) {
-      const r = el.getBoundingClientRect(), st = getComputedStyle(el);
-      if (r.width > 30 && r.height > 30 && st.visibility !== 'hidden' && st.display !== 'none') return s;
+  // Only *interactive* challenges count. Invisible reCAPTCHA/hCaptcha just score the visit in the background (the
+  // site decides); if they escalate to a real challenge that shows up here and compbot stops.
+  const shown = el => {
+    const r = el.getBoundingClientRect(), st = getComputedStyle(el);
+    if (r.width < 30 || r.height < 30 || st.visibility === 'hidden' || st.display === 'none' || parseFloat(st.opacity || '1') < 0.1) return false;
+    if (r.bottom < 0 || r.right < 0) return false;
+    for (let p = el.parentElement; p; p = p.parentElement) {
+      const ps = getComputedStyle(p);
+      if (ps.visibility === 'hidden' || ps.display === 'none' || parseFloat(ps.opacity || '1') < 0.1) return false;
     }
+    return true;
+  };
+  for (const f of document.querySelectorAll('iframe')) {
+    const s = f.src || '';
+    if (/recaptcha\/(api2|enterprise)\/anchor/.test(s) && !/size=invisible/.test(s) && shown(f)) return 'reCAPTCHA checkbox';
+    if (/recaptcha\/(api2|enterprise)\/bframe/.test(s) && shown(f)) return 'reCAPTCHA challenge';
+    if (/hcaptcha\.com/.test(s) && !/invisible/.test(s) && shown(f)) return 'hCaptcha';
+    if (/challenges\.cloudflare\.com/.test(s) && shown(f)) return 'Cloudflare Turnstile';
+    if (/captcha/i.test(f.title || '') && !/invisible|recaptcha|hcaptcha/i.test(s + ' ' + f.title) && shown(f)) return 'CAPTCHA';
+  }
+  for (const sel of ['.h-captcha:not([data-size="invisible"])', '.cf-turnstile', '#px-captcha', '.frc-captcha',
+                     'input[name*="captcha" i]:not([type=hidden])', '#captcha', '.captcha']) {
+    for (const el of document.querySelectorAll(sel)) if (shown(el)) return sel;
   }
   const head = (document.title + ' ' + (document.body ? document.body.innerText.slice(0, 600) : '')).toLowerCase();
   if (/just a moment|verify you are human|checking your browser|are you a robot|attention required|access denied|request blocked|unusual traffic|verification failed|403 forbidden|pardon our interruption/.test(head)) return 'challenge-page';
@@ -263,13 +303,79 @@ JS_REVEAL = "(linksOnly) => {\n" + JS_HELPERS + r"""
 }
 """
 
+# A third-party embed (e.g. a Riddle entry form) held back until the visitor allows that specific content.
+JS_EMBED_CONSENT = "() => {\n" + JS_HELPERS + r"""
+  const vis = __cbVis, txt = __cbTxt;
+  const ph = /want to see this content|content (is )?(provided|hosted|supplied) by|this content is (blocked|hidden|not available)|to (view|see|load|display) this content|enable (third[- ]party )?(cookies|content)|requires your consent|consent to (load|display|show)/i;
+  const btn = /^(accept( and| &) continue|accept|allow|allow (and|&) continue|allow content|show content|load content|enable|enable content|i agree|agree)$/i;
+  for (const el of document.querySelectorAll('div, section, aside, figure, p')) {
+    if (!vis(el)) continue;
+    const t = txt(el);
+    if (t.length > 700 || !ph.test(t)) continue;
+    let host = el;
+    for (let i = 0; i < 4 && host; i++) {
+      const b = Array.from(host.querySelectorAll('button, a, [role=button]')).find(x => vis(x) && btn.test(txt(x)));
+      if (b) { b.scrollIntoView({block: 'center'}); document.querySelectorAll('[data-cb-cookie]').forEach(e => e.removeAttribute('data-cb-cookie')); b.setAttribute('data-cb-cookie', '1'); return txt(b); }
+      host = host.parentElement;
+    }
+  }
+  return null;
+}
+"""
+
+# Close marketing pop-ups / sticky bars that sit on top of the submit button (but never the form's own dialog).
+JS_CLOSE_POPUPS = "() => {\n" + JS_HELPERS + r"""
+  const vis = __cbVis, txt = __cbTxt;
+  const sub = document.querySelector('[data-cb-submit="1"]');
+  const hostOf = b => b.closest('[role=dialog], [aria-modal=true], [class*=modal i], [class*=popup i], [class*=klaviyo i], [class*=overlay i], form') || b.parentElement;
+  const safe = b => { const h = hostOf(b); return !(sub && h && h.contains(sub)); };
+  let n = 0;
+  const sels = ['[aria-label*="close" i]', '[title*="close" i]', '.klaviyo-close-form', 'button.close', '.close-button',
+                '.modal-close', '[class*="close-btn" i]', '[class*="closebutton" i]', '[data-testid*="close" i]'];
+  for (const s of sels) for (const b of document.querySelectorAll(s)) { if (vis(b) && safe(b)) { try { b.click(); n++; } catch (e) {} } }
+  const words = /^(no thanks|no,? thanks|not now|maybe later|close|dismiss|Ã—|âœ•|x)$/i;
+  for (const b of document.querySelectorAll('button, a, [role=button]')) {
+    if (vis(b) && safe(b) && words.test(txt(b))) { try { b.click(); n++; } catch (e) {} }
+  }
+  return n;
+}
+"""
+
+# Last resort when a covering element swallows real clicks: activate the button directly (as its own script would).
+JS_CLICK_MARKED = r"""
+() => {
+  const b = document.querySelector('[data-cb-submit="1"]');
+  if (!b) return false;
+  if (b.form && (b.type || '').toLowerCase() === 'submit' && b.form.requestSubmit) {
+    try { b.form.requestSubmit(b); return true; } catch (e) {}
+  }
+  b.click();
+  return true;
+}
+"""
+
+# Leave the last-filled field so forms that react on "change"/"blur" (conditional fields) update.
+JS_BLUR = "() => { const a = document.activeElement; if (a && a !== document.body && a.blur) a.blur(); return true; }"
+
+# Load lazy iframes now (an entry form is often a lazily-loaded embed further down the page).
+JS_PRIME_IFRAMES = r"""
+() => {
+  const fs = Array.from(document.querySelectorAll('iframe'));
+  for (const f of fs) { try { if (f.loading === 'lazy') f.loading = 'eager'; } catch (e) {} }
+  for (const f of fs) { try { f.scrollIntoView({block: 'center'}); } catch (e) {} }
+  window.scrollTo(0, 0);
+  return fs.length;
+}
+"""
+
 SUCCESS_RE = re.compile(
     r"thank(?:s| you)\b.{0,40}\b(?:enter|entry|entering|taking part|submitting|submission|signing up|subscrib|"
-    r"registering|participat)|(?:entry|submission|details) (?:has been |have been |was )?(?:received|submitted|"
-    r"confirmed|successful|complete)|you(?:'re| are| have been) (?:now )?(?:entered|in the (?:prize )?draw|"
-    r"successfully)|successfully (?:entered|submitted|subscribed|registered|signed up)|good luck|check your "
-    r"(?:e-?mail|inbox)|we(?:'ve| have) received your|confirmation e-?mail|you(?:'re| are) in\b|almost there|"
-    r"nearly there|please confirm your|thanks for signing up|thank you for subscribing|thank you!?$", re.I | re.M)
+    r"registering|participat|joining)|(?:entry|submission|details) (?:has been |have been |was )?(?:received|"
+    r"submitted|confirmed|successful|complete)|you(?:'re| are| have been) (?:now )?(?:entered|in the (?:prize )?draw|"
+    r"successfully|subscribed|on the list)|successfully (?:entered|submitted|subscribed|registered|signed up)|good luck|"
+    r"check your (?:e-?mail|inbox)|we(?:'ve| have) (?:received|got) your|confirmation e-?mail|you(?:'re| are) in\b|"
+    r"almost there|nearly there|almost finished|please confirm your|thanks for signing up|thank you for subscribing|"
+    r"welcome to the (?:club|list|family|community)|subscription (?:is )?confirmed|thank you!?$", re.I | re.M)
 ALREADY_RE = re.compile(
     r"already (?:been )?entered|already (?:subscribed|registered|signed up|a subscriber)|only (?:one|1) entry|you "
     r"have already|duplicate entry|already taken part|already on (?:our|the) list", re.I)
@@ -312,14 +418,27 @@ def _page_text(page) -> str:
     return "\n".join(parts)
 
 
+def _click_marked(frame, attr: str = "data-cb-cookie") -> bool:
+    """Click the element our page script marked, with a real (trusted) click; fall back to a script click."""
+    loc = frame.locator(f'[{attr}="1"]').first
+    try:
+        loc.click(timeout=4000)
+        return True
+    except Exception:  # noqa: BLE001
+        return bool(_safe_eval(frame, f"() => {{ const b = document.querySelector('[{attr}=\"1\"]'); "
+                                      f"if (b) {{ b.click(); return true; }} return false; }}", default=False))
+
+
 def dismiss_cookies(page) -> list[str]:
     clicked = []
     for _ in range(2):
+        found = False
         for fr in _all_frames(page):
             r = _safe_eval(fr, JS_COOKIES)
-            if r:
+            if r and _click_marked(fr):
                 clicked.append(str(r))
-        if clicked:
+                found = True
+        if found:
             time.sleep(1.2)
         else:
             break
@@ -340,6 +459,10 @@ ENTRY_HEADING_RE = re.compile(
 NEWSLETTER_RE = re.compile(
     r"newsletter|subscribe|mailing ?list|sign up (?:for|to) (?:our|the)|straight to your inbox|latest .{0,40}inbox|"
     r"klaviyo|mailchimp|mc-embedded", re.I)
+CONSENT_FORM_RE = re.compile(
+    r"cookie|consent|gdpr|onetrust|didomi|cookiebot|sp_message|privacy[- _]?(?:settings|preferences|centre|center|"
+    r"manager)|manage (?:your )?(?:preferences|consent)", re.I)
+CONSENT_TEXT_RE = re.compile(r"\s*(?:we (?:use|value)|this (?:site|website) uses) (?:cookies|your privacy)", re.I)
 
 
 def _score_container(c: dict, ctx: Ctx | None = None) -> float:
@@ -368,7 +491,11 @@ def _score_container(c: dict, ctx: Ctx | None = None) -> float:
     if newsletterish:
         s -= 1 if (ctx and ctx.is_newsletter) else 6
     if c.get("inFooter"):
-        s -= 6
+        # For newsletter competitions the footer sign-up is often the entry itself.
+        s -= 2 if (ctx and ctx.is_newsletter and newsletterish) else 6
+    if CONSENT_FORM_RE.search(c.get("meta", "") + " " + c.get("heading", "")) or CONSENT_TEXT_RE.match(
+            c.get("text", "")[:200]):
+        s -= 50  # cookie / privacy-preference dialogs are never the entry form
     if len(fields) == 1 and re.search(r"search|^q$", fields[0].get("name", "") + " " + fields[0].get("type", ""), re.I):
         s -= 25
     if not c.get("isForm"):
@@ -385,6 +512,99 @@ def find_best_form(page, ctx: Ctx | None = None, gen: int = 0) -> tuple[object, 
             if best is None or sc > best[2]:
                 best = (fr, c, sc)
     return best
+
+
+def _refresh_container(frame, done_idx: set[str], prefix: str) -> dict | None:
+    """Re-read the form we're filling (same frame) to pick up fields revealed by earlier answers."""
+    for c in _safe_eval(frame, JS_EXTRACT, prefix, default=[]) or []:
+        ids = {f["idx"] for f in c.get("fields", [])}
+        ids |= {o.get("idx") for f in c.get("fields", []) for o in (f.get("options") or []) if o.get("idx")}
+        if ids & done_idx:
+            return c
+    return None
+
+
+def _form_sig(container: dict) -> frozenset:
+    return frozenset((f.get("type", ""), (f.get("name") or f.get("label") or f.get("placeholder") or "").strip().lower())
+                     for f in container.get("fields", []))
+
+
+def _same_form(a: frozenset, b: frozenset) -> bool:
+    if not a or not b:
+        return False
+    return len(a & b) / min(len(a), len(b)) >= 0.6
+
+
+def _click_submit(page, frame) -> str:
+    """Click the marked submit button; cope with pop-ups/sticky bars covering it. Returns how it was pressed."""
+    loc = frame.locator('[data-cb-submit="1"]').first
+    try:
+        if loc.is_disabled(timeout=2000):
+            time.sleep(2.5)
+            if loc.is_disabled(timeout=2000):
+                return "failed: the submit button stayed disabled (a required field probably wasn't recognised)"
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        loc.click(timeout=6000)
+        return "click"
+    except Exception as exc:  # noqa: BLE001
+        first_error = str(exc).splitlines()[0][:200]
+    try:
+        page.keyboard.press("Escape")
+    except Exception:  # noqa: BLE001
+        pass
+    for fr in _all_frames(page):
+        _safe_eval(fr, JS_CLOSE_POPUPS)
+    time.sleep(0.8)
+    try:
+        loc.click(timeout=4000)
+        return "clicked after closing a pop-up"
+    except Exception:  # noqa: BLE001
+        pass
+    if _safe_eval(frame, JS_CLICK_MARKED, default=False):
+        return "pressed directly (the button was covered by a pop-up)"
+    return f"failed: {first_error}"
+
+
+def reveal_consented_embed(page) -> str | None:
+    """If the entry form is a third-party embed waiting for consent ("Want to see this content?"), allow it."""
+    for fr in _all_frames(page):
+        label = _safe_eval(fr, JS_EMBED_CONSENT)
+        if label and _click_marked(fr):
+            time.sleep(2)
+            _wait_settle(page, 8000)
+            prime_iframes(page)
+            return label
+    return None
+
+
+def prime_iframes(page) -> None:
+    """Make lazily-loaded iframes load now, then give them a moment, so their forms can be found."""
+    n = _safe_eval(page.main_frame, JS_PRIME_IFRAMES, default=0) or 0
+    if not n:
+        return
+    deadline = time.time() + 6
+    while time.time() < deadline and any(not f.url for f in page.frames if not f.is_detached()):
+        time.sleep(0.5)
+    _wait_settle(page, 5000)
+
+
+def scroll_through(page) -> None:
+    """Scroll down the page like a reader would, so content that loads on view (embeds, forms) appears."""
+    try:
+        height = page.evaluate("() => document.body ? document.body.scrollHeight : 0") or 0
+        y = 0
+        while y < min(height, 30000):
+            y += 900
+            page.mouse.wheel(0, 900)
+            time.sleep(0.25)
+        time.sleep(1.5)
+        page.evaluate("() => window.scrollTo(0, 0)")
+    except Exception:  # noqa: BLE001
+        pass
+    _wait_settle(page, 5000)
+    prime_iframes(page)
 
 
 def fetch_terms_text(page) -> str:
@@ -537,6 +757,7 @@ class Browser:
                 return res
             _wait_settle(page)
             details["cookies"] = dismiss_cookies(page)
+            prime_iframes(page)
             res.final_url = page.url
 
             cap = detect_captcha(page)
@@ -552,6 +773,25 @@ class Browser:
                 return res
 
             best = best_form()
+            if not best or best[2] < 4:
+                # Consent managers often appear late; answering them can be what loads the entry form.
+                late = dismiss_cookies(page)
+                if late:
+                    details["cookies"] = list(details.get("cookies") or []) + late
+                    prime_iframes(page)
+                    best = best_form()
+            if not best or best[2] < 4:
+                allowed = reveal_consented_embed(page)
+                if allowed:
+                    details["steps"].append(f"allowed the embedded entry form ('{allowed}')")
+                    if dismiss_cookies(page):
+                        prime_iframes(page)
+                    best = best_form()
+            if not best or best[2] < 4:
+                scroll_through(page)
+                best = best_form()
+                if best and best[2] >= 4:
+                    details["steps"].append("form appeared after scrolling the page")
             if not best or best[2] < 4:
                 # Click an "Enter now"-style reveal. Never a submit button; in dry-run only plain links.
                 for fr in _all_frames(page):
@@ -591,48 +831,70 @@ class Browser:
                 return res
 
             done_idx: set[str] = set()
+            submitted_sigs: list[frozenset] = []
             for step in range(1, 4):
                 frame, container, score = best
-                fields = [f for f in _to_fields(container) if f.idx not in done_idx]
-                plan = plan_form(fields, ctx)
-                unknown = [(f, a) for f, a in plan if a.kind == "unknown"]
-                if unknown and llm.enabled() and settings.get("llm_for_forms", True):
-                    payload = [{"id": f.idx, "type": f.type if f.tag != "radio" else "radio", "label": f.human_label,
-                                "required": f.required, "context": f.context[:200],
-                                "options": [o.get("text") for o in f.options][:40]} for f, _ in unknown]
-                    suggestions = llm.map_fields(payload, comp_context, PROFILE_KEYS)
-                    new_plan = []
-                    for f, a in plan:
-                        if a.kind == "unknown" and f.idx in suggestions:
-                            a = apply_llm_action(f, suggestions[f.idx], ctx)
-                        new_plan.append((f, a))
-                    plan = new_plan
+                plan_all: list = []
+                # Fill in rounds: many forms only reveal later fields (or the submit button) once earlier ones are set.
+                for _round in range(4):
+                    fields = [f for f in _to_fields(container) if f.idx not in done_idx]
+                    if not fields:
+                        break
+                    plan = plan_form(fields, ctx)
                     unknown = [(f, a) for f, a in plan if a.kind == "unknown"]
-                if unknown:
-                    res.result = "needs_input"
-                    res.message = "Couldn't fill: " + "; ".join(f"{f.human_label} ({a.note})" for f, a in unknown)[:900]
-                    details["fields"] += [{"label": f.human_label, "action": a.kind, "source": a.source,
-                                           "note": a.note} for f, a in plan]
-                    res.screenshot_before = _shot(page, cfg.screenshot_dir / f"{shot_prefix}_needsinput.jpg")
-                    return res
+                    if unknown and llm.enabled() and settings.get("llm_for_forms", True):
+                        payload = [{"id": f.idx, "type": f.type if f.tag != "radio" else "radio",
+                                    "label": f.human_label, "required": f.required, "context": f.context[:200],
+                                    "options": [o.get("text") for o in f.options][:40]}
+                                   for f, a in unknown if not a.note.startswith("captcha")]
+                        suggestions = llm.map_fields(payload, comp_context, PROFILE_KEYS) if payload else {}
+                        new_plan = []
+                        for f, a in plan:
+                            if a.kind == "unknown" and f.idx in suggestions:
+                                a = apply_llm_action(f, suggestions[f.idx], ctx)
+                            new_plan.append((f, a))
+                        plan = new_plan
+                        unknown = [(f, a) for f, a in plan if a.kind == "unknown"]
+                    if any(a.note.startswith("captcha") for _, a in unknown):
+                        res.result, res.message = "captcha", "Anti-spam check on the form (e.g. a sum) - enter manually"
+                        res.screenshot_before = _shot(page, cfg.screenshot_dir / f"{shot_prefix}_captcha.jpg")
+                        return res
+                    if unknown:
+                        res.result = "needs_input"
+                        res.message = "Couldn't fill: " + "; ".join(
+                            f"{f.human_label} ({a.note})" for f, a in unknown)[:900]
+                        details["fields"] += [{"label": f.human_label, "action": a.kind, "source": a.source,
+                                               "note": a.note} for f, a in plan]
+                        res.screenshot_before = _shot(page, cfg.screenshot_dir / f"{shot_prefix}_needsinput.jpg")
+                        return res
+                    failed = []
+                    for f, a in plan:
+                        done_idx.add(f.idx)
+                        if a.kind == "skip":
+                            continue
+                        ok = _apply(frame, f, a)
+                        details["fields"].append({"label": f.human_label, "action": a.kind, "source": a.source,
+                                                  "note": a.note, "ok": ok,
+                                                  "value": a.value if a.source in ("answer", "llm", "email",
+                                                                                   "email_confirm") else None})
+                        if not ok and (f.required or a.source == "answer"):
+                            failed.append(f.human_label)
+                    if failed:
+                        res.result, res.message = "failed", "Couldn't set: " + ", ".join(failed)
+                        res.screenshot_before = _shot(page, cfg.screenshot_dir / f"{shot_prefix}_fillfail.jpg")
+                        return res
+                    plan_all += plan
+                    _safe_eval(frame, JS_BLUR)
+                    time.sleep(0.8)
+                    gen[0] += 1
+                    refreshed = _refresh_container(frame, done_idx, f"g{gen[0]}r_")
+                    if refreshed is None:
+                        break
+                    container = refreshed
+                    if _round:
+                        details["steps"].append(f"step {step}: more fields appeared after filling")
 
-                failed = []
-                for f, a in plan:
-                    if a.kind == "skip":
-                        continue
-                    ok = _apply(frame, f, a)
-                    details["fields"].append({"label": f.human_label, "action": a.kind, "source": a.source,
-                                              "note": a.note, "ok": ok,
-                                              "value": a.value if a.source in ("answer", "llm", "email", "email_confirm") else None})
-                    if not ok and (f.required or a.source == "answer"):
-                        failed.append(f.human_label)
-                    done_idx.add(f.idx)
-                if failed:
-                    res.result, res.message = "failed", "Couldn't set: " + ", ".join(failed)
-                    res.screenshot_before = _shot(page, cfg.screenshot_dir / f"{shot_prefix}_fillfail.jpg")
-                    return res
-
-                sample_idx = fields[0].idx if fields else None
+                sample_idx = next(iter(done_idx), None)
                 invalid = _safe_eval(frame, JS_VALIDITY, sample_idx, default=[]) if sample_idx else []
                 if invalid:
                     res.result, res.message = "needs_input", "Form still invalid: " + ", ".join(invalid)[:500]
@@ -642,30 +904,40 @@ class Browser:
                 res.screenshot_before = _shot(page, cfg.screenshot_dir / f"{shot_prefix}_s{step}_before.jpg")
                 if dry_run:
                     res.result = "dry_run_ok"
-                    res.message = f"Dry run: filled {sum(1 for _, a in plan if a.kind != 'skip')} fields; not submitted"
+                    res.message = f"Dry run: filled {sum(1 for _, a in plan_all if a.kind != 'skip')} fields; not submitted"
                     return res
 
                 submit_label = _safe_eval(frame, JS_MARK_SUBMIT, sample_idx) if sample_idx else None
                 if not submit_label:
                     res.result, res.message = "failed", "Couldn't find the submit button"
+                    res.screenshot_before = _shot(page, cfg.screenshot_dir / f"{shot_prefix}_nosubmit.jpg")
                     return res
                 before_text = set(_page_text(page).splitlines())
                 before_url = page.url
+                submitted_sigs.append(_form_sig(container))
                 details["steps"].append(f"step {step}: clicked '{submit_label}'")
                 n_pages = len(context.pages)
-                try:
-                    frame.locator('[data-cb-submit="1"]').first.click(timeout=8000)
-                except Exception as exc:  # noqa: BLE001
-                    res.result, res.message = "failed", f"Submit click failed: {exc}"[:500]
+                how = _click_submit(page, frame)
+                if how.startswith("failed"):
+                    res.result, res.message = "failed", f"Submit click failed: {how[7:]}"[:500]
                     return res
+                if how != "click":
+                    details["steps"].append(f"step {step}: submit {how}")
                 time.sleep(2)
                 if len(context.pages) > n_pages:
                     page = context.pages[-1]
                 _wait_settle(page, 12000)
                 time.sleep(1.5)
+
+                def read_outcome():
+                    after = _page_text(page)
+                    return "\n".join(ln for ln in after.splitlines() if ln not in before_text)
+
+                new_text = read_outcome()
+                if not (SUCCESS_RE.search(new_text) or ALREADY_RE.search(new_text) or ERROR_RE.search(new_text)):
+                    time.sleep(3.5)  # many forms show their result a moment after the request finishes
+                    new_text = read_outcome()
                 res.final_url = page.url
-                after_text = _page_text(page)
-                new_text = "\n".join(ln for ln in after_text.splitlines() if ln not in before_text)
                 res.screenshot_after = _shot(page, cfg.screenshot_dir / f"{shot_prefix}_s{step}_after.jpg")
 
                 if detect_captcha(page):
@@ -680,8 +952,10 @@ class Browser:
                     return res
                 err = ERROR_RE.search(new_text)
                 nxt = best_form()
+                nsig = _form_sig(nxt[1]) if nxt else frozenset()
+                same_form = bool(nxt) and any(_same_form(nsig, s) for s in submitted_sigs)
                 new_fields = [f for f in (nxt[1]["fields"] if nxt else []) if f["idx"] not in done_idx]
-                if new_fields and nxt[2] >= 4 and not err:
+                if new_fields and nxt[2] >= 4 and not err and not same_form:
                     clause = clause_check()
                     if clause:
                         res.result = "tc_blocked"
@@ -697,8 +971,7 @@ class Browser:
                     snippet = new_text[max(0, err.start() - 60): err.end() + 80].replace("\n", " ")
                     res.result, res.message = "failed", f"Form reported a problem: \u201c{snippet.strip()}\u201d"
                     return res
-                still_there = nxt and any(f["idx"] in done_idx for f in nxt[1]["fields"])
-                if page.url.split("#")[0] != before_url.split("#")[0] or not still_there:
+                if page.url.split("#")[0] != before_url.split("#")[0] or not same_form:
                     res.result, res.message = "unverified", "Submitted; page changed but no explicit confirmation text"
                     return res
                 res.result, res.message = "failed", "Submitted but nothing changed on the page"

@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Win - consent page</title></head>
+<body>
+<h1>Win a hamper</h1>
+<h2>Enter the competition</h2>
+<form id="f"><label>Full name <input name="name" required></label><label>Email <input type="email" name="email" required></label>
+  <button type="submit">OK</button></form>
+<script>
+document.getElementById('f').addEventListener('submit', e => { e.preventDefault(); document.title = 'SUBMITTED'; document.body.innerHTML = '<p>Thank you for entering!</p>'; });
+</script>
+</body></html>

@@ -74,3 +74,71 @@ def test_automation_clause():
     assert not find_automation_clause(
         "all entries received after the Competition Period shall be automatically disqualified.")
     assert find_automation_clause("Entries submitted via automated or bulk entry services will be deemed invalid.")
+
+
+# --- regressions from the first overnight run (1 Nov 2026) ---------------------------------------------------------
+
+def test_first_name_label_beats_generic_autocomplete(profile):
+    # Pan Macmillan: "First name" box marked autocomplete="name" got the full name and failed validation.
+    f = Field("1", "input", "text", name="firstName", label="First name", autocomplete="name", required=True)
+    assert map_field(f, ctx(profile)).value == "Test"
+
+
+def test_split_first_last_labels(profile):
+    # Gravity Forms name field: sub-labels are just "First" and "Last".
+    c = ctx(profile)
+    assert map_field(Field("1", "input", "text", name="input_1.3", label="First"), c).value == "Test"
+    assert map_field(Field("2", "input", "text", name="input_1.6", label="Last"), c).value == "Person"
+
+
+def test_city_label_beats_address_field_name(profile):
+    # foodandtravel: "City" box named address[city] was filled with address line 1.
+    c = ctx(profile)
+    assert map_field(Field("1", "input", "text", name="address_city", label="City"), c).value == "Testville"
+    assert map_field(Field("2", "input", "text", name="address_state", label="State/Province/Region"), c).value == "Berkshire"
+    country = Field("3", "select", "select-one", name="address_country", label="Country", required=True, options=[
+        {"value": "", "text": ""}, {"value": "Ireland", "text": "Ireland"}, {"value": "United Kingdom", "text": "United Kingdom"}])
+    assert map_field(country, ctx(profile, answers=["Paris"], question="Where?")).value == "United Kingdom"
+
+
+def test_tooltip_question_mark_on_personal_field(profile):
+    # Cadbury: "EMAIL ADDRESS * ?" (a help icon) was treated as the quiz question and given the answer.
+    c = ctx(profile, answers=["Tuesday"], question="What day is day 1 of advent?")
+    assert map_field(Field("1", "input", "text", name="email", label="EMAIL ADDRESS * ?"), c).value == "test.person@example.com"
+    assert map_field(Field("2", "input", "text", name="phone", label="PHONE NUMBER * ?"), c).value == "07700900123"
+    q = Field("3", "input", "text", name="q", label="WHAT DAY OF THE WEEK IS DAY 1 OF ADVENT THIS YEAR (2026) * ?")
+    assert map_field(q, c).value == "Tuesday"
+
+
+def test_other_persons_details_not_filled_with_profile(profile):
+    a = map_field(Field("1", "input", "text", label="Running partners name", required=True), ctx(profile))
+    assert a.kind == "unknown"
+    assert map_field(Field("2", "input", "text", label="Your friend's email"), ctx(profile)).kind == "skip"
+
+
+def test_maths_check_is_treated_as_captcha(profile):
+    a = map_field(Field("1", "input", "text", label="3 + 2 equals *", required=True), ctx(profile))
+    assert a.kind == "unknown" and a.note.startswith("captcha")
+
+
+def test_circumvent_limit_clause_is_not_an_automation_ban():
+    # Muddy Stilettos: about dodging one-entry-per-household, not a ban on a single automated entry.
+    assert not find_automation_clause(
+        "If it becomes apparent that either a participant or household is using any means to circumvent this "
+        "condition such as, and without limitation, multiple email accounts, multiple reproduced or "
+        "computer-generated entries, using multiple identities, fraudulently filling in forms, they will be disqualified.")
+    assert find_automation_clause("4.8 Automated Entry : The use of any automated entry software or any other "
+                                  "mechanical or electronic means that permits any person to enter any Competition "
+                                  "repeatedly is prohibited.")
+
+
+def test_yes_option_wording_decides_consent_radio(profile):
+    # Northern Life: "Your Data" radio - Yes option reads "Yes - I agree to the use of my data as outlined above".
+    f = Field("r", "radio", "radio", label="Your Data", required=True, options=[
+        {"value": "yes", "text": "Yes - I agree to the use of my data as outlined above", "idx": "y"},
+        {"value": "no", "text": "No - I do not agree", "idx": "n"}])
+    assert map_field(f, ctx(profile)).value == "y"
+    mkt = Field("m", "radio", "radio", label="Stay in touch?", options=[
+        {"value": "1", "text": "Yes, send me offers and news", "idx": "y"}, {"value": "0", "text": "No thanks", "idx": "n"}])
+    assert map_field(mkt, ctx(profile)).value == "n"
+    assert map_field(mkt, ctx(profile, tags=["nl"])).value == "y"

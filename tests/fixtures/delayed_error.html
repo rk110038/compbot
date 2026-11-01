@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Delayed error</title></head>
+<body>
+<h1>Win a 3-night stay</h1>
+<h2>Enter the competition</h2>
+<form id="f"><label>First name <input name="fname" required></label>
+  <label>Email <input type="email" name="email" required></label><button type="submit">Enter</button></form>
+<script>
+document.getElementById('f').addEventListener('submit', e => {
+  e.preventDefault();
+  document.body.innerHTML = '<div style="height:600px;background:#d4ff66"></div>';
+  // The site's own error message only appears a moment after the request (as with some Shopify form apps).
+  setTimeout(() => { document.body.insertAdjacentHTML('beforeend', '<p>An error occurred when submitting. Please try again later.</p>'); }, 3500);
+});
+</script>
+</body></html>

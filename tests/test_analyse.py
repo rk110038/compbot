@@ -89,3 +89,20 @@ def test_skip_keywords():
     s = dict(DEFAULT_SETTINGS, skip_keywords="leeds, glasgow")
     a = analyse("E: 23/11 Win £200 to spend at a restaurant, Leeds", "<p>https://leeds-list.com/competitions/x</p>", s, TODAY)
     assert a.status == "skipped"
+
+
+def test_bot_blocking_platform_and_account_sites_go_manual():
+    body = "".join(f"<p>https://comps.site{i}.co.uk/competition/x_y/12345{i}.php</p>" for i in range(3))
+    a = analyse("E: 28/11 (MD) Win a day out", body, DEFAULT_SETTINGS, TODAY)
+    assert a.status == "manual" and "blocks automated entry" in a.reason
+    a = analyse("E: 29/11 Win £1,000", "<p>https://comp.smoothradio.com/nescafe-2026/9</p>", DEFAULT_SETTINGS, TODAY)
+    assert (a.method, a.status) == ("account", "manual")
+    a = analyse("E: 16/11 Win a menu", "<p>https://www.britishairways.com/content/the-british-airways-club/competitions/x</p>",
+                DEFAULT_SETTINGS, TODAY)
+    assert a.method == "account"
+
+
+def test_unsafe_prefix_stripped():
+    a = analyse("E: 20/11 Win a book", '<p><a href="unsafe:https://www.example-books.co.uk/win-a-book">enter</a></p>',
+                DEFAULT_SETTINGS, TODAY)
+    assert a.entry_urls == ["https://www.example-books.co.uk/win-a-book"]

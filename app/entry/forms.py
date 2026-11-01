@@ -156,10 +156,36 @@ def _parse_dob(p: dict) -> date | None:
         return None
 
 
+SPLIT_NAME = {"first": "first_name", "forename": "first_name", "given": "first_name", "last": "last_name",
+              "surname": "last_name", "family": "last_name"}
+# Fields asking for someone else's details (a running partner, a nominee, a child...) must never get the profile.
+OTHER_PERSON_RE = re.compile(
+    r"\b(partner|friend|guest|child|children|kid|son|daughter|baby|pet|dog|cat|nominee|nominat\w*|recipient|their|"
+    r"companion|plus one|loved one|teacher|colleague|mum|dad|parent)s?\b")
+# Simple sums used as anti-spam checks are a CAPTCHA by another name, so they're left for a human.
+MATH_CHECK_RE = re.compile(r"\d+\s*(?:\+|plus|-|minus|x|×|\*|times)\s*\d+|what is (?:\d+|one|two|three|four|five)\b")
+GENERIC_AUTOCOMPLETE = {"full_name", "address1"}
+
+
+def _label_text(f: Field) -> str:
+    return normalise(" ".join(p for p in [f.label, f.placeholder, f.aria] if p))
+
+
+def _key_from_text(d: str) -> str | None:
+    for key, pat in KEY_PATTERNS:
+        if pat.search(d):
+            return key
+    return None
+
+
 def detect_profile_key(f: Field) -> str | None:
-    ac = (f.autocomplete or "").strip().lower().split()
-    if ac and ac[-1] in AUTOCOMPLETE_MAP:
-        return AUTOCOMPLETE_MAP[ac[-1]]
+    label = _label_text(f)
+    core = re.sub(r"[*?:()]+|\brequired\b", " ", label)
+    core = re.sub(r"\s+", " ", core).strip()
+    if label and OTHER_PERSON_RE.search(label):
+        return None
+    if core in SPLIT_NAME:
+        return SPLIT_NAME[core]
     d = f.desc
     if f.type == "email":
         return "email_confirm" if KEY_PATTERNS[0][1].search(d) else "email"
@@ -169,15 +195,25 @@ def detect_profile_key(f: Field) -> str | None:
         return "dob"
     if re.search(r"\bdd mm yy(yy)?\b|\bmm dd yy(yy)?\b|\byyyy mm dd\b", d) and re.search(r"birth|dob|born|bday", d):
         return "dob"
-    for key, pat in KEY_PATTERNS:
-        if pat.search(d):
-            return key
-    return None
+    ac = (f.autocomplete or "").strip().lower().split()
+    ac_key = AUTOCOMPLETE_MAP.get(ac[-1]) if ac else None
+    label_key = _key_from_text(core) if core else None
+    # The visible label beats a generic autocomplete hint (e.g. "First name" marked autocomplete="name") and beats
+    # the field's internal name (e.g. a "City" box named address[city]).
+    if ac_key and not (label_key and label_key != ac_key and ac_key in GENERIC_AUTOCOMPLETE):
+        return ac_key
+    if label_key:
+        return label_key
+    return _key_from_text(d)
 
 
 def looks_like_question(f: Field) -> bool:
     label = normalise(f.label or f.placeholder or f.aria)
     if not label or PERSONAL_Q_RE.search(label):
+        return False
+    # A short label naming a personal field ("EMAIL ADDRESS * ?" with a tooltip icon) isn't a quiz question.
+    core = re.sub(r"\s+", " ", re.sub(r"[*?:()]+|\brequired\b", " ", label)).strip()
+    if len(core.split()) <= 4 and (core in SPLIT_NAME or _key_from_text(core)) and not QUESTION_START_RE.match(core):
         return False
     return (f.label or "").strip().rstrip("* ").endswith("?") or bool(QUESTION_START_RE.match(label)) or bool(
         ANSWER_FIELD_RE.search(f.desc))
@@ -322,6 +358,8 @@ def map_choice(f: Field, ctx: Ctx) -> Action:
         return Action("skip", note=f"no option for {key}")
     yes_no = texts and all(YES_RE.match(t) or NO_RE.match(t) for t in texts)
     if yes_no:
+        # The "Yes" option's own wording often carries the meaning ("Yes - I agree to the use of my data").
+        yes_text = next((t for t in texts if YES_RE.match(t)), "")
         is_mkt = bool(MARKETING_RE.search(label_d))
         if OPTOUT_RE.search(label_d):
             want_yes = not ctx.want_marketing
@@ -329,6 +367,10 @@ def map_choice(f: Field, ctx: Ctx) -> Action:
             want_yes = ctx.want_marketing and not THIRD_PARTY_RE.search(label_d)
         elif TERMS_RE.search(label_d):
             want_yes = True
+        elif TERMS_RE.search(yes_text) and not MARKETING_RE.search(yes_text):
+            want_yes = True
+        elif MARKETING_RE.search(yes_text):
+            want_yes = ctx.want_marketing and not THIRD_PARTY_RE.search(yes_text)
         else:
             want_yes = None
         if want_yes is not None:
@@ -359,6 +401,11 @@ def map_text(f: Field, ctx: Ctx) -> Action:
     if f.type in ("password", "search", "url", "file", "hidden"):
         return Action("unknown" if f.required and f.type == "file" else "skip", note=f"{f.type} field")
     key = None
+    label = _label_text(f)
+    if MATH_CHECK_RE.search(label) and not ctx.answers:
+        return Action("unknown", note="captcha: maths anti-spam check")
+    if OTHER_PERSON_RE.search(label) and re.search(r"name|e ?mail|phone|number|address", label):
+        return Action("unknown" if f.required else "skip", note="asks for someone else's details")
     ac = (f.autocomplete or "").strip().lower().split()
     strong = (ac and ac[-1] in AUTOCOMPLETE_MAP) or f.type in ("email", "tel")
     if strong:
@@ -417,9 +464,16 @@ def find_automation_clause(text: str) -> str | None:
     for sentence in re.split(r"(?<=[.;!?])\s+|\n+", text):
         if len(sentence) > 600:
             continue
+        # "...using any means to circumvent this condition [one entry per household] such as ... computer-generated
+        # entries" is about dodging an entry limit, not a ban on a single automated entry.
+        if CIRCUMVENT_LIMIT_RE.search(sentence):
+            continue
         if AUTOMATION_WORD_RE.search(sentence) and VOID_WORD_RE.search(sentence) and ENTRY_WORD_RE.search(sentence):
             return re.sub(r"\s+", " ", sentence).strip()
     return None
+
+
+CIRCUMVENT_LIMIT_RE = re.compile(r"circumvent (?:this|the|these|any such) (?:condition|restriction|limit|rule)s?", re.I)
 
 
 def apply_llm_action(f: Field, raw: dict, ctx: Ctx) -> Action:

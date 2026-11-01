@@ -393,6 +393,13 @@ def competition_edit(request: Request, cid: int, answers: str = Form(""), entry_
     return back(request, f"/competitions/{cid}", "Saved")
 
 
+@app.post("/manual/requeue-retryable")
+def manual_requeue(request: Request):
+    if jobs.is_running("enter"):
+        return back(request, "/manual", "An entry run is in progress - try again when it finishes")
+    return back(request, "/manual", jobs.requeue_retryable())
+
+
 @app.get("/manual", response_class=HTMLResponse)
 def manual_queue(request: Request, method: str = ""):
     today = jobs.today_local()
