@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 import time
 
 import httpx
@@ -16,6 +17,19 @@ import httpx
 from .config import get_config
 
 log = logging.getLogger("compbot.llm")
+_last = threading.local()  # why the last chat_json() call on this thread returned None (shown by the model test)
+
+
+def last_error() -> str | None:
+    return getattr(_last, "error", None)
+
+
+def _http_error(r: httpx.Response) -> str:
+    try:
+        msg = r.json().get("error")
+    except Exception:  # noqa: BLE001
+        msg = None
+    return f"HTTP {r.status_code}: {(msg or r.text or '').strip()[:300]}"
 
 # Shown in the Settings model picker. Sizes are the Ollama download sizes (Q4 quantisation).
 RECOMMENDED_MODELS: list[dict] = [
@@ -125,10 +139,13 @@ def chat_json(system: str, user: str, settings: dict | None = None, schema: dict
     """One JSON-only chat turn. Uses Ollama's native API when available (JSON schema output, no 'thinking')."""
     cfg = get_config()
     model = model_name(settings)
+    _last.error = None
     if not (cfg.llm_enabled and model):
+        _last.error = "no model chosen"
         return None
     messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
     base = ollama_url()
+    content = ""
     try:
         if base:
             payload = {"model": model, "messages": messages, "stream": False, "format": schema or "json",
@@ -137,8 +154,10 @@ def chat_json(system: str, user: str, settings: dict | None = None, schema: dict
             if r.status_code == 400 and "think" in r.text.lower():
                 payload.pop("think")
                 r = httpx.post(f"{base}/api/chat", json=payload, timeout=timeout)
-            r.raise_for_status()
-            content = (r.json().get("message") or {}).get("content") or ""
+            if r.status_code >= 400:
+                raise RuntimeError("Ollama said " + _http_error(r))
+            msg = r.json().get("message") or {}
+            content = msg.get("content") or ""
         else:
             headers = {"Content-Type": "application/json"}
             if cfg.llm_api_key:
@@ -151,14 +170,24 @@ def chat_json(system: str, user: str, settings: dict | None = None, schema: dict
             if r.status_code == 400 and "response_format" in r.text:
                 payload.pop("response_format")
                 r = httpx.post(url, headers=headers, json=payload, timeout=timeout)
-            r.raise_for_status()
+            if r.status_code >= 400:
+                raise RuntimeError("the AI endpoint said " + _http_error(r))
             content = r.json()["choices"][0]["message"]["content"] or ""
         content = re.sub(r"<think>.*?</think>", "", content, flags=re.S)
         m = re.search(r"\{.*\}", content, re.S)
-        return json.loads(m.group(0)) if m else None
+        if not m:
+            raise ValueError("the reply wasn't JSON: " + (repr(content.strip()[:160]) if content.strip() else "it was empty"))
+        return json.loads(m.group(0))
+    except httpx.TimeoutException:
+        _last.error = f"no reply within {timeout:.0f}s"
+    except httpx.HTTPError as exc:
+        _last.error = f"can't reach {'Ollama at ' + base if base else 'the AI endpoint'}: {exc}"
+    except json.JSONDecodeError as exc:
+        _last.error = f"the reply wasn't valid JSON ({exc.msg}): {content.strip()[:160]!r}"
     except Exception as exc:  # noqa: BLE001
-        log.warning("LLM call failed: %s", exc)
-        return None
+        _last.error = str(exc)[:400]
+    log.warning("LLM call failed: %s", _last.error)
+    return None
 
 
 # --------------------------------------------------------------------------- tasks
@@ -306,14 +335,31 @@ def classify_email(from_addr: str, subject: str, snippet: str, matched_comp: str
     return chat_json(EMAIL_SYSTEM, user, settings)
 
 
-def self_test(settings: dict | None = None) -> str:
-    """Quick end-to-end check used by the Settings page."""
+_MEMORY_RE = re.compile(r"more system memory|out of memory|\boom\b|runner process (?:has )?(?:terminated|no longer)|"
+                        r"unexpectedly stopped|resource limitations|cudaMalloc|failed to allocate", re.I)
+
+
+def self_test(settings: dict | None = None) -> tuple[bool, str]:
+    """Quick end-to-end check used by the Settings page: (worked, message)."""
     t0 = time.time()
     res = answer_question("What is the capital city of Scotland?", ["Glasgow", "Edinburgh", "Aberdeen"],
                           "Win a weekend break in Scotland's capital city.", {"title": "Test"}, settings)
     secs = time.time() - t0
+    model = model_name(settings)
     if not res:
-        return (f"No usable reply from {model_name(settings)} after {secs:.0f}s - check the model is downloaded "
-                "and Ollama is running")
-    return (f"{model_name(settings)} answered \u201c{res['answer']}\u201d ({res['confidence']}% sure, from "
-            f"{res['source']}) in {secs:.1f}s" + (" - the first call includes loading the model" if secs > 8 else ""))
+        why = last_error() or "the reply didn't contain an answer"
+        if _MEMORY_RE.search(why):
+            hint = ("The model didn't fit in the memory Ollama has: try a smaller one (gemma4:e4b or qwen3.5:4b), "
+                    "or close whatever else is using the GPU.")
+        elif re.search(r"not found|pull", why, re.I):
+            hint = "Download the model under AI models first."
+        elif "can't reach" in why:
+            hint = "Check the Ollama container is running."
+        else:
+            hint = "Check the model is downloaded and the Ollama container is running."
+        return False, f"No usable reply from {model} after {secs:.0f}s: {why}. {hint}"
+    if not res["answer"]:
+        return False, (f"{model} replied in {secs:.1f}s but couldn't answer the test question "
+                       f"({res['reason'] or 'no reason given'}) - it may be too small to be useful.")
+    return True, (f"{model} answered \u201c{res['answer']}\u201d ({res['confidence']}% sure, from "
+                  f"{res['source']}) in {secs:.1f}s" + (" - the first call includes loading the model" if secs > 8 else ""))

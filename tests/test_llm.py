@@ -15,6 +15,7 @@ from app.entry.forms import Ctx
 
 class FakeOllama(http.server.BaseHTTPRequestHandler):
     chats: list = []
+    chat_error: tuple[int, dict] | None = None  # make /api/chat fail like a real Ollama would
     models = [{"name": "gemma4:12b", "size": 7_700_000_000,
                "details": {"parameter_size": "12B", "quantization_level": "Q4_K_M"}}]
 
@@ -42,6 +43,8 @@ class FakeOllama(http.server.BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
         if self.path == "/api/chat":
             FakeOllama.chats.append(body)
+            if FakeOllama.chat_error:
+                return self._json(FakeOllama.chat_error[1], FakeOllama.chat_error[0])
             content = body["messages"][1]["content"]
             user = json.loads(content) if content.startswith("{") else {}
             q, opts = (user.get("question") or "").lower(), user.get("options") or []
@@ -77,6 +80,7 @@ class FakeOllama(http.server.BaseHTTPRequestHandler):
 @pytest.fixture
 def fake_ollama(monkeypatch):
     FakeOllama.chats = []
+    FakeOllama.chat_error = None
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FakeOllama)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     url = f"http://127.0.0.1:{srv.server_address[1]}"
@@ -104,6 +108,28 @@ def test_status_and_answer_use_native_api(fake_ollama):
 def test_model_comes_from_settings_and_ai_off_without_model(fake_ollama):
     assert llm.enabled(AI)
     assert not llm.enabled(dict(AI, llm_model=""))  # no env default in tests
+
+
+def test_self_test_reports_success(fake_ollama):
+    ok, msg = llm.self_test(AI)
+    assert ok and "answered \u201cEdinburgh\u201d" in msg
+
+
+def test_self_test_shows_ollamas_error(fake_ollama):
+    FakeOllama.chat_error = (500, {"error": "model requires more system memory (9.8 GiB) than is available (6.1 GiB)"})
+    ok, msg = llm.self_test(AI)
+    assert not ok
+    assert "HTTP 500: model requires more system memory (9.8 GiB)" in msg and "try a smaller one" in msg
+    FakeOllama.chat_error = (404, {"error": "model 'gemma4:12b' not found"})
+    ok, msg = llm.self_test(AI)
+    assert not ok and "not found" in msg and "Download the model" in msg
+
+
+def test_self_test_when_ollama_is_down(monkeypatch):
+    monkeypatch.setattr(get_config(), "ollama_url", "http://127.0.0.1:9")
+    monkeypatch.setattr(get_config(), "llm_base_url", "http://127.0.0.1:9/v1")
+    ok, msg = llm.self_test(AI)
+    assert not ok and "can't reach Ollama at http://127.0.0.1:9" in msg
 
 
 def test_pull_progress(fake_ollama):

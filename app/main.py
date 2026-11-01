@@ -125,6 +125,7 @@ templates.env.globals["qs"] = _qs
 
 def render(request: Request, name: str, **ctx) -> HTMLResponse:
     ctx.setdefault("flash", request.query_params.get("msg"))
+    ctx.setdefault("flash_warn", request.query_params.get("warn") == "1")
     with session_scope() as s:
         ctx.setdefault("settings", get_settings(s))
         ctx["nav_manual"] = s.scalar(select(func.count(Competition.id)).where(Competition.status == "manual")) or 0
@@ -135,7 +136,7 @@ def render(request: Request, name: str, **ctx) -> HTMLResponse:
     return templates.TemplateResponse(request, name, ctx)
 
 
-def back(request: Request, default: str, msg: str | None = None) -> RedirectResponse:
+def back(request: Request, default: str, msg: str | None = None, warn: bool = False) -> RedirectResponse:
     """Redirect to the referring page on this site (or `default`), optionally with a flash message."""
     path, params = default, {}
     ref = request.headers.get("referer")
@@ -143,9 +144,11 @@ def back(request: Request, default: str, msg: str | None = None) -> RedirectResp
         p = urlparse(ref)
         if p.netloc == request.headers.get("host"):
             path = p.path or default
-            params = {k: v for k, v in parse_qsl(p.query) if k != "msg"}
+            params = {k: v for k, v in parse_qsl(p.query) if k not in ("msg", "warn")}
     if msg:
         params["msg"] = msg
+        if warn:
+            params["warn"] = "1"
     return RedirectResponse(path + ("?" + urlencode(params) if params else ""), status_code=303)
 
 
@@ -586,8 +589,9 @@ def ai_test(request: Request):
     with session_scope() as s:
         settings = get_settings(s)
     if not llm.enabled(settings):
-        return back(request, "/settings", "Choose a model first (and save settings)")
-    return back(request, "/settings", llm.self_test(settings))
+        return back(request, "/settings", "Choose a model first (and save settings)", warn=True)
+    ok, msg = llm.self_test(settings)
+    return back(request, "/settings", msg, warn=not ok)
 
 
 @app.post("/settings/clear-dry-runs")
