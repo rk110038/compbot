@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Teeling Whiskey competition</title>
+<style>
+  body { font-family: sans-serif; background: #222; color: #eee; }
+  .page { display: none; } .page.on { display: block; }
+  .ee_container { margin: 10px 0; } label { display: block; }
+  .msg { color: #f66; }
+  input[type=button] { background: #f60; color: #fff; border: 0; padding: 10px 18px; }
+</style></head>
+<body>
+<!-- Modelled on a Dotdigital survey landing page (email.whiskymag.com): one <form>, the "pages" are containers shown
+     one at a time by script, and Back / Next / Submit are <input type="button">. Later pages' required fields sit in
+     the same form, hidden. -->
+<form class="surveys-forms" action="#" onsubmit="return false">
+  <div class="ee_container"><p>Whisky Magazine has teamed up with Teeling Whiskey to offer one lucky reader the
+    chance to win &pound;500 worth of Teeling Whiskey, together with a memorable experience at the distillery.</p>
+    <p>The competition closes on Friday 13 November 2026 at 23:59 GMT.</p></div>
+
+  <div class="ee_container page on" data-page="1">
+    <div class="msg" id="m1"></div>
+    <label for="textbox-1">First Name *</label><input type="text" name="1" id="textbox-1" required>
+    <label for="textbox-2">Last Name *</label><input type="text" name="2" id="textbox-2" required>
+    <label for="textbox-3">Email *</label><input type="email" name="3" id="textbox-3" required>
+    <label for="dropdown-16">Country *</label>
+    <select name="16" id="dropdown-16" required><option value="">Please select</option><option>Ireland</option>
+      <option>United Kingdom</option><option>United States</option></select>
+  </div>
+
+  <div class="ee_container page" data-page="2">
+    <div class="msg" id="m2"></div>
+    <p class="q">How did you hear about this competition?</p>
+    <div class="choices">
+      <label><input type="radio" name="28" id="28_1" value="1" required> Social Media</label>
+      <label><input type="radio" name="28" id="28_2" value="2" required> Google</label>
+      <label><input type="radio" name="28" id="28_3" value="3" required> Word of Mouth</label>
+      <label><input type="radio" name="28" id="28_4" value="4" required> Email</label>
+      <label><input type="radio" name="28" id="28_5" value="5" required> Other</label>
+    </div>
+  </div>
+
+  <div class="ee_container page" data-page="3">
+    <label for="textbox-30">Please Specify</label><input type="text" name="30" id="textbox-30">
+  </div>
+
+  <div class="ee_container page" data-page="4">
+    <div class="msg" id="m4"></div>
+    <p>To complete your entry, please complete the following tick boxes.</p>
+    <label><input type="checkbox" name="32" id="consent-32" required> I confirm I am at least 18 years of age and
+      above the legal drinking age in my country of residence</label>
+    <label><input type="checkbox" name="33" id="consent-33"> Check this box to subscribe (opt-in) to the Whisky
+      Magazine mailing list. (Optional)</label>
+    <label><input type="checkbox" name="34" id="consent-34"> Check this box to subscribe (opt-in) to the Teeling
+      Whiskey email newsletter, where you will receive occasional emails with news and the latest releases.</label>
+  </div>
+
+  <div class="action-button-container"><fieldset><legend></legend>
+    <input class="paging-button-back" type="button" value="Back" style="display: none;">
+    <input class="paging-button-next" type="button" value="Next">
+    <input class="paging-button-submit" type="button" value="Submit" style="display: none;">
+    <input class="paging-button-submit" type="submit" value="Submit" style="display: none;">
+  </fieldset></div>
+</form>
+<div id="done" style="display:none"><h2>Thank you for entering, good luck!</h2><p id="out"></p></div>
+<script>
+const $ = s => document.querySelector(s);
+const back = $('.paging-button-back'), next = $('.paging-button-next'), submit = $('input[type=button].paging-button-submit');
+let page = 1;
+const other = () => document.getElementById('28_5').checked;
+const order = () => [1, 2].concat(other() ? [3] : []).concat([4]);
+function show(n) {
+  document.querySelectorAll('.page').forEach(p => p.classList.toggle('on', +p.dataset.page === n));
+  page = n;
+  const last = order()[order().length - 1] === n;
+  back.style.display = n === 1 ? 'none' : '';
+  next.style.display = last ? 'none' : '';
+  submit.style.display = last ? '' : 'none';
+}
+function valid(n) {
+  const p = document.querySelector(`.page[data-page="${n}"]`), m = p.querySelector('.msg');
+  const bad = Array.from(p.querySelectorAll('[required]')).some(e => !e.checkValidity());
+  if (m) m.textContent = bad ? 'Please answer the question below' : '';
+  return !bad;
+}
+next.onclick = () => { if (valid(page)) { const o = order(); show(o[o.indexOf(page) + 1]); } };
+back.onclick = () => { const o = order(); show(o[o.indexOf(page) - 1]); };
+submit.onclick = () => {
+  if (!valid(page)) return;
+  const heard = document.querySelector('input[name="28"]:checked').parentElement.textContent.trim();
+  $('#out').textContent = `heard=${heard}; specify=${$('#textbox-30').value}; age=${$('#consent-32').checked}; ` +
+    `wm=${$('#consent-33').checked}; teeling=${$('#consent-34').checked}; country=${$('#dropdown-16').value}`;
+  document.querySelector('form').style.display = 'none';
+  $('#done').style.display = '';
+};
+show(1);
+</script>
+</body></html>

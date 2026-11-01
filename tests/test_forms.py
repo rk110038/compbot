@@ -28,6 +28,20 @@ def test_unknown_required_and_honeypot(profile):
     c = ctx(profile)
     assert map_field(Field("1", "input", "text", label="Why should you win? (tie-breaker)", required=True), c).kind == "unknown"
     assert map_field(Field("2", "input", "text", name="website", label="Website"), c).kind == "skip"
+
+
+def test_how_did_you_hear_other_then_please_specify(profile):
+    c = ctx(profile)
+    hear = Field("1", "radio", "radio", label="How did you hear about this competition?", required=True,
+                 options=[{"text": t, "value": str(i), "idx": f"h{i}"} for i, t in
+                          enumerate(["Social Media", "Google", "Word of Mouth", "Email", "Other"])])
+    a = map_field(hear, c)
+    assert a.value == "h4" and c.heard_other
+    spec = map_field(Field("2", "input", "text", label="Please Specify"), c)
+    assert spec.kind == "fill" and spec.value == "MoneySavingExpert forum"
+    # Without an "Other" pick, a lone "please specify" box isn't guessed at; a tie-breaker never gets it.
+    assert map_field(Field("3", "input", "text", label="Please specify"), ctx(profile)).kind == "skip"
+    assert map_field(Field("4", "input", "text", label="Tell us why you'd love to win", required=True), c).kind == "unknown"
     assert map_field(Field("3", "input", "text", label="Company name"), c).kind == "skip"
 
 

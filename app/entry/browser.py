@@ -193,7 +193,13 @@ JS_EXTRACT = "(prefix) => {\n" + JS_HELPERS + r"""
       if (el.tagName === 'SELECT') f.options = Array.from(el.options).map(o => ({value: o.value, text: (o.text || '').trim()}));
       fields.push(f);
     }
-    const btns = Array.from(root.querySelectorAll('button, input[type=submit], input[type=image], [role=button], a.button, a.btn')).filter(vis);
+    const btns = Array.from(root.querySelectorAll('button, input[type=submit], input[type=image], input[type=button], [role=button], a.button, a.btn')).filter(vis);
+    let formId = '';
+    if (root !== document.body) {
+      // Lets a paged form (Next -> Next -> Submit inside one <form>) be recognised on its later pages.
+      formId = root.getAttribute('data-cb-form') || ('f' + Math.random().toString(36).slice(2, 10));
+      root.setAttribute('data-cb-form', formId);
+    }
     let heading = '';
     if (root !== document.body) {
       let n = root;
@@ -208,7 +214,7 @@ JS_EXTRACT = "(prefix) => {\n" + JS_HELPERS + r"""
       }
     }
     const meta = (root === document.body) ? '' : ((root.id || '') + ' ' + (typeof root.className === 'string' ? root.className : '') + ' ' + (root.getAttribute('action') || '')).toLowerCase();
-    out.push({isForm: root.tagName === 'FORM', fields, hasPassword: !!root.querySelector('input[type=password]'),
+    out.push({isForm: root.tagName === 'FORM', formId, fields, hasPassword: !!root.querySelector('input[type=password]'),
       submitTexts: btns.map(b => (txt(b) || b.value || b.getAttribute('aria-label') || '').slice(0, 60)),
       text: txt(root).slice(0, 1500), heading, meta,
       inFooter: root !== document.body && !!root.closest('footer, [role=contentinfo], #footer, .footer, [id*=site-footer i], [class*=site-footer i], [class*=page-footer i], [id*=page-footer i]')});
@@ -222,16 +228,18 @@ JS_MARK_SUBMIT = "(idx) => {\n" + JS_HELPERS + r"""
   document.querySelectorAll('[data-cb-submit]').forEach(e => e.removeAttribute('data-cb-submit'));
   const el = document.querySelector(`[data-cb-idx="${idx}"]`);
   let root = el && el.form ? el.form : null;
-  if (!root && el) { let n = el.parentElement; while (n && !n.querySelector('button, input[type=submit], [role=button]')) n = n.parentElement; root = n; }
+  if (!root && el) { let n = el.parentElement; while (n && !n.querySelector('button, input[type=submit], input[type=button], [role=button]')) n = n.parentElement; root = n; }
   if (!root) root = document.body;
   const good = /^(enter|submit|send|sign ?up|subscribe|register|join|go|count me in|take part|enter now|enter competition|enter the (competition|draw|prize draw)|submit entry|enter draw|i'?m in|done|continue|next|confirm|win|enter to win|let'?s go|play|ok)\b/i;
   const bad = /cancel|reset|back|close|log ?in|sign ?in|search|menu|cookie|accept all|reject|share|facebook|twitter|instagram|print|basket|cart/i;
   let best = null, bestScore = -99;
-  for (const b of root.querySelectorAll('button, input[type=submit], input[type=image], [role=button], a.button, a.btn')) {
+  for (const b of root.querySelectorAll('button, input[type=submit], input[type=image], input[type=button], [role=button], a.button, a.btn')) {
     if (!vis(b)) continue;
     const t = (txt(b) || b.value || b.getAttribute('aria-label') || '').trim();
+    const type = (b.getAttribute('type') || '').toLowerCase();
     let s = 0;
-    if ((b.getAttribute('type') || '').toLowerCase() === 'submit' || b.tagName === 'INPUT') s += 3;
+    if (type === 'submit' || (b.tagName === 'INPUT' && type !== 'button')) s += 3;
+    else if (b.tagName === 'INPUT') s += 1;  // <input type="button" value="Next">, e.g. Dotdigital's paged forms
     if (good.test(t)) s += 4;
     if (bad.test(t)) s -= 6;
     if (b.tagName === 'A') s -= 1;
@@ -258,12 +266,13 @@ JS_SET_CHECKED = r"""
 }
 """
 
-JS_VALIDITY = r"""
-(idx) => {
+JS_VALIDITY = "(idx) => {\n" + JS_HELPERS + r"""
   const el = document.querySelector(`[data-cb-idx="${idx}"]`);
   const form = el && el.form;
   if (!form || form.noValidate) return [];  // the site validates itself
-  return Array.from(form.elements).filter(e => e.willValidate && !e.checkValidity())
+  // Only what's on screen: a paged form keeps its later pages' required fields in the same <form>, hidden.
+  const shown = e => __cbVis(e) || (e.labels && Array.from(e.labels).some(__cbVis)) || __cbVis(e.parentElement);
+  return Array.from(form.elements).filter(e => e.willValidate && !e.checkValidity() && shown(e))
     .filter(e => !(e.validity.patternMismatch && e.getAttribute('pattern') === '' && !e.validity.valueMissing))
     .map(e => ((e.labels && e.labels[0] ? e.labels[0].innerText : '') || e.name || e.id || e.type).trim().slice(0, 80));
 }
@@ -645,8 +654,10 @@ ALREADY_RE = re.compile(
     r"already (?:been )?entered|already (?:subscribed|registered|signed up|a subscriber)|only (?:one|1) entry|you "
     r"have already|duplicate entry|already taken part|already on (?:our|the) list", re.I)
 ERROR_RE = re.compile(
-    r"(?:is|are) required|this field is required|please (?:enter|fill|complete|select|check|provide|tick|accept)|"
+    r"(?:is|are) required|this field is required|please (?:enter|fill|complete|select|check|provide|tick|accept|answer)|"
     r"\binvalid\b|not (?:a )?valid|something went wrong|please try again|must (?:be|accept|agree)|error", re.I)
+# Errors that can't be mere instructions on the next page of a form ("please complete the tick boxes below").
+HARD_ERROR_RE = re.compile(r"\binvalid\b|not (?:a )?valid|something went wrong|please try again|\berror\b", re.I)
 CLOSED_RE = re.compile(
     r"(?:competition|promotion|prize draw|giveaway|this comp\w*) (?:is |has )?(?:now )?(?:closed|ended|finished)|"
     r"no longer (?:accepting|open|available)|entries (?:are|have) (?:now )?closed|has now closed|this competition "
@@ -877,6 +888,17 @@ def _refresh_container(frame, done_idx: set[str], prefix: str) -> dict | None:
         ids = {f["idx"] for f in c.get("fields", [])}
         ids |= {o.get("idx") for f in c.get("fields", []) for o in (f.get("options") or []) if o.get("idx")}
         if ids & done_idx:
+            return c
+    return None
+
+
+def _own_next_page(frame, container: dict, done_idx: set[str], prefix: str) -> dict | None:
+    """The <form> we just sent, re-read: returned if it now shows fields we haven't filled (its next page)."""
+    fid = container.get("formId")
+    if not fid:
+        return None
+    for c in _safe_eval(frame, JS_EXTRACT, prefix, default=[]) or []:
+        if c.get("formId") == fid and any(f["idx"] not in done_idx for f in c.get("fields", [])):
             return c
     return None
 
@@ -1650,7 +1672,9 @@ class Browser:
                     if _round:
                         details["steps"].append(f"step {step}: more fields appeared after filling")
 
-                sample_idx = next(iter(done_idx), None)
+                # A field on this page: earlier pages' fields may be hidden now, or gone.
+                cur_ids = [f["idx"] for f in container.get("fields", []) if f["idx"] in done_idx]
+                sample_idx = cur_ids[0] if cur_ids else next(iter(done_idx), None)
                 invalid = _safe_eval(frame, JS_VALIDITY, sample_idx, default=[]) if sample_idx else []
                 if invalid:
                     res.result, res.message = "needs_input", "Form still invalid: " + ", ".join(invalid)[:500]
@@ -1713,12 +1737,23 @@ class Browser:
                     return res
                 err = ERROR_RE.search(new_text)
                 nxt = best_form()
+                # A paged form (Next -> Next -> Submit) carries on in the same <form>, even when the next page is
+                # only tick boxes, which wouldn't look like an entry form on its own.
+                gen[0] += 1
+                own = _own_next_page(frame, container, done_idx, f"g{gen[0]}o_")
+                own_score = _score_container(own, ctx) if own else -100
+                paged = own is not None and own_score > -20
+                if paged:
+                    nxt = (frame, own, own_score)
                 nsig = _form_sig(nxt[1]) if nxt else frozenset()
                 same_form = bool(nxt) and any(_same_form(nsig, s) for s in submitted_sigs)
                 # Fields never seen before (one-question-at-a-time forms keep earlier questions on the page).
                 fresh = bool(nsig - frozenset().union(*submitted_sigs))
                 new_fields = [f for f in (nxt[1]["fields"] if nxt else []) if f["idx"] not in done_idx]
-                if new_fields and nxt[2] >= 4 and not err and (not same_form or fresh):
+                # The fields just sent have gone and new ones are showing: that's the next page, not this one with
+                # errors, so instructions on it ("please complete the tick boxes", "* are required") aren't errors.
+                moved_on = not same_form and not (err and HARD_ERROR_RE.search(new_text))
+                if new_fields and (nxt[2] >= 4 or paged) and (moved_on or (fresh and not err)):
                     clause = clause_check()
                     if clause:
                         res.result = "tc_blocked"

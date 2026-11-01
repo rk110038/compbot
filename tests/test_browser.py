@@ -257,3 +257,24 @@ def test_match_quiz_option():
     assert m(heights, ["C"], 70) == "2,305 meters"            # a letter answer
     assert m(["Scarborough", "Whitby", "Filey"], ["2015", "Whitby"], 92) == "Whitby"
     assert m(["Max Verstappen", "Lewis Hamilton"], ["Verstappen"], 70) == "Max Verstappen"
+
+
+def test_paged_survey_with_input_button_next(browser, fixture_server, profile):
+    # Whisky Magazine (Dotdigital survey): Next / Submit are <input type="button">, the pages are hidden containers in
+    # one <form>, the last page is only tick boxes and says "please complete the following tick boxes".
+    res = browser.enter(f"{fixture_server}/paged_survey.html", Ctx(profile=profile), _settings(entry_mode="auto"), "p1", {})
+    assert res.result == "entered", (res.message, res.details["steps"])
+    steps = res.details["steps"]
+    assert sum("clicked 'Next'" in s for s in steps) == 3 and "clicked 'Submit'" in steps[-1], steps
+    acts = {f["label"]: (f["action"], f["note"]) for f in res.details["fields"]}
+    assert any("hear about" in k and n == "how did you hear" for k, (a, n) in acts.items()), acts
+    assert any(k.startswith("Please Specify") and n == "where you heard (other)" for k, (a, n) in acts.items()), acts
+    assert any("18 years" in k and a == "check" for k, (a, n) in acts.items()), acts
+    assert any("Whisky Magazine mailing list" in k and a == "uncheck" for k, (a, n) in acts.items()), acts
+
+
+def test_paged_survey_dry_run_ignores_hidden_later_pages(browser, fixture_server, profile):
+    # The later pages' required boxes are in the same <form> but hidden: page 1 is still complete.
+    res = browser.enter(f"{fixture_server}/paged_survey.html", Ctx(profile=profile), _settings(entry_mode="dry_run"),
+                        "p2", {})
+    assert res.result == "dry_run_ok", res.message

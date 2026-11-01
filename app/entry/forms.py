@@ -61,6 +61,7 @@ class Ctx:
     tags: list[str] = field(default_factory=list)
     marketing_opt_in: bool = False
     answer_cursor: int = 0
+    heard_other: bool = False  # "How did you hear?" was answered "Other": a "please specify" box may follow
 
     @property
     def is_newsletter(self) -> bool:
@@ -144,6 +145,8 @@ THIRD_PARTY_RE = re.compile(r"third ?part|partners|carefully selected|other (com
 HEAR_RE = re.compile(r"how did you (hear|find|see)|where did you (hear|see|find)|how you heard|source|referr")
 HEAR_PREFS = ["moneysavingexpert", "money saving expert", "mse", "forum", "online", "internet", "website", "web",
               "search", "other", "social", "email", "newsletter"]
+HEAR_SPECIFY_RE = re.compile(r"^(?:if other,? )?(?:please )?specify\b|^other\b.{0,25}specify|^if other\b")
+HEARD_AT = "MoneySavingExpert forum"
 PLACEHOLDER_OPT_RE = re.compile(
     r"^\s*(?:-+.*|please (?:select|choose).*|(?:select|choose)\b.*|pick one.*|make a selection.*|dd|mm|yyyy|day|"
     r"month|year)?\s*$", re.I)
@@ -405,6 +408,7 @@ def map_choice(f: Field, ctx: Ctx) -> Action:
         o = choose_option(f.options, HEAR_PREFS, threshold=90) or next(
             (o for o in f.options if not is_placeholder_option(o)), None)
         if o:
+            ctx.heard_other = normalise(o.get("text", "")).startswith("other")
             return Action(kind, o.get("idx") or o.get("value"), source="rule", note="how did you hear")
     if ctx.answers:
         o, score = match_answer_option(f.options, ctx.answers)
@@ -449,6 +453,8 @@ def map_text(f: Field, ctx: Ctx) -> Action:
         if val or key == "address3":
             return Action("fill", val, source=key) if val else Action("skip", note="address line 3")
         return Action("unknown" if f.required else "skip", note=f"profile has no {key}")
+    if HEAR_SPECIFY_RE.search(label) and (ctx.heard_other or HEAR_RE.search(d)):
+        return Action("fill", HEARD_AT, source="rule", note="where you heard (other)")
     if CREATIVE_RE.search(d):
         return Action("unknown" if f.required else "skip", note="creative / tie-breaker answer")
     if ctx.answers and (f.tag == "textarea" or ANSWER_FIELD_RE.search(d)):
