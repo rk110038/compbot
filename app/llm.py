@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import threading
 import time
+from pathlib import Path
 
 import httpx
 
@@ -18,6 +20,48 @@ from .config import get_config
 
 log = logging.getLogger("compbot.llm")
 _last = threading.local()  # why the last chat_json() call on this thread returned None (shown by the model test)
+STATS = {"calls": 0, "seconds": 0.0}  # AI calls made by this process (each entry runs in its own process)
+
+# When Ollama can't run the model (crash, timeout, unreachable), every further call wastes 20 s or more, and one
+# entry can ask several questions. So stop asking, across all entry processes, for a while. The model test clears it.
+AI_PAUSE_S = 600
+
+
+def _pause_path() -> Path:
+    return get_config().data_dir / "ai_paused.json"
+
+
+def ai_paused(settings: dict | None = None) -> dict | None:
+    """{'until': epoch, 'model': name, 'why': text} while the AI is paused after a failure, else None."""
+    try:
+        d = json.loads(_pause_path().read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(d, dict) or d.get("until", 0) <= time.time() or d.get("model") != model_name(settings):
+        return None
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    d["until_text"] = datetime.fromtimestamp(d["until"], ZoneInfo(get_config().tz)).strftime("%H:%M")
+    return d
+
+
+def _pause_ai(model: str, why: str) -> None:
+    p = _pause_path()
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_name(p.name + f".{os.getpid()}.tmp")
+        tmp.write_text(json.dumps({"until": time.time() + AI_PAUSE_S, "model": model, "why": why[:300]}))
+        os.replace(tmp, p)
+    except OSError:
+        return
+    log.warning("AI paused for %d min after: %s", AI_PAUSE_S // 60, why)
+
+
+def clear_ai_pause() -> None:
+    try:
+        _pause_path().unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def last_error() -> str | None:
@@ -159,18 +203,28 @@ def chat_json(system: str, user: str, settings: dict | None = None, schema: dict
     if not (cfg.llm_enabled and model):
         _last.error = "no model chosen"
         return None
+    paused = ai_paused(settings)
+    if paused:
+        _last.error = f"AI paused until {paused['until_text']} after an error: {paused.get('why', '')}"
+        return None
     messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
     base = ollama_url()
     content = ""
+    trip = False  # the model couldn't run at all (not just a bad reply): pause the AI
+    t0 = time.monotonic()
     try:
         if base:
+            # draft_num_predict 0: don't load the model's speculative-decoding draft model (Gemma 4 ships one). Our
+            # replies are a few dozen tokens, so it barely helps, costs VRAM, and fails to load on some GPUs.
             payload = {"model": model, "messages": messages, "stream": False, "format": schema or "json",
-                       "think": False, "keep_alive": "30m", "options": {"temperature": 0, "num_ctx": 8192}}
+                       "think": False, "keep_alive": "30m",
+                       "options": {"temperature": 0, "num_ctx": 8192, "draft_num_predict": 0}}
             r = httpx.post(f"{base}/api/chat", json=payload, timeout=timeout)
             if r.status_code == 400 and "think" in r.text.lower():
                 payload.pop("think")
                 r = httpx.post(f"{base}/api/chat", json=payload, timeout=timeout)
             if r.status_code >= 400:
+                trip = r.status_code >= 500
                 raise RuntimeError("Ollama said " + _http_error(r))
             msg = r.json().get("message") or {}
             content = msg.get("content") or ""
@@ -187,6 +241,7 @@ def chat_json(system: str, user: str, settings: dict | None = None, schema: dict
                 payload.pop("response_format")
                 r = httpx.post(url, headers=headers, json=payload, timeout=timeout)
             if r.status_code >= 400:
+                trip = r.status_code >= 500
                 raise RuntimeError("the AI endpoint said " + _http_error(r))
             content = r.json()["choices"][0]["message"]["content"] or ""
         content = re.sub(r"<think>.*?</think>", "", content, flags=re.S)
@@ -195,14 +250,21 @@ def chat_json(system: str, user: str, settings: dict | None = None, schema: dict
             raise ValueError("the reply wasn't JSON: " + (repr(content.strip()[:160]) if content.strip() else "it was empty"))
         return json.loads(m.group(0))
     except httpx.TimeoutException:
+        trip = True
         _last.error = f"no reply within {timeout:.0f}s"
     except httpx.HTTPError as exc:
+        trip = True
         _last.error = f"can't reach {'Ollama at ' + base if base else 'the AI endpoint'}: {exc}"
     except json.JSONDecodeError as exc:
         _last.error = f"the reply wasn't valid JSON ({exc.msg}): {content.strip()[:160]!r}"
     except Exception as exc:  # noqa: BLE001
         _last.error = str(exc)[:400]
+    finally:
+        STATS["calls"] += 1
+        STATS["seconds"] += time.monotonic() - t0
     log.warning("LLM call failed: %s", _last.error)
+    if trip:
+        _pause_ai(model, _last.error)
     return None
 
 
@@ -376,6 +438,7 @@ def _ollama_version() -> str | None:
 
 def self_test(settings: dict | None = None) -> tuple[bool, str]:
     """Quick end-to-end check used by the Settings page: (worked, message)."""
+    clear_ai_pause()  # always really try; a failure pauses the AI again, a success lets entries use it straight away
     t0 = time.time()
     res = answer_question("What is the capital city of Scotland?", ["Glasgow", "Edinburgh", "Aberdeen"],
                           "Win a weekend break in Scotland's capital city.", {"title": "Test"}, settings)
@@ -389,10 +452,11 @@ def self_test(settings: dict | None = None) -> tuple[bool, str]:
         elif DRAFT_WARNING_NOTE in why:
             ver = _ollama_version()
             if ver and _version_tuple(ver) < DRAFT_FIX_VERSION:
-                hint = f"Your Ollama is {ver}; versions before 0.40.4 can't load Gemma 4's built-in draft model. "
+                hint = (f"Your Ollama is {ver}; versions before 0.40.4 can't load Gemma 4's built-in draft model. "
+                        + UPDATE_OLLAMA_HINT + " Or pick a non-Gemma model such as qwen3.5:9b.")
             else:
-                hint = f"Ollama{' ' + ver if ver else ''} couldn't load the model's built-in draft model. "
-            hint += UPDATE_OLLAMA_HINT + " Or pick a non-Gemma model such as qwen3.5:9b."
+                hint = (f"Ollama{' ' + ver if ver else ''} couldn't load the model on this GPU. Pick a non-Gemma model "
+                        "such as qwen3.5:9b, or check the Ollama container's log (docker logs compbot-ollama).")
         elif re.search(r"not found|pull", why, re.I):
             hint = "Download the model under AI models first."
         elif "can't reach" in why:

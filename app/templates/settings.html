@@ -76,6 +76,9 @@
     {% else %}
       <p class="small muted">No AI configured. Add the Ollama service from <code>docker-compose.yml</code> (it sets <code>OLLAMA_URL</code>), or set <code>LLM_BASE_URL</code>.</p>
     {% endif %}
+    {% if ai_pause %}
+      <div class="banner warn small">⏸ AI paused until {{ ai_pause.until_text }} after an error, so entries don't each wait for it: {{ ai_pause.why }}. Entries carry on without it (questions it would have answered go to the manual queue). Run <b>Test model</b> to try again now.</div>
+    {% endif %}
     <div class="form-grid">
       <div style="grid-column: span 2"><label>Model</label>
         <select name="s_llm_model">

@@ -81,6 +81,7 @@ class FakeOllama(http.server.BaseHTTPRequestHandler):
 def fake_ollama(monkeypatch):
     FakeOllama.chats = []
     FakeOllama.chat_error = None
+    llm.clear_ai_pause()
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FakeOllama)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     url = f"http://127.0.0.1:{srv.server_address[1]}"
@@ -89,6 +90,7 @@ def fake_ollama(monkeypatch):
     monkeypatch.setattr(cfg, "llm_base_url", url + "/v1")
     yield url
     srv.shutdown()
+    llm.clear_ai_pause()
 
 
 AI = dict(DEFAULT_SETTINGS, llm_model="gemma4:12b", ai_answers=True, ai_min_confidence=75, entry_mode="auto",
@@ -102,6 +104,7 @@ def test_status_and_answer_use_native_api(fake_ollama):
     assert res["answer"] == "Gold" and res["confidence"] == 95
     sent = FakeOllama.chats[-1]
     assert sent["model"] == "gemma4:12b" and sent["think"] is False and sent["format"]["type"] == "object"
+    assert sent["options"]["draft_num_predict"] == 0  # no speculative draft model (Gemma 4's fails on some GPUs)
     assert "test.person@example.com" not in json.dumps(FakeOllama.chats)  # no profile data in prompts
 
 
@@ -145,7 +148,7 @@ def test_self_test_hides_gemma4_draft_warning_noise(fake_ollama, monkeypatch):
     assert "Your Ollama is 0.40.2" in msg and "pull_policy: always" in msg
     monkeypatch.setattr(llm, "_ollama_version", lambda: "0.40.13")
     ok, msg = llm.self_test(AI)
-    assert "Ollama 0.40.13 couldn't load" in msg and "Your Ollama is" not in msg
+    assert "Ollama 0.40.13 couldn't load the model on this GPU" in msg and "pull_policy" not in msg
 
 
 def test_self_test_when_ollama_is_down(monkeypatch):
@@ -153,6 +156,26 @@ def test_self_test_when_ollama_is_down(monkeypatch):
     monkeypatch.setattr(get_config(), "llm_base_url", "http://127.0.0.1:9/v1")
     ok, msg = llm.self_test(AI)
     assert not ok and "can't reach Ollama at http://127.0.0.1:9" in msg
+    llm.clear_ai_pause()
+
+
+def test_ai_pauses_after_model_failure_instead_of_retrying_every_call(fake_ollama):
+    FakeOllama.chat_error = (500, {"error": "llama-server process has terminated: cudaMalloc failed"})
+    assert llm.answer_question("Q1?", ["A", "B"], "", {}, AI) is None
+    assert len(FakeOllama.chats) == 1
+    FakeOllama.chat_error = None
+    # Later calls, from any entry process, don't wait on Ollama again...
+    assert llm.answer_question("Q2?", ["A", "B"], "", {}, AI) is None
+    assert len(FakeOllama.chats) == 1 and llm.last_error().startswith("AI paused until ")
+    assert "HTTP 500" in llm.ai_paused(AI)["why"]
+    # ...a different model isn't affected, and the model test clears the pause and really tries.
+    assert llm.ai_paused(dict(AI, llm_model="qwen3.5:9b")) is None
+    ok, _ = llm.self_test(AI)
+    assert ok and llm.ai_paused(AI) is None and len(FakeOllama.chats) == 2
+    # A reply that just isn't usable (bad JSON, 4xx) is not a reason to pause.
+    FakeOllama.chat_error = (404, {"error": "model 'gemma4:12b' not found"})
+    llm.answer_question("Q3?", None, "", {}, AI)
+    assert llm.ai_paused(AI) is None
 
 
 def test_pull_progress(fake_ollama):
@@ -167,6 +190,8 @@ def test_ai_answers_question_in_browser(fake_ollama, fixture_server, profile):
     assert res.result == "entered", (res.message, res.details)
     used = [x for x in res.details["ai"] if x["used"]]
     assert used and used[0]["answer"] == "Gold" and used[0]["confidence"] == 95
+    t = res.details["timing"]
+    assert t["ai_calls"] >= 1 and t["seconds"] >= t["ai_seconds"] >= 0
     # the page text was given to the model
     assert any("gold case" in json.loads(c["messages"][1]["content"]).get("page_text", "") for c in FakeOllama.chats)
 
@@ -214,6 +239,12 @@ def test_settings_page_lists_models_and_downloads(fake_ollama):
         h = {"Authorization": "Basic " + base64.b64encode(b"admin:test").decode()}
         page = c.get("/settings", headers=h).text
         assert 'value="gemma4:12b"' in page and "Ollama 0.99.0 is running" in page and "100% on GPU" in page
+        assert "AI paused" not in page
+        pause = {"until": 0, "until_text": "21:10", "model": "gemma4:12b", "why": "Ollama said HTTP 500: boom"}
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(llm, "ai_paused", lambda settings=None: pause)
+            page = c.get("/settings", headers=h).text
+        assert "AI paused until 21:10 after an error" in page and "HTTP 500: boom" in page
         r = c.post("/ai/pull", data={"model": "qwen3.5:9b"}, headers={**h, "Origin": "http://testserver"},
                    follow_redirects=False)
         assert r.status_code == 303

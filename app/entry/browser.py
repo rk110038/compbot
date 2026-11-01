@@ -1448,6 +1448,7 @@ class Browser:
             res.details = details
             return res
         context = self.browser.new_context(locale="en-GB", timezone_id=cfg.tz, viewport={"width": 1280, "height": 1500})
+        t_start, ai_start = time.monotonic(), dict(llm.STATS)
         context.set_default_timeout(15000)
         # Untrusted pages must never reach the NAS/LAN: abort any request (incl. subresources/redirects) to them.
         context.route("**/*", lambda route: route.continue_() if is_public_url(route.request.url, allow_inline=True)
@@ -1836,6 +1837,9 @@ class Browser:
             return res
         finally:
             details["steps"] = list(details.get("steps") or [])  # plain list (the live wrapper isn't picklable)
+            details["timing"] = {"seconds": round(time.monotonic() - t_start),
+                                 "ai_calls": llm.STATS["calls"] - ai_start["calls"],
+                                 "ai_seconds": round(llm.STATS["seconds"] - ai_start["seconds"])}
             res.details = details
             live.status("Finished", result=f"{res.result}: {res.message[:200]}")
             _pause(page, 0.6)  # let the last frames through before closing

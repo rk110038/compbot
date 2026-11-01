@@ -546,7 +546,7 @@ def settings_view(request: Request):
     installed = {m["name"] for m in (ollama or {}).get("models", [])}
     return render(request, "settings.html", profile=profile, settings=settings, defaults=DEFAULT_SETTINGS,
                   dry_runs=dry_runs, ollama=ollama, pulls=pulls, recommended=llm.RECOMMENDED_MODELS,
-                  installed=installed, active_model=llm.model_name(settings),
+                  installed=installed, active_model=llm.model_name(settings), ai_pause=llm.ai_paused(settings),
                   pulling=any(not p["done"] for p in pulls.values()))
 
 

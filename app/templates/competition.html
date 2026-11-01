@@ -39,7 +39,7 @@
       <h2>Entry attempts</h2>
       {% for a in attempts %}
       <div class="attempt">
-        <div class="actions">{{ badge(a.result) }} <span class="badge">{{ a.mode }}</span> <span class="muted small">{{ a.started_at | local('%d %b %Y %H:%M') }}</span>
+        <div class="actions">{{ badge(a.result) }} <span class="badge">{{ a.mode }}</span> <span class="muted small">{{ a.started_at | local('%d %b %Y %H:%M') }}{% if a.details and a.details.timing %} · took {{ a.details.timing.seconds }}s{% if a.details.timing.ai_calls %} ({{ a.details.timing.ai_seconds }}s in {{ a.details.timing.ai_calls }} AI call{{ 's' if a.details.timing.ai_calls != 1 }}){% endif %}{% endif %}</span>
           {% if a.url and not a.url.startswith('mailto:') %}<a class="small" href="{{ a.url }}" target="_blank" rel="noopener noreferrer">{{ a.url[:70] }}</a>{% endif %}</div>
         {% set em = (a.details.fields if a.details and a.details.fields else []) | selectattr('source', 'equalto', 'email') | map(attribute='value') | select | first %}
         {% if em %}<div class="small muted">Email address used: <b>{{ em }}</b></div>{% endif %}
