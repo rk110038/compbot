@@ -191,3 +191,23 @@ def test_dry_run_presses_safe_quiz_button(browser, fixture_server, profile):
     ctx = Ctx(profile=profile, answers=["Alpine", "Abu Dhabi"], question="quiz")
     res = browser.enter(f"{fixture_server}/quiz.html", ctx, _settings(entry_mode="dry_run"), "r12", {})
     assert res.result == "dry_run_ok", (res.message, res.details)
+
+
+def test_live_view_streams_frames_and_status(browser, fixture_server, profile, tmp_path, monkeypatch):
+    import json as _json
+    monkeypatch.setenv("LIVE_DIR", str(tmp_path))
+    res = browser.enter(f"{fixture_server}/quiz.html", Ctx(profile=profile, answers=["Alpine", "Abu Dhabi"]),
+                        _settings(entry_mode="auto", live_view=True), "lv1", {"title": "Win a helmet"})
+    assert res.result == "entered", res.message
+    frame = (tmp_path / "frame.jpg").read_bytes()
+    assert frame[:2] == b"\xff\xd8" and len(frame) > 1000          # a real JPEG of the page
+    st = _json.loads((tmp_path / "status.json").read_text())
+    assert st["title"] == "Win a helmet" and st["phase"] == "Finished" and st["result"].startswith("entered")
+    assert isinstance(res.details["steps"], list) and type(res.details["steps"]) is list  # picklable
+
+
+def test_live_view_off_writes_nothing(browser, fixture_server, profile, tmp_path, monkeypatch):
+    monkeypatch.setenv("LIVE_DIR", str(tmp_path / "off"))
+    browser.enter(f"{fixture_server}/comp_form.html", Ctx(profile=profile, answers=["Charquemont"]),
+                  _settings(entry_mode="dry_run", live_view=False, respect_automation_clauses=False), "lv2", {})
+    assert not (tmp_path / "off").exists()

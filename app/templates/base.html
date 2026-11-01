@@ -17,6 +17,7 @@
     <a href="/manual" class="{{ 'active' if path == '/manual' }}">Manual queue{% if nav_manual %}<span class="count">{{ nav_manual }}</span>{% endif %}</a>
     <a href="/inbox" class="{{ 'active' if path == '/inbox' }}">Inbox</a>
     <a href="/wins" class="{{ 'active' if path == '/wins' }}">Wins{% if nav_wins %}<span class="count gold">{{ nav_wins }}</span>{% endif %}</a>
+    <a href="/live" class="{{ 'active' if path == '/live' }}">Live{% if 'enter' in running %} <span style="color:#e03131" title="An entry run is in progress">●</span>{% endif %}</a>
     <a href="/log" class="{{ 'active' if path == '/log' }}">Log</a>
     <a href="/settings" class="{{ 'active' if path == '/settings' }}">Settings</a>
   </nav>
@@ -37,7 +38,7 @@ document.addEventListener('click', e => {
   if (!el) return;
   navigator.clipboard.writeText(el.dataset.copy).then(() => { el.classList.add('copied'); setTimeout(() => el.classList.remove('copied'), 1200); });
 });
-{% if running %}setTimeout(() => location.reload(), 15000);{% endif %}
+{% if running and not no_autoreload %}setTimeout(() => location.reload(), 15000);{% endif %}
 </script>
 </body>
 </html>

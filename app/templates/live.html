@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Live view{% endblock %}
+{% block content %}
+<div class="actions" style="justify-content: space-between">
+  <h1>Live view <span id="live-badge" class="badge">idle</span></h1>
+  <form method="post" action="/run/enter"><button class="btn small" id="run-btn">Run entries now</button></form>
+</div>
+<p class="muted small">Watch the browser compbot is driving, as it happens. This view is watch-only: it streams pictures of the page and nothing here can control the browser.{% if not settings.live_view %} <b>Live view is switched off in Settings.</b>{% endif %}</p>
+<div class="grid three">
+  <div class="card" style="padding:8px; position:relative">
+    <img id="feed" alt="Live browser view" style="width:100%; display:block; border-radius:6px; background:#0b0d12; min-height:320px">
+    <div id="overlay" style="position:absolute; inset:8px; display:flex; align-items:center; justify-content:center; border-radius:6px; background:rgba(11,13,18,.55); color:#fff; text-align:center; padding:20px">
+      <div><div style="font-size:30px">🛰️</div><div id="overlay-text">Waiting for the next entry…</div></div>
+    </div>
+  </div>
+  <div class="card" style="align-self:start">
+    <h2>What it's doing</h2>
+    <dl class="kv small">
+      <dt>Job</dt><dd id="s-progress">–</dd>
+      <dt>Competition</dt><dd id="s-title">–</dd>
+      <dt>Step</dt><dd id="s-phase">–</dd>
+      <dt>Page</dt><dd id="s-url">–</dd>
+      <dt>Last result</dt><dd id="s-result">–</dd>
+      <dt>Updated</dt><dd id="s-age">–</dd>
+    </dl>
+    <p class="small muted" style="margin-top:12px">Entries are normally spaced 20–60 s apart, so expect pauses between competitions.</p>
+  </div>
+</div>
+<script>
+const base = location.origin;  // never the user:pass@ form of the address
+const feed = document.getElementById('feed'), overlay = document.getElementById('overlay');
+const set = (id, v) => { const el = document.getElementById(id); el.textContent = v || '–'; };
+function connect() { feed.src = base + '/live/stream?ts=' + Date.now(); }
+connect();
+setInterval(connect, 9 * 60 * 1000);           // the server ends each stream after 10 minutes
+feed.addEventListener('error', () => setTimeout(connect, 3000));
+async function poll() {
+  try {
+    const s = await (await fetch(base + '/live/status', {cache: 'no-store'})).json();
+    const active = s.running && s.status_age !== null && s.status_age < 120;
+    const badge = document.getElementById('live-badge');
+    badge.textContent = active ? '● live' : (s.running ? 'between entries' : 'idle');
+    badge.className = 'badge ' + (active ? 'b-failed' : (s.running ? 'b-queued' : ''));
+    document.getElementById('run-btn').disabled = s.running;
+    set('s-progress', s.running ? (s.progress || 'running') : 'not running');
+    set('s-title', s.title); set('s-phase', s.phase); set('s-result', s.result);
+    const url = document.getElementById('s-url'); url.textContent = s.url || '–';
+    set('s-age', s.status_age === null ? null : (s.status_age < 60 ? Math.round(s.status_age) + ' s ago' : Math.round(s.status_age / 60) + ' min ago'));
+    const fresh = s.frame_age !== null && s.frame_age < 20;
+    overlay.style.display = fresh ? 'none' : 'flex';
+    document.getElementById('overlay-text').textContent = s.frame_age === null
+      ? 'Nothing to show yet - the picture appears when compbot next enters a competition.'
+      : (s.running ? 'Between entries - waiting for the next competition…' : 'Idle - showing the last thing compbot looked at.');
+  } catch (e) {}
+}
+poll(); setInterval(poll, 1000);
+</script>
+{% endblock %}

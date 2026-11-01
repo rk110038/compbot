@@ -607,6 +607,82 @@ async def settings_save(request: Request):
     return RedirectResponse("/settings?msg=Settings+saved", status_code=303)
 
 
+# --------------------------------------------------------------------------- live view
+
+def _live_status() -> dict:
+    import json as _json
+    import time as _time
+
+    d = cfg.live_dir
+    status = {}
+    try:
+        status = _json.loads((d / "status.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        pass
+    try:
+        frame_age = round(_time.time() - (d / "frame.jpg").stat().st_mtime, 1)
+    except OSError:
+        frame_age = None
+    return {"running": jobs.is_running("enter"), "progress": jobs.progress("enter"), "phase": status.get("phase"),
+            "title": status.get("title"), "url": status.get("url"), "result": status.get("result"),
+            "status_age": round(_time.time() - status["updated"], 1) if status.get("updated") else None,
+            "frame_age": frame_age}
+
+
+@app.get("/live", response_class=HTMLResponse)
+def live_page(request: Request):
+    return render(request, "live.html", status=_live_status(), no_autoreload=True)
+
+
+@app.get("/live/status")
+def live_status():
+    return _live_status()
+
+
+@app.get("/live/frame.jpg")
+def live_frame():
+    path = cfg.live_dir / "frame.jpg"
+    if not path.exists():
+        raise HTTPException(404)
+    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/live/stream")
+async def live_stream(request: Request, max_frames: int = 0):
+    """MJPEG stream of the browser compbot is driving (watch-only)."""
+    import asyncio
+    import time as _time
+
+    path = cfg.live_dir / "frame.jpg"
+
+    async def frames():
+        last, sent, started = None, 0, _time.monotonic()
+        while _time.monotonic() - started < 600:  # the page reconnects; caps any stream a proxy forgot to close
+            if await request.is_disconnected():
+                break
+            try:
+                st = path.stat()
+                key = (st.st_mtime_ns, st.st_size)
+            except OSError:
+                key = None
+            if key and key != last:
+                try:
+                    data = path.read_bytes()
+                except OSError:
+                    data = b""
+                if data[:2] == b"\xff\xd8":
+                    last = key
+                    yield (b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: " + str(len(data)).encode()
+                           + b"\r\n\r\n" + data + b"\r\n")
+                    sent += 1
+                    if max_frames and sent >= max_frames:
+                        break
+            await asyncio.sleep(0.12)
+
+    return StreamingResponse(frames(), media_type="multipart/x-mixed-replace; boundary=frame",
+                             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+
+
 @app.get("/screenshots/{name}")
 def screenshot(name: str):
     if "/" in name or "\\" in name or ".." in name or not name.endswith(".jpg"):

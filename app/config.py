@@ -54,6 +54,18 @@ class Config:
         return self.data_dir / "screenshots"
 
     @property
+    def live_dir(self) -> Path:
+        """Where the live browser view is written: shared memory, so streaming never touches the NAS's disks."""
+        env = _env("LIVE_DIR")
+        if env:
+            return Path(env)
+        shm = Path("/dev/shm")
+        if shm.is_dir():
+            return shm / "compbot-live"
+        import tempfile
+        return Path(tempfile.gettempdir()) / "compbot-live"
+
+    @property
     def llm_enabled(self) -> bool:
         """An endpoint is configured (the model itself may be chosen in the GUI)."""
         return bool(self.llm_base_url)
@@ -116,6 +128,7 @@ DEFAULT_SETTINGS: dict = {
     "ai_min_confidence": 80,             # only use AI answers it is at least this sure of (0-100)
     "ai_double_check": True,             # a second AI pass must not judge the answer wrong before it's used
     "ai_tiebreakers": False,             # let the AI write short tie-breaker / "tell us why" answers
+    "live_view": True,                   # stream the browser to the Live page while entering
     "delay_min_seconds": 20,
     "delay_max_seconds": 60,
     "skip_keywords": "",                 # comma-separated; titles containing any are skipped

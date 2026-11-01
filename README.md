@@ -86,6 +86,7 @@ Default schedule (Europe/London): discover 07:00, enter 07:30, inbox 08:00 and 2
 | **Manual queue** | Comps that need you. Click-to-copy answers and personal details, **Open ↗**, then **I've entered it**. Marking manual entries matters, because it lets the inbox checker match a win email to them |
 | **Inbox** | Classified emails (possible win, loss, confirm, entry acknowledgement, scam suspect, promo). Confirm or reject wins and link emails to competitions |
 | **Wins** | Confirmed and possible wins with total stated prize value |
+| **Live** | Watch the browser compbot is driving as it happens: a live picture of the page plus the current competition, step and result. Watch-only, and streamed from memory, so there are no disk writes. Switch it off in Settings → Live view |
 | **Log** | Everything compbot and you did, plus job run history |
 
 Statuses: `queued` (will be auto-entered) → `entered` (or `manual`, `skipped`, `expired`). Outcomes: `pending` → `possible_win` → `won` / `lost`. Entered comps are marked **lost** automatically 60 days after closing if no win email arrived (most promoters only contact winners).

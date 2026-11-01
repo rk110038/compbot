@@ -5,7 +5,10 @@ Anything that needs those is handed to the manual queue with a reason.
 """
 from __future__ import annotations
 
+import base64
+import json
 import logging
+import os
 import re
 import time
 from dataclasses import asdict, dataclass, field
@@ -441,6 +444,94 @@ MAX_FORM_PAGES = 8  # multi-page forms and quizzes (one question per page)
 
 # --------------------------------------------------------------------------- helpers
 
+def _pause(page, seconds: float) -> None:
+    """Wait while letting Playwright keep processing events (so the live view keeps streaming)."""
+    try:
+        page.wait_for_timeout(seconds * 1000)
+    except Exception:  # noqa: BLE001
+        time.sleep(seconds)
+
+
+class LiveView:
+    """Streams the browser's screen (Chrome DevTools screencast) to shared memory for the GUI's Live page.
+
+    Only ever *watched*: frames are JPEGs written to LIVE_DIR (tmpfs, no disk wear); nothing can be controlled.
+    """
+
+    def __init__(self, context, enabled: bool, title: str = ""):
+        self.context, self.enabled, self.title = context, enabled, title
+        self.cdp = None
+        self.page = None
+        self.dir = get_config().live_dir
+        if enabled:
+            try:
+                self.dir.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                self.enabled = False
+
+    def attach(self, page) -> None:
+        if not self.enabled or page is self.page:
+            return
+        self.detach()
+        try:
+            self.cdp = self.context.new_cdp_session(page)
+            self.cdp.on("Page.screencastFrame", self._frame)
+            self.cdp.send("Page.startScreencast", {"format": "jpeg", "quality": 55, "maxWidth": 1100,
+                                                   "maxHeight": 1400, "everyNthFrame": 1})
+            self.page = page
+        except Exception as exc:  # noqa: BLE001
+            log.debug("live view unavailable: %s", exc)
+            self.cdp = None
+
+    def _frame(self, params: dict) -> None:
+        try:
+            tmp = self.dir / "frame.jpg.tmp"
+            tmp.write_bytes(base64.b64decode(params["data"]))
+            os.replace(tmp, self.dir / "frame.jpg")
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            self.cdp.send("Page.screencastFrameAck", {"sessionId": params["sessionId"]})
+        except Exception:  # noqa: BLE001
+            pass
+
+    def status(self, phase: str, result: str | None = None) -> None:
+        if not self.enabled:
+            return
+        try:
+            url = self.page.url if self.page else ""
+        except Exception:  # noqa: BLE001
+            url = ""
+        data = {"phase": phase[:300], "url": url[:500], "title": self.title[:200], "updated": time.time(),
+                "result": result}
+        try:
+            tmp = self.dir / "status.json.tmp"
+            tmp.write_text(json.dumps(data), encoding="utf-8")
+            os.replace(tmp, self.dir / "status.json")
+        except Exception:  # noqa: BLE001
+            pass
+
+    def detach(self) -> None:
+        if self.cdp is not None:
+            try:
+                self.cdp.send("Page.stopScreencast")
+                self.cdp.detach()
+            except Exception:  # noqa: BLE001
+                pass
+        self.cdp, self.page = None, None
+
+
+class _LiveSteps(list):
+    """The attempt's step log; each new step is also shown on the Live page."""
+
+    def __init__(self, live: LiveView):
+        super().__init__()
+        self.live = live
+
+    def append(self, item) -> None:
+        super().append(item)
+        self.live.status(str(item))
+
 def _all_frames(page):
     # Frames that never navigated (e.g. lazy-loaded iframes off-screen) have no URL and no JS context;
     # evaluating in them waits forever, so leave them out.
@@ -490,7 +581,7 @@ def dismiss_cookies(page) -> list[str]:
                 clicked.append(str(r))
                 found = True
         if found:
-            time.sleep(1.2)
+            _pause(page, 1.2)
         else:
             break
     return clicked
@@ -698,7 +789,7 @@ def _click_submit(page, frame) -> str:
     loc = frame.locator('[data-cb-submit="1"]').first
     try:
         if loc.is_disabled(timeout=2000):
-            time.sleep(2.5)
+            _pause(page, 2.5)
             if loc.is_disabled(timeout=2000):
                 return "failed: the submit button stayed disabled (a required field probably wasn't recognised)"
     except Exception:  # noqa: BLE001
@@ -714,7 +805,7 @@ def _click_submit(page, frame) -> str:
         pass
     for fr in _all_frames(page):
         _safe_eval(fr, JS_CLOSE_POPUPS)
-    time.sleep(0.8)
+    _pause(page, 0.8)
     try:
         loc.click(timeout=4000)
         return "clicked after closing a pop-up"
@@ -730,7 +821,7 @@ def reveal_consented_embed(page) -> str | None:
     for fr in _all_frames(page):
         label = _safe_eval(fr, JS_EMBED_CONSENT)
         if label and _click_marked(fr):
-            time.sleep(2)
+            _pause(page, 2)
             _wait_settle(page, 8000)
             prime_iframes(page)
             return label
@@ -744,7 +835,7 @@ def prime_iframes(page) -> None:
         return
     deadline = time.time() + 6
     while time.time() < deadline and any(not f.url for f in page.frames if not f.is_detached()):
-        time.sleep(0.5)
+        _pause(page, 0.5)
     _wait_settle(page, 5000)
 
 
@@ -756,8 +847,8 @@ def scroll_through(page) -> None:
         while y < min(height, 30000):
             y += 900
             page.mouse.wheel(0, 900)
-            time.sleep(0.25)
-        time.sleep(1.5)
+            _pause(page, 0.25)
+        _pause(page, 1.5)
         page.evaluate("() => window.scrollTo(0, 0)")
     except Exception:  # noqa: BLE001
         pass
@@ -891,6 +982,10 @@ class Browser:
         context.route("**/*", lambda route: route.continue_() if is_public_url(route.request.url, allow_inline=True)
                       else route.abort("blockedbyclient"))
         page = context.new_page()
+        live = LiveView(context, bool(settings.get("live_view", True)), str(comp_context.get("title") or ""))
+        live.attach(page)
+        live.status(f"Opening {url[:120]}")
+        details["steps"] = _LiveSteps(live)
         gen = [0]
         checked_urls: set[str] = set()
 
@@ -927,6 +1022,7 @@ class Browser:
                 return res
             _wait_settle(page)
             details["cookies"] = dismiss_cookies(page)
+            live.status("Looking for the entry form")
             prime_iframes(page)
             res.final_url = page.url
 
@@ -974,9 +1070,10 @@ class Browser:
                         except Exception:  # noqa: BLE001
                             _safe_eval(fr, "() => { const b = document.querySelector('[data-cb-reveal=\"1\"]'); "
                                            "if (b) b.click(); return !!b; }")
-                        time.sleep(2.5)
+                        _pause(page, 2.5)
                         if len(context.pages) > n_pages:
                             page = context.pages[-1]
+                            live.attach(page)
                             page.wait_for_load_state("domcontentloaded", timeout=15000)
                         _wait_settle(page, 6000)
                         dismiss_cookies(page)
@@ -1019,6 +1116,9 @@ class Browser:
                         break
                     plan = plan_form(fields, ctx)
                     if llm.enabled(settings) and (settings.get("ai_answers", True) or settings.get("ai_tiebreakers")):
+                        if any(a.note in AI_QUESTION_NOTES or a.note == "question with no known answer"
+                               or a.note == "creative / tie-breaker answer" for _, a in plan):
+                            live.status("Asking the AI about the competition question")
                         plan = _ai_fill(page, frame, plan, settings, comp_context, details)
                     unknown = [(f, a) for f, a in plan if a.kind == "unknown"]
                     if unknown and llm.enabled(settings) and settings.get("llm_for_forms", True):
@@ -1046,6 +1146,7 @@ class Browser:
                                                "note": a.note} for f, a in plan]
                         res.screenshot_before = _shot(page, cfg.screenshot_dir / f"{shot_prefix}_needsinput.jpg")
                         return res
+                    live.status(f"Filling {sum(1 for _, a in plan if a.kind != 'skip')} field(s)")
                     failed = []
                     for f, a in plan:
                         done_idx.add(f.idx)
@@ -1064,7 +1165,7 @@ class Browser:
                         return res
                     plan_all += plan
                     _safe_eval(frame, JS_BLUR)
-                    time.sleep(0.8)
+                    _pause(page, 0.8)
                     gen[0] += 1
                     refreshed = _refresh_container(frame, done_idx, f"g{gen[0]}r_")
                     if refreshed is None:
@@ -1105,11 +1206,12 @@ class Browser:
                     return res
                 if how != "click":
                     details["steps"].append(f"step {step}: submit {how}")
-                time.sleep(2)
+                _pause(page, 2)
                 if len(context.pages) > n_pages:
                     page = context.pages[-1]
+                    live.attach(page)
                 _wait_settle(page, 12000)
-                time.sleep(1.5)
+                _pause(page, 1.5)
 
                 def read_outcome():
                     after = _page_text(page)
@@ -1117,7 +1219,7 @@ class Browser:
 
                 new_text = read_outcome()
                 if not (SUCCESS_RE.search(new_text) or ALREADY_RE.search(new_text) or ERROR_RE.search(new_text)):
-                    time.sleep(3.5)  # many forms show their result a moment after the request finishes
+                    _pause(page, 3.5)  # many forms show their result a moment after the request finishes
                     new_text = read_outcome()
                 res.final_url = page.url
                 res.screenshot_after = _shot(page, cfg.screenshot_dir / f"{shot_prefix}_s{step}_after.jpg")
@@ -1189,7 +1291,11 @@ class Browser:
                 pass
             return res
         finally:
+            details["steps"] = list(details.get("steps") or [])  # plain list (the live wrapper isn't picklable)
             res.details = details
+            live.status("Finished", result=f"{res.result}: {res.message[:200]}")
+            _pause(page, 0.6)  # let the last frames through before closing
+            live.detach()
             try:
                 context.close()
             except Exception:  # noqa: BLE001
