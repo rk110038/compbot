@@ -5,17 +5,17 @@
 
 {% macro comp_row(c) -%}
 <tr>
-  <td class="nowrap small muted">{{ c.posted_at | local('%d %b') }}</td>
+  <td class="nowrap small muted hide-sm">{{ c.posted_at | local('%d %b') }}</td>
   <td class="title"><a href="/competitions/{{ c.id }}">{{ c.prize or c.title }}</a>
     {% if c.is_daily %}<span class="badge">daily</span>{% endif %}
     {% if c.is_multi %}<span class="badge">{{ c.entry_urls|length }} sites</span>{% endif %}
     {% if c.needs_review %}<span class="badge b-warn">check entry</span>{% endif %}
     <div class="small muted">{{ c.status_reason[:140] }}</div></td>
   <td class="nowrap">{{ c.closes_label }}<div class="small muted">{{ c.closes_on | days_left }}</div></td>
-  <td>{{ badge(c.method) }}</td>
+  <td class="hide-sm">{{ badge(c.method) }}</td>
   <td>{{ badge(c.status) }}</td>
   <td>{% if c.status == 'entered' or c.entry_count %}{{ badge(c.outcome) }}{% endif %}</td>
-  <td class="nowrap">{% if c.prize_value %}£{{ '{:,.0f}'.format(c.prize_value) }}{% endif %}</td>
+  <td class="nowrap hide-sm">{% if c.prize_value %}£{{ '{:,.0f}'.format(c.prize_value) }}{% endif %}</td>
 </tr>
 {%- endmacro %}
 

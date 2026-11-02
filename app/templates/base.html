@@ -21,20 +21,27 @@
 </head>
 <body>
 {% set path = request.url.path %}
-<header class="top"><div class="inner">
+<header class="top" id="top"><div class="inner">
+  <button type="button" class="nav-toggle" id="nav-toggle" aria-label="Menu" aria-expanded="false" aria-controls="site-nav">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </button>
   <a class="brand" href="/"><span>🏆</span> compbot</a>
-  <nav>
+  <nav id="site-nav" class="site-nav" aria-label="Main">
     <a href="/" class="{{ 'active' if path == '/' }}">Dashboard</a>
     <a href="/competitions" class="{{ 'active' if path.startswith('/competitions') }}">Competitions</a>
     <a href="/manual" class="{{ 'active' if path == '/manual' }}">Manual queue{% if nav_manual %}<span class="count">{{ nav_manual }}</span>{% endif %}</a>
     <a href="/inbox" class="{{ 'active' if path == '/inbox' }}">Inbox</a>
     <a href="/wins" class="{{ 'active' if path == '/wins' }}">Wins{% if nav_wins %}<span class="count gold">{{ nav_wins }}</span>{% endif %}</a>
-    <a href="/live" class="{{ 'active' if path == '/live' }}">Live{% if 'enter' in running %} <span style="color:#e03131" title="An entry run is in progress">●</span>{% endif %}</a>
+    <a href="/live" class="{{ 'active' if path == '/live' }}">Live{% if 'enter' in running %}<span class="live-dot" title="An entry run is in progress"></span>{% endif %}</a>
     <a href="/log" class="{{ 'active' if path == '/log' }}">Log</a>
     <a href="/settings" class="{{ 'active' if path == '/settings' }}">Settings</a>
   </nav>
-  <div class="right">
-    {% for name, prog in running.items() %}<span class="running"><span class="spinner"></span>{{ name }}: {{ prog }}</span> {% endfor %}
+  <div class="top-right">
+    {% set verbs = {'discover': 'Discovering', 'enter': 'Entering', 'inbox': 'Checking inbox', 'maintenance': 'Tidying up'} %}
+    {% for name, prog in running.items() %}
+    <a class="running" href="{{ '/live' if name == 'enter' else '/log' }}" title="{{ verbs.get(name, name) }}{{ ': ' ~ prog if prog != 'running' }}">
+      <span class="spinner"></span><span class="run-verb">{{ verbs.get(name, name) }}</span>{% if prog != 'running' %}<span class="run-prog">{{ prog.split(':')[0] }}</span>{% endif %}</a>
+    {% endfor %}
     <button type="button" class="theme-btn" id="theme-btn" aria-label="Colour theme"></button>
   </div>
 </div></header>
@@ -52,8 +59,8 @@
   const next = {null: 'light', light: 'dark', dark: null};  // Auto -> Light -> Dark -> Auto
   const show = () => {
     const t = cbTheme.pick();
-    btn.innerHTML = t === 'light' ? '☀️<small>Light</small>' : t === 'dark' ? '🌙<small>Dark</small>' : '🌓<small>Auto</small>';
-    btn.title = (t ? `${t[0].toUpperCase()}${t.slice(1)} mode` : 'Following your system setting') + ' - click to change';
+    btn.textContent = t === 'light' ? '☀️' : t === 'dark' ? '🌙' : '🌓';
+    btn.title = (t ? `${t[0].toUpperCase()}${t.slice(1)} mode` : 'Auto: following your system setting') + ' - click to change';
   };
   btn.addEventListener('click', () => {
     const n = next[cbTheme.pick()];
@@ -63,12 +70,24 @@
   });
   show();
 })();
+(function () {
+  // Burger menu (narrow screens): toggles the nav; closes on Escape, a click outside, or choosing a page.
+  const top = document.getElementById('top'), toggle = document.getElementById('nav-toggle');
+  const set = open => { top.classList.toggle('nav-open', open); toggle.setAttribute('aria-expanded', String(open)); };
+  toggle.addEventListener('click', e => { e.stopPropagation(); set(!top.classList.contains('nav-open')); });
+  document.addEventListener('click', e => { if (!top.contains(e.target)) set(false); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') set(false); });
+  document.getElementById('site-nav').addEventListener('click', e => { if (e.target.closest('a')) set(false); });
+})();
 document.addEventListener('click', e => {
   const el = e.target.closest('[data-copy]');
   if (!el) return;
   navigator.clipboard.writeText(el.dataset.copy).then(() => { el.classList.add('copied'); setTimeout(() => el.classList.remove('copied'), 1200); });
 });
-{% if running and not no_autoreload %}setTimeout(() => location.reload(), 15000);{% endif %}
+{% if running and not no_autoreload %}
+// Refresh while a job runs, but not while the menu is open.
+(function wait() { setTimeout(() => document.querySelector('header.top.nav-open') ? wait() : location.reload(), 15000); })();
+{% endif %}
 </script>
 </body>
 </html>

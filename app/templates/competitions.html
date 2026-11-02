@@ -21,7 +21,7 @@
 </form>
 <div class="card" style="padding:0">
 <table>
-  <tr><th>Posted</th><th>Competition</th><th>Closes</th><th>Method</th><th>Status</th><th>Outcome</th><th>Value</th></tr>
+  <tr><th class="hide-sm">Posted</th><th>Competition</th><th>Closes</th><th class="hide-sm">Method</th><th>Status</th><th>Outcome</th><th class="hide-sm">Value</th></tr>
   {% for c in rows %}{{ comp_row(c) }}{% else %}<tr><td colspan="7" class="muted">No competitions match.</td></tr>{% endfor %}
 </table>
 </div>
