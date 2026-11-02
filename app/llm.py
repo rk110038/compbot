@@ -2,7 +2,8 @@
 
 What is sent: competition text, form field *labels* and option lists, and the public text of the competition page.
 Your personal details are never sent - the AI only ever names a profile *key* (e.g. "first_name") and compbot fills
-the value locally. Email classification (opt-in) sends the sender, subject and a short snippet.
+the value locally. Email classification (opt-in) sends the sender, subject and a short snippet. With web search set
+up (see websearch.py), the search words the AI writes for a competition question go to that search service.
 """
 from __future__ import annotations
 
@@ -275,31 +276,44 @@ ANSWER_SCHEMA = {
     "properties": {
         "answer": {"type": ["string", "null"]},
         "confidence": {"type": "integer", "minimum": 0, "maximum": 100},
-        "source": {"type": "string", "enum": ["page", "knowledge", "none"]},
+        "source": {"type": "string", "enum": ["page", "web", "knowledge", "none"]},
         "reason": {"type": "string"},
+        "search_query": {"type": "string"},
     },
-    "required": ["answer", "confidence", "source", "reason"],
+    "required": ["answer", "confidence", "source", "reason", "search_query"],
 }
 
 ANSWER_SYSTEM = (
     "You answer the question on a UK consumer competition entry form. Use the competition page text first (the "
-    "answer is very often stated there, e.g. in the description of the prize or the promoter), then your general "
-    "knowledge. If options are given, the answer MUST be exactly one of the options, copied verbatim. Keep free-text "
-    "answers short (a word, name, number or short phrase). confidence is your honest probability (0-100) that the "
-    "answer is correct. If you cannot work it out, return answer null with low confidence - never guess wildly. "
-    'Reply as JSON: {"answer": ..., "confidence": ..., "source": "page"|"knowledge"|"none", "reason": "<short>"}'
+    "answer is very often stated there, e.g. in the description of the prize or the promoter), then web_results if "
+    "given (web search results for this question: trust facts that several results agree on, and ignore results "
+    "about a different brand, product or person), then your general knowledge. If options are given, the answer "
+    "MUST be exactly one of the options, copied verbatim. Keep free-text answers short (a word, name, number or "
+    "short phrase). confidence is your honest probability (0-100) that the answer is correct. If you cannot work it "
+    "out, return answer null with low confidence - never guess wildly. search_query is what you would type into a "
+    "web search to find or confirm the answer: under 12 words, naming the brand, product, place or person the "
+    "question is about (take the name from the page rather than writing 'this' or 'our'). "
+    'Reply as JSON: {"answer": ..., "confidence": ..., "source": "page"|"web"|"knowledge"|"none", '
+    '"reason": "<short>", "search_query": "..."}'
 )
 
 
+def _web_for_prompt(web_results: list[dict] | None) -> list[dict] | None:
+    return [{"title": r.get("title"), "url": r.get("url"), "snippet": r.get("content")}
+            for r in (web_results or [])[:8]] or None
+
+
 def answer_question(question: str, options: list[str] | None, page_text: str, context: dict,
-                    settings: dict | None = None) -> dict | None:
-    user = json.dumps({
+                    settings: dict | None = None, web_results: list[dict] | None = None) -> dict | None:
+    payload = {
         "question": question[:500],
         "options": [o for o in (options or []) if o][:30] or None,
         "competition": {"title": context.get("title"), "post_excerpt": (context.get("post_excerpt") or "")[:800]},
         "page_text": page_text[:7000],
-    }, ensure_ascii=False)
-    res = chat_json(ANSWER_SYSTEM, user, settings, schema=ANSWER_SCHEMA)
+    }
+    if web_results:
+        payload["web_results"] = _web_for_prompt(web_results)
+    res = chat_json(ANSWER_SYSTEM, json.dumps(payload, ensure_ascii=False), settings, schema=ANSWER_SCHEMA)
     if not isinstance(res, dict):
         return None
     ans = res.get("answer")
@@ -311,8 +325,42 @@ def answer_question(question: str, options: list[str] | None, page_text: str, co
         conf = int(res.get("confidence") or 0)
     except (TypeError, ValueError):
         conf = 0
+    query = re.sub(r"\s+", " ", str(res.get("search_query") or "")).strip()[:150]
     return {"answer": (ans or "").strip() or None, "confidence": max(0, min(100, conf)),
-            "source": res.get("source") or "none", "reason": str(res.get("reason") or "")[:200]}
+            "source": res.get("source") or "none", "reason": str(res.get("reason") or "")[:200],
+            "search_query": query or None}
+
+
+def answer_with_lookup(question: str, options: list[str] | None, page_text: str, context: dict,
+                       settings: dict | None, min_conf: int) -> dict | None:
+    """answer_question, then - unless the page settled it - a web search and a second, better-informed answer.
+
+    A model's own 'knowledge' of trivia is often confidently wrong, so anything not read off the page (or below
+    min_conf) is looked up. When a search was made the result has 'search' = {query, results, sources, error}, and
+    'web_results' (for the double-check) when the second answer used them.
+    """
+    from . import websearch
+
+    res = answer_question(question, options, page_text, context, settings)
+    if res is None or not websearch.enabled(settings):
+        return res
+    if res["answer"] and res["source"] == "page" and res["confidence"] >= min_conf:
+        return res
+    query = res.get("search_query") or re.sub(r"\s+", " ", f"{question} {context.get('title') or ''}").strip()[:150]
+    results = websearch.search(query)
+    info = {"query": query, "results": len(results), "error": websearch.last_error(),
+            "sources": [r["url"] for r in results if r.get("url")][:3]}
+    if not results:
+        res["search"] = info
+        return res
+    second = answer_question(question, options, page_text, context, settings, web_results=results)
+    if second is None or (not second["answer"] and res["answer"]):
+        res["search"] = dict(info, error=info["error"] or ("the AI couldn't use the results" if second is None
+                                                            else "no answer from the results"))
+        return res
+    second["search"] = info
+    second["web_results"] = results
+    return second
 
 
 VERIFY_SCHEMA = {
@@ -325,18 +373,20 @@ VERIFY_SCHEMA = {
 VERIFY_SYSTEM = (
     "You double-check a proposed answer to a UK competition question. Read the question carefully and check the "
     "answer addresses exactly what is asked (e.g. the watch case, not the dial; the town, not the county). Use the "
-    "page text and your general knowledge. If the page simply doesn't mention it and you can't tell from knowledge, "
-    "say unsure - only say incorrect when you have a reason to think the answer is wrong. "
+    "page text, web_results if given (web search results for the question), and your general knowledge. If neither "
+    "settles it, say unsure - only say incorrect when you have a reason to think the answer is wrong. "
     'Reply as JSON: {"verdict": "correct"|"incorrect"|"unsure", "reason": "<short>"}'
 )
 
 
 def verify_answer(question: str, answer: str, options: list[str] | None, page_text: str,
-                  settings: dict | None = None) -> dict | None:
+                  settings: dict | None = None, web_results: list[dict] | None = None) -> dict | None:
     """Independent second look at an answer before it's used (catches 'right fact, wrong part' mistakes)."""
-    user = json.dumps({"question": question[:500], "proposed_answer": answer, "options": options or None,
-                       "page_text": page_text[:7000]}, ensure_ascii=False)
-    res = chat_json(VERIFY_SYSTEM, user, settings, schema=VERIFY_SCHEMA)
+    payload = {"question": question[:500], "proposed_answer": answer, "options": options or None,
+               "page_text": page_text[:7000]}
+    if web_results:
+        payload["web_results"] = _web_for_prompt(web_results)
+    res = chat_json(VERIFY_SYSTEM, json.dumps(payload, ensure_ascii=False), settings, schema=VERIFY_SCHEMA)
     if not isinstance(res, dict) or res.get("verdict") not in ("correct", "incorrect", "unsure"):
         return None
     return {"verdict": res["verdict"], "reason": str(res.get("reason") or "")[:200]}

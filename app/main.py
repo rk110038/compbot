@@ -557,7 +557,7 @@ def event_log(request: Request, kind: str = "", level: str = "", page: int = 1):
 
 @app.get("/settings", response_class=HTMLResponse)
 def settings_view(request: Request):
-    from . import llm
+    from . import llm, websearch
 
     with session_scope() as s:
         profile = get_profile(s)
@@ -569,7 +569,7 @@ def settings_view(request: Request):
     return render(request, "settings.html", profile=profile, settings=settings, defaults=DEFAULT_SETTINGS,
                   dry_runs=dry_runs, ollama=ollama, pulls=pulls, recommended=llm.RECOMMENDED_MODELS,
                   installed=installed, active_model=llm.model_name(settings), ai_pause=llm.ai_paused(settings),
-                  pulling=any(not p["done"] for p in pulls.values()))
+                  pulling=any(not p["done"] for p in pulls.values()), web_search=websearch.describe())
 
 
 MODEL_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._\-/]{0,80}(:[a-z0-9._\-]{1,40})?$", re.I)
@@ -613,6 +613,14 @@ def ai_test(request: Request):
     if not llm.enabled(settings):
         return back(request, "/settings", "Choose a model first (and save settings)", warn=True)
     ok, msg = llm.self_test(settings)
+    return back(request, "/settings", msg, warn=not ok)
+
+
+@app.post("/ai/test-search")
+def ai_test_search(request: Request):
+    from . import websearch
+
+    ok, msg = websearch.self_test()
     return back(request, "/settings", msg, warn=not ok)
 
 

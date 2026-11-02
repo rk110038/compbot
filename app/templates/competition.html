@@ -39,13 +39,14 @@
       <h2>Entry attempts</h2>
       {% for a in attempts %}
       <div class="attempt">
-        <div class="actions">{{ badge(a.result) }} <span class="badge">{{ a.mode }}</span> <span class="muted small">{{ a.started_at | local('%d %b %Y %H:%M') }}{% if a.details and a.details.timing %} · took {{ a.details.timing.seconds }}s{% if a.details.timing.ai_calls %} ({{ a.details.timing.ai_seconds }}s in {{ a.details.timing.ai_calls }} AI call{{ 's' if a.details.timing.ai_calls != 1 }}){% endif %}{% endif %}</span>
+        <div class="actions">{{ badge(a.result) }} <span class="badge">{{ a.mode }}</span> <span class="muted small">{{ a.started_at | local('%d %b %Y %H:%M') }}{% if a.details and a.details.timing %} · took {{ a.details.timing.seconds }}s{% if a.details.timing.ai_calls %} ({{ a.details.timing.ai_seconds }}s in {{ a.details.timing.ai_calls }} AI call{{ 's' if a.details.timing.ai_calls != 1 }}{% if a.details.timing.web_searches %}, {{ a.details.timing.web_searches }} web search{{ 'es' if a.details.timing.web_searches != 1 }}{% endif %}){% endif %}{% endif %}</span>
           {% if a.url and not a.url.startswith('mailto:') %}<a class="small" href="{{ a.url }}" target="_blank" rel="noopener noreferrer">{{ a.url[:70] }}</a>{% endif %}</div>
         {% set em = (a.details.fields if a.details and a.details.fields else []) | selectattr('source', 'equalto', 'email') | map(attribute='value') | select | first %}
         {% if em %}<div class="small muted">Email address used: <b>{{ em }}</b></div>{% endif %}
         {% if a.details and a.details.ai %}
         <div class="small" style="margin:4px 0">🤖 {% for x in a.details.ai %}
-          <div>{{ x.question[:120] }} → <b>{{ x.answer if x.answer else 'no answer' }}</b>{% if x.confidence is not none %} ({{ x.confidence }}% sure{% if x.source %}, from {{ x.source }}{% endif %}){% endif %}{% if x.check %} · double-check: {{ x.check }}{% endif %}{% if x.used %} <span class="badge b-ok">used</span>{% else %} <span class="badge">not used</span>{% endif %}{% if x.reason %} <span class="muted">- {{ x.reason[:120] }}</span>{% endif %}</div>
+          <div>{{ x.question[:120] }} → <b>{{ x.answer if x.answer else 'no answer' }}</b>{% if x.confidence is not none %} ({{ x.confidence }}% sure{% if x.source %}, from {{ x.source }}{% endif %}){% endif %}{% if x.check %} · double-check: {{ x.check }}{% endif %}{% if x.used %} <span class="badge b-ok">used</span>{% else %} <span class="badge">not used</span>{% endif %}{% if x.reason %} <span class="muted">- {{ x.reason[:120] }}</span>{% endif %}
+            {% if x.searched %}<div class="muted">🔎 looked up “{{ x.searched[:100] }}”{% for u in (x.web_sources or [])[:3] %}{{ ':' if loop.first }} <a href="{{ u }}" target="_blank" rel="noopener noreferrer">{{ u.split('/')[2] if u.count('/') >= 2 else u }}</a>{% endfor %}{% if x.search_error %} · {{ x.search_error[:120] }}{% endif %}</div>{% endif %}</div>
         {% endfor %}</div>
         {% endif %}
         <div style="white-space:pre-wrap; margin:6px 0">{{ a.message }}</div>

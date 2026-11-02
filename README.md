@@ -53,7 +53,7 @@ Instead of Install-via-YAML you can run the stack with Compose from **System →
 
 ```bash
 mkdir -p /mnt/appspool/compbot && cd /mnt/appspool/compbot
-for f in docker-compose.yml docker-compose.gpu-nvidia.yml docker-compose.gpu-amd.yml docker-compose.gpu-vulkan.yml; do
+for f in docker-compose.yml docker-compose.gpu-nvidia.yml docker-compose.gpu-amd.yml docker-compose.gpu-vulkan.yml docker-compose.searxng.yml; do
   sudo curl -fsSLO https://raw.githubusercontent.com/rk110038/compbot/main/$f; done
 [ -f .env ] || sudo curl -fsSLo .env https://raw.githubusercontent.com/rk110038/compbot/main/.env.example
 sudo nano .env        # passwords, Gmail, COMPBOT_UID/GID, and COMPOSE_FILE for your GPU (see below)
@@ -111,9 +111,11 @@ Secrets and infrastructure go in environment variables (in the YAML). Everything
 | `DISCOVER_CRON`, `ENTER_CRON`, `INBOX_CRON`, `MAINTENANCE_CRON` | see above | Standard 5-field cron |
 | `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY` | — | Only to use a different OpenAI-compatible endpoint instead of the bundled Ollama |
 | `OLLAMA_URL` | set by `docker-compose.yml` | Where the bundled Ollama runs (`http://ollama:11434`) |
+| `SEARXNG_URL` | set by `docker-compose.searxng.yml` | Your SearXNG, for the AI's web look-ups (`http://searxng:8080`) |
+| `OLLAMA_API_KEY` | — | Optional: use Ollama's hosted web search for look-ups (instead of, or as a fallback to, SearXNG) |
 | `OLLAMA_TAG` | `latest` | (Compose) pin the bundled Ollama to a published version, e.g. `0.40.13` |
 | `COMPBOT_UID` / `COMPBOT_GID` | `568` | (Compose) user compbot runs as; must own `./data` |
-| `COMPOSE_FILE` | `docker-compose.yml` | (Compose) add your GPU file, see the AI section |
+| `COMPOSE_FILE` | `docker-compose.yml` | (Compose) add your GPU file and the web search file, see the AI section |
 | `TZ` | `Europe/London` | |
 | `DATA_DIR` | `/data` | |
 
@@ -121,9 +123,9 @@ GUI settings include the daily entry cap (default 25), delays between entries, r
 
 ### AI helper (Ollama, runs on your NAS)
 
-`docker-compose.yml` runs [Ollama](https://ollama.com) next to compbot, so the AI is local and nothing leaves your network. With a model chosen in **Settings → AI helper**, compbot will:
+`docker-compose.yml` runs [Ollama](https://ollama.com) next to compbot, so the AI is local and nothing leaves your network (unless you set up web look-ups, below, which send out search words only). With a model chosen in **Settings → AI helper**, compbot will:
 
-* **answer competition questions the MSE post didn't**: it reads the competition page first, then uses the model's general knowledge, and only uses answers the model is at least 80% sure of (adjustable). By default a second pass double-checks each answer and rejects ones it thinks are wrong. In testing, this caught a model that answered the dial's colour when asked about the case. Every AI answer, its confidence and the check result are shown on the competition page;
+* **answer competition questions the MSE post didn't**: it reads the competition page first, then (with web look-ups set up, below) searches the web, then uses the model's general knowledge, and only uses answers the model is at least 80% sure of (adjustable). By default a second pass double-checks each answer and rejects ones it thinks are wrong. In testing, this caught a model that answered the dial's colour when asked about the case. Every AI answer, its confidence and the check result are shown on the competition page;
 * optionally write short tie-breaker / "tell us why" answers (off by default);
 * map form fields the rules don't recognise (it sees field **labels only** and replies with profile *keys*; your details are filled in locally and never sent to the model);
 * read unclear posts, and optionally double-check possible-win emails.
@@ -154,6 +156,13 @@ sudo docker exec compbot-ollama vulkaninfo --summary                            
 
 Use **Test the chosen model** in Settings to see an answer, how long it took, and whether the model ran on the GPU, the CPU or both. You can also check that `sudo docker exec compbot-ollama ollama ps` shows `100% GPU` while a model is loaded; Settings also shows "% on GPU". Without a GPU it still works, at about 20–30 seconds per question for a 4B model. If the test says **"signal: killed"**, Linux ran out of RAM and stopped the model: usually it was loading into ordinary memory instead of the graphics card. On TrueNAS the ZFS cache can take nearly all the RAM, so consider capping it (for example to 8 GiB with a *Post Init* command in **System → Advanced → Init/Shutdown Scripts**: `echo 8589934592 > /sys/module/zfs/parameters/zfs_arc_max`).
 
+**Web look-ups.** Small models often "know" trivia confidently and wrongly, so compbot can search the web for any question the competition page doesn't answer. The AI writes the search words from the question (naming the brand or product the page is about), reads the top results' snippets, and answers again. The double-check sees the same results, and the competition page shows what was searched and which sites answered. Google's own search API is closed to new users and shuts down on 1 January 2027, so there are two ways to set this up:
+
+* **SearXNG (recommended, free, no account).** A private metasearch engine that runs next to compbot and asks Google, Brave, DuckDuckGo and others for you. With Compose, add `:docker-compose.searxng.yml` to the end of `COMPOSE_FILE` in `.env`, then run `sudo docker compose up -d`. `truenas-app.yaml` includes it already.
+* **Ollama's web search.** Create an API key at [ollama.com/settings/keys](https://ollama.com/settings/keys) (needs an ollama.com account; check your usage there) and set `OLLAMA_API_KEY`. If SearXNG is set up as well, this is only used when SearXNG finds nothing.
+
+Then use **Settings → AI helper → Test web search**. Only the search words leave your network (never your details), result pages aren't opened, and results are cached for a fortnight, so retries don't search again. Each looked-up question costs one search and one extra AI pass. Questions answered from the page are not looked up.
+
 **Slow disk.** compbot's database lives on the same pool as your other apps. If one of them floods the pool with writes, compbot shows a 🐢 banner saying the disk is slow. It also won't start new runs while a database write is stuck, and pages show "Database busy" instead of hanging. These clear on their own once the disk catches up.
 
 ## Privacy & safety
@@ -163,6 +172,7 @@ Use **Test the chosen model** in Settings to see an answer, how long it took, an
 * Win emails are never auto-confirmed as wins: you confirm them. Emails that ask for fees, bank details or crypto are flagged as **scam suspect**. Genuine promoters never charge you to claim a prize.
 * compbot polls the MSE API once a day with a 1.5 s pause between pages, and spaces out entries (20–60 s by default).
 * Links from forum posts and emails are untrusted. The browser, T&C fetches and confirmation clicks refuse private/LAN/loopback addresses, so a malicious link can't reach your NAS or home network.
+* With web look-ups on, the only thing sent out is the search words the AI writes for a competition question. The AI never sees your details, and search result pages aren't opened.
 * Entries that were submitted but showed no confirmation message are flagged **check entry**, with before/after screenshots, rather than silently counted.
 
 ## Local development
@@ -189,6 +199,7 @@ app/
   jobs.py            discover / enter / inbox / maintenance jobs
   main.py            FastAPI GUI, auth, scheduler
   llm.py             optional OpenAI-compatible client
+  websearch.py       optional web look-ups for the AI (SearXNG or Ollama's web search), with a two-week cache
 ```
 
 ## Troubleshooting

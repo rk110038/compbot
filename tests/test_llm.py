@@ -52,6 +52,12 @@ class FakeOllama(http.server.BaseHTTPRequestHandler):
             if "proposed_answer" in user:  # the double-check pass
                 bad = "dial" in q and user["proposed_answer"].lower() == "gold"
                 ans = {"verdict": "incorrect" if bad else "correct", "reason": "checked"}
+            elif "founded" in q:  # not on the page: needs a web look-up
+                web = " ".join(r.get("snippet") or "" for r in user.get("web_results") or [])
+                ans = ({"answer": "1989", "confidence": 92, "source": "web", "reason": "two results say 1989"}
+                       if "1989" in web else
+                       {"answer": "1977", "confidence": 60, "source": "knowledge", "reason": "I think",
+                        "search_query": "Stormele watches founded year"})
             elif "colour" in q:
                 ans = {"answer": "Gold", "confidence": 95, "source": "page", "reason": "the page says gold case"}
             elif "unsure" in q:
@@ -296,3 +302,133 @@ def test_missing_phone_is_not_sent_to_the_ai_and_keeps_its_reason(fake_ollama, f
         res = b.enter(f"{fixture_server}/phone_required.html", Ctx(profile=dict(profile, phone="")), AI, "ph1", {})
     assert res.result == "needs_input" and "Phone number (profile has no phone)" in res.message, res.message
     assert not any("PROFILE_KEYS" in c["messages"][1]["content"] for c in FakeOllama.chats)
+
+
+# --------------------------------------------------------------------------- web look-ups
+
+class FakeSearch(http.server.BaseHTTPRequestHandler):
+    """A SearXNG (/search?format=json) and Ollama web search (/api/web_search) stand-in."""
+    hits: list = []
+    searx_status = 200
+    ollama_status = 200
+    auth: str | None = None
+    RESULTS = [{"title": "Stormele - Wikipedia", "url": "https://example.org/stormele",
+                "content": "Stormele is a British watchmaker founded in 1989 in Sheffield."},
+               {"title": "About us | Stormele", "url": "https://stormele.example/about",
+                "content": "Since 1989 we have made watches by hand."},
+               {"title": "Bad link", "url": "javascript:alert(1)", "content": "should lose its link"}]
+
+    def log_message(self, *a):
+        pass
+
+    def _json(self, obj, code=200):
+        b = json.dumps(obj).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(b)))
+        self.end_headers()
+        self.wfile.write(b)
+
+    def do_GET(self):
+        from urllib.parse import parse_qs, urlparse
+        u = urlparse(self.path)
+        if u.path == "/search":
+            q = parse_qs(u.query)
+            FakeSearch.hits.append(("searxng", q["q"][0], q.get("format", [""])[0]))
+            if FakeSearch.searx_status != 200:
+                return self._json({"error": "forbidden"}, FakeSearch.searx_status)
+            return self._json({"query": q["q"][0], "results": self.RESULTS, "answers": [], "infoboxes": [],
+                               "unresponsive_engines": []})
+        return self._json({"error": "not found"}, 404)
+
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
+        if self.path == "/api/web_search":
+            FakeSearch.hits.append(("ollama", body["query"], body.get("max_results")))
+            FakeSearch.auth = self.headers.get("Authorization")
+            if FakeSearch.ollama_status != 200:
+                return self._json({"error": "unauthorized"}, FakeSearch.ollama_status)
+            return self._json({"results": self.RESULTS[:2]})
+        return self._json({"error": "not found"}, 404)
+
+
+@pytest.fixture
+def fake_search(monkeypatch):
+    from app import websearch
+    FakeSearch.hits, FakeSearch.searx_status, FakeSearch.ollama_status, FakeSearch.auth = [], 200, 200, None
+    websearch._cache_path().unlink(missing_ok=True)
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FakeSearch)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{srv.server_address[1]}"
+    monkeypatch.setattr(get_config(), "searxng_url", url)
+    monkeypatch.setattr(get_config(), "ollama_api_key", None)
+    monkeypatch.setattr(websearch, "OLLAMA_SEARCH_URL", url + "/api/web_search")
+    yield url
+    srv.shutdown()
+    websearch._cache_path().unlink(missing_ok=True)
+
+
+def test_ai_looks_up_what_the_page_doesnt_say(fake_ollama, fake_search, fixture_server, profile):
+    with Browser() as b:
+        res = b.enter(f"{fixture_server}/ai_lookup.html", Ctx(profile=profile), AI, "web1", {"title": "Win a watch"})
+    assert res.result == "entered", (res.message, res.details)
+    rec = res.details["ai"][0]
+    assert rec["used"] and rec["answer"] == "1989" and rec["source"] == "web" and rec["check"] == "correct"
+    assert rec["searched"] == "Stormele watches founded year"  # the AI's query, naming the brand from the page
+    assert rec["web_sources"] == ["https://example.org/stormele", "https://stormele.example/about"]  # no javascript:
+    assert FakeSearch.hits == [("searxng", "Stormele watches founded year", "json")]
+    assert res.details["timing"]["web_searches"] == 1
+    check = next(json.loads(c["messages"][1]["content"]) for c in FakeOllama.chats
+                 if "proposed_answer" in c["messages"][1]["content"])
+    assert "1989" in json.dumps(check["web_results"])  # the double-check sees the same evidence
+    assert "test.person@example.com" not in json.dumps(FakeSearch.hits)
+
+
+def test_answers_read_off_the_page_are_not_looked_up(fake_ollama, fake_search, fixture_server, profile):
+    with Browser() as b:
+        res = b.enter(f"{fixture_server}/ai_question.html", Ctx(profile=profile), AI, "web2", {})
+    assert res.result == "entered" and res.details["ai"][0]["source"] == "page"
+    assert not FakeSearch.hits and "searched" not in res.details["ai"][0]
+
+
+def test_web_search_switched_off_in_settings(fake_ollama, fake_search, fixture_server, profile):
+    with Browser() as b:
+        res = b.enter(f"{fixture_server}/ai_lookup.html", Ctx(profile=profile), dict(AI, ai_web_search=False), "web3", {})
+    assert res.result == "needs_input" and "wasn't sure enough (60% < 75%)" in res.message and not FakeSearch.hits
+    assert "web search" not in res.message
+
+
+def test_search_falls_back_to_ollama_and_caches(fake_search, monkeypatch):
+    from app import websearch
+    monkeypatch.setattr(get_config(), "ollama_api_key", "k123")
+    FakeSearch.searx_status = 403  # SearXNG without JSON switched on
+    res = websearch.search("Stormele founded")
+    assert [r["url"] for r in res] == ["https://example.org/stormele", "https://stormele.example/about"]
+    assert FakeSearch.auth == "Bearer k123" and [h[0] for h in FakeSearch.hits] == ["searxng", "ollama"]
+    assert websearch.search("  stormele   FOUNDED ") == res and len(FakeSearch.hits) == 2  # from the cache
+    FakeSearch.ollama_status = 401
+    assert websearch.search("something else") == []
+    err = websearch.last_error()
+    assert "HTTP 403" in err and "search.formats" in err and "OLLAMA_API_KEY" in err
+
+
+def test_lookup_finding_nothing_keeps_the_first_answer(fake_ollama, fake_search):
+    FakeSearch.searx_status = 500
+    res = llm.answer_with_lookup("What year was Stormele founded?", None, "a watch", {}, AI, 75)
+    assert res["answer"] == "1977" and res["confidence"] == 60
+    assert res["search"]["query"] == "Stormele watches founded year" and "HTTP 500" in res["search"]["error"]
+
+
+def test_settings_web_search_test_button(fake_ollama, fake_search, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+    h = {"Authorization": "Basic " + base64.b64encode(b"admin:test").decode()}
+    with TestClient(app) as c:
+        page = c.get("/settings", headers=h).text
+        assert "Test web search" in page and f"SearXNG at {fake_search}" in page
+        r = c.post("/ai/test-search", headers={**h, "Origin": "http://testserver"}, follow_redirects=False)
+        assert r.status_code == 303 and "SearXNG+found+3+results" in r.headers["location"]
+        monkeypatch.setattr(get_config(), "searxng_url", None)
+        page = c.get("/settings", headers=h).text
+        assert "Test web search" not in page and "Not set up" in page

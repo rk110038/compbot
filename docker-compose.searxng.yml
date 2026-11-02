@@ -1,0 +1,40 @@
+# Web look-ups for the AI through your own SearXNG: free, no account, nothing to sign up for. SearXNG is a private
+# metasearch engine that asks Google, Brave, DuckDuckGo and others on compbot's behalf, so the AI can check answers
+# the competition page doesn't give. Only the search words leave your NAS (the AI writes them from the competition
+# question and never sees your details).
+#
+# Enable: add this file to COMPOSE_FILE in .env (after your GPU file, if any), e.g.
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.gpu-nvidia.yml:docker-compose.searxng.yml
+# then: sudo docker compose up -d   and use Settings -> AI helper -> Test web search.
+services:
+  compbot:
+    environment:
+      SEARXNG_URL: http://searxng:8080
+    depends_on:
+      - searxng
+
+  searxng:
+    image: docker.io/searxng/searxng:latest
+    pull_policy: always
+    container_name: compbot-searxng
+    restart: unless-stopped
+    environment:
+      SEARXNG_SECRET: ${SEARXNG_SECRET:-compbot-private-searxng}   # only reachable by compbot, so any value works
+    configs:
+      - source: searxng_settings
+        target: /etc/searxng/settings.yml
+    # Not published: only compbot uses it. Uncomment to try searches in a browser at http://<nas-ip>:8086
+    # ports:
+    #   - "8086:8080"
+
+configs:
+  searxng_settings:
+    content: |
+      use_default_settings: true
+      server:
+        limiter: false
+        image_proxy: false
+        public_instance: false
+      search:
+        formats: [html, json]
+        safe_search: 0

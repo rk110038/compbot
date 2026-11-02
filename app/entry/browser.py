@@ -16,7 +16,7 @@ from pathlib import Path
 
 from bs4 import BeautifulSoup
 
-from .. import llm
+from .. import llm, websearch
 from ..config import get_config
 from ..netguard import guarded_client, is_public_url
 from .forms import (
@@ -983,6 +983,17 @@ def _page_context(page, frame) -> str:
     return text
 
 
+def _ai_record(record: dict, res: dict) -> dict:
+    """Add an AI answer (and any web look-up behind it) to the record shown on the competition page."""
+    record.update(answer=res["answer"], confidence=res["confidence"], source=res["source"], reason=res["reason"])
+    s = res.get("search")
+    if s:
+        record.update(searched=s["query"], web_sources=s["sources"])
+        if s.get("error"):
+            record["search_error"] = s["error"][:200]
+    return record
+
+
 def _ai_fill(page, frame, plan, settings: dict, comp_context: dict, details: dict):
     """Ask the AI about competition questions the MSE post didn't answer (and, if allowed, tie-breakers)."""
     min_conf = int(settings.get("ai_min_confidence", 75) or 0)
@@ -996,13 +1007,13 @@ def _ai_fill(page, frame, plan, settings: dict, comp_context: dict, details: dic
                 page_text = _page_context(page, frame)
             options = [o.get("text", "") for o in f.options if not is_placeholder_option(o)] if f.options else None
             question = f.human_label if len(f.human_label) > 6 else (f.context[:300] or f.human_label)
-            res = llm.answer_question(question, options, page_text, comp_context, settings)
+            res = llm.answer_with_lookup(question, options, page_text, comp_context, settings, min_conf)
             record = {"question": question[:200], "options": (options or [])[:12]}
             if res:
-                record.update(answer=res["answer"], confidence=res["confidence"], source=res["source"],
-                              reason=res["reason"], used=False)
+                _ai_record(record, res)["used"] = False
             if res and res["answer"] and res["confidence"] >= min_conf and settings.get("ai_double_check", True):
-                check = llm.verify_answer(question, res["answer"], options, page_text, settings)
+                check = llm.verify_answer(question, res["answer"], options, page_text, settings,
+                                          web_results=res.get("web_results"))
                 if check:
                     record["check"] = check["verdict"]
                 if check and check["verdict"] == "incorrect":
@@ -1024,8 +1035,9 @@ def _ai_fill(page, frame, plan, settings: dict, comp_context: dict, details: dic
                     a = Action("fill", value, source="ai", note=note)
                 record["used"] = a.source == "ai"
             elif res and a.kind == "unknown":
-                a = Action("unknown", note=f"AI wasn't sure enough ({res['confidence']}% < {min_conf}%)"
-                           if res["answer"] else "AI couldn't work out the answer")
+                looked = " even after a web search" if res.get("search") else ""
+                a = Action("unknown", note=f"AI wasn't sure enough ({res['confidence']}% < {min_conf}%){looked}"
+                           if res["answer"] else f"AI couldn't work out the answer{looked}")
             details.setdefault("ai", []).append(record)
         elif a.kind == "unknown" and a.note == "creative / tie-breaker answer" and settings.get("ai_tiebreakers"):
             m = WORD_LIMIT_RE.search(f.human_label + " " + f.context[:200])
@@ -1209,10 +1221,11 @@ def _quiz_order(g: dict, ctx: Ctx, settings: dict, comp_context: dict, page_text
         if first:
             source = "the MSE post"
     if first is None and llm.enabled(settings) and settings.get("ai_answers", True):
-        res = llm.answer_question(g["question"], texts, page_text, comp_context, settings)
+        res = llm.answer_with_lookup(g["question"], texts, page_text, comp_context, settings,
+                                     int(settings.get("ai_min_confidence", 75) or 0))
         rec = {"question": g["question"][:200], "options": texts[:12], "used": False}
         if res:
-            rec.update(answer=res["answer"], confidence=res["confidence"], source=res["source"], reason=res["reason"])
+            _ai_record(rec, res)
             if res["answer"]:
                 first = _match_quiz_option(texts, [res["answer"]], fuzzy=70)
                 if first:
@@ -1519,7 +1532,7 @@ class Browser:
             res.details = details
             return res
         context = self.browser.new_context(locale="en-GB", timezone_id=cfg.tz, viewport={"width": 1280, "height": 1500})
-        t_start, ai_start = time.monotonic(), dict(llm.STATS)
+        t_start, ai_start, web_start = time.monotonic(), dict(llm.STATS), websearch.STATS["searches"]
         context.set_default_timeout(15000)
         # Untrusted pages must never reach the NAS/LAN: abort any request (incl. subresources/redirects) to them.
         context.route("**/*", lambda route: route.continue_() if is_public_url(route.request.url, allow_inline=True)
@@ -1941,7 +1954,8 @@ class Browser:
             details["steps"] = list(details.get("steps") or [])  # plain list (the live wrapper isn't picklable)
             details["timing"] = {"seconds": round(time.monotonic() - t_start),
                                  "ai_calls": llm.STATS["calls"] - ai_start["calls"],
-                                 "ai_seconds": round(llm.STATS["seconds"] - ai_start["seconds"])}
+                                 "ai_seconds": round(llm.STATS["seconds"] - ai_start["seconds"]),
+                                 "web_searches": websearch.STATS["searches"] - web_start}
             res.details = details
             live.status("Finished", result=f"{res.result}: {res.message[:200]}")
             _pause(page, 0.6)  # let the last frames through before closing

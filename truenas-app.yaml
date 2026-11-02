@@ -40,8 +40,14 @@ services:
       MAINTENANCE_CRON: "0 3 * * *"
       # --- AI helper: the bundled Ollama service below. Choose/download the model in compbot's Settings page. ---
       OLLAMA_URL: http://ollama:11434
+      # --- Web look-ups for the AI: the searxng service below (free; searches Google, Brave, DuckDuckGo...). ---
+      # To go without, delete this line, the searxng service, its depends_on entry and the configs block at the end.
+      SEARXNG_URL: http://searxng:8080
+      # Or/also Ollama's hosted web search: an ollama.com account's API key (https://ollama.com/settings/keys).
+      OLLAMA_API_KEY: ""
     depends_on:
       - ollama
+      - searxng
     deploy:
       resources:
         limits:
@@ -79,3 +85,28 @@ services:
     # devices: ["/dev/kfd", "/dev/dri"]
     # Intel Arc / other GPUs (Vulkan):
     # devices: ["/dev/dri"]
+
+  searxng:
+    # Private metasearch for the AI's web look-ups. Only compbot can reach it (no port is published), and only the
+    # search words the AI writes from a competition question are sent out - never your details.
+    image: docker.io/searxng/searxng:latest
+    pull_policy: always
+    container_name: compbot-searxng
+    restart: unless-stopped
+    environment:
+      SEARXNG_SECRET: compbot-private-searxng   # only reachable by compbot, so any value works
+    configs:
+      - source: searxng_settings
+        target: /etc/searxng/settings.yml
+
+configs:
+  searxng_settings:
+    content: |
+      use_default_settings: true
+      server:
+        limiter: false
+        image_proxy: false
+        public_instance: false
+      search:
+        formats: [html, json]
+        safe_search: 0

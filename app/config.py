@@ -34,6 +34,8 @@ class Config:
     llm_api_key: str | None
     llm_model: str | None
     ollama_url: str | None
+    searxng_url: str | None
+    ollama_api_key: str | None
     notify_email: str | None
     ntfy_url: str | None
     discover_cron: str
@@ -93,6 +95,8 @@ def get_config() -> Config:
         llm_api_key=_env("LLM_API_KEY"),
         llm_model=_env("LLM_MODEL"),
         ollama_url=ollama_url,
+        searxng_url=(_env("SEARXNG_URL") or "").rstrip("/") or None,
+        ollama_api_key=_env("OLLAMA_API_KEY"),
         notify_email=_env("NOTIFY_EMAIL"),
         ntfy_url=_env("NTFY_URL"),
         discover_cron=_env("DISCOVER_CRON", "0 7 * * *"),
@@ -127,6 +131,7 @@ DEFAULT_SETTINGS: dict = {
     "ai_answers": True,                  # let the AI answer competition questions the MSE post didn't answer
     "ai_min_confidence": 80,             # only use AI answers it is at least this sure of (0-100)
     "ai_double_check": True,             # a second AI pass must not judge the answer wrong before it's used
+    "ai_web_search": True,               # look questions up on the web (needs SEARXNG_URL or OLLAMA_API_KEY)
     "ai_tiebreakers": False,             # let the AI write short tie-breaker / "tell us why" answers
     "live_view": True,                   # stream the browser to the Live page while entering
     "play_quizzes": True,                # answer click-to-answer quizzes (tiles/buttons) that unlock the entry form
