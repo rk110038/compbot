@@ -3,7 +3,8 @@
 {% block content %}
 <div class="actions" style="justify-content: space-between">
   <h1>Live view <span id="live-badge" class="badge">idle</span></h1>
-  <form method="post" action="/run/enter"><button class="btn small" id="run-btn">Run entries now</button></form>
+  <form method="post" action="/run/enter" id="run-form"><button class="btn small" id="run-btn">Run entries now</button></form>
+  <form method="post" action="/stop/enter" id="stop-form" style="display:none"><button class="btn small stop" id="stop-btn" title="Finishes the competition it's on, then stops; the rest are entered next run">Stop entering</button></form>
 </div>
 <p class="muted small">Watch the browser compbot is driving, as it happens. This view is watch-only: it streams pictures of the page and nothing here can control the browser.{% if not settings.live_view %} <b>Live view is switched off in Settings.</b>{% endif %}</p>
 <div class="grid three">
@@ -42,9 +43,13 @@ async function poll() {
     const b = s.running && !active && s.between;
     const doing = b ? b.what + (b.left !== null ? ' - ' + dur(b.left) + ' to go' : ' (' + dur(b.for) + ' so far)') : null;
     const badge = document.getElementById('live-badge');
-    badge.textContent = active ? '● live' : (s.running ? 'between entries' : 'idle');
-    badge.className = 'badge ' + (active ? 'b-failed' : (s.running ? 'b-queued' : ''));
-    document.getElementById('run-btn').disabled = s.running;
+    badge.textContent = s.stopping ? 'stopping' : active ? '● live' : (s.running ? 'between entries' : 'idle');
+    badge.className = 'badge ' + (s.stopping ? 'b-warn' : active ? 'b-failed' : (s.running ? 'b-queued' : ''));
+    document.getElementById('run-form').style.display = s.running ? 'none' : '';
+    document.getElementById('stop-form').style.display = s.running ? '' : 'none';
+    const stopBtn = document.getElementById('stop-btn');
+    stopBtn.disabled = !!s.stopping;
+    stopBtn.textContent = s.stopping ? 'Stopping after this competition…' : 'Stop entering';
     set('s-progress', s.running ? (s.progress || 'running') : 'not running');
     set('s-title', s.title); set('s-phase', doing || s.phase); set('s-result', s.result);
     const url = document.getElementById('s-url'); url.textContent = s.url || '–';

@@ -40,8 +40,8 @@
   <div class="top-right">
     {% set verbs = {'discover': 'Discovering', 'enter': 'Entering', 'inbox': 'Checking inbox', 'maintenance': 'Tidying up'} %}
     {% for name, prog in running.items() %}
-    <a class="running" href="{{ '/live' if name == 'enter' else '/log' }}" title="{{ verbs.get(name, name) }}{{ ': ' ~ prog if prog != 'running' }}">
-      <span class="spinner"></span><span class="run-verb">{{ verbs.get(name, name) }}</span>{% if prog != 'running' %}<span class="run-prog">{{ prog.split(':')[0] }}</span>{% endif %}</a>
+    <a class="running" href="{{ '/live' if name == 'enter' else '/log' }}" title="{{ 'Stopping' if name in stopping else verbs.get(name, name) }}{{ ': ' ~ prog if prog != 'running' }}">
+      <span class="spinner"></span><span class="run-verb">{{ 'Stopping' if name in stopping else verbs.get(name, name) }}</span>{% if prog != 'running' %}<span class="run-prog">{{ prog.split(':')[0] }}</span>{% endif %}</a>
     {% endfor %}
     <button type="button" class="theme-btn" id="theme-btn" aria-label="Colour theme"></button>
   </div>

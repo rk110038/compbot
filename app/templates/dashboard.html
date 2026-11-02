@@ -58,7 +58,8 @@
           {% if r and r.summary %}<div class="small muted">{{ r.summary[:160] }}</div>{% endif %}
           {% if next_runs.get(name) %}<div class="small muted">Next: {{ next_runs[name].strftime('%a %d %b %H:%M') }}</div>{% endif %}
         </td>
-        <td><form method="post" action="/run/{{ name }}"><button class="btn small" {{ 'disabled' if name in running }}>{{ 'Running…' if name in running else 'Run now' }}</button></form></td></tr>
+        <td>{% if name in running %}<form method="post" action="/stop/{{ name }}"><button class="btn small stop" {{ 'disabled' if name in stopping }} title="Stops at the next safe point; anything not done is picked up next run">{{ 'Stopping…' if name in stopping else 'Stop' }}</button></form>
+          {% else %}<form method="post" action="/run/{{ name }}"><button class="btn small">Run now</button></form>{% endif %}</td></tr>
         {% endfor %}
       </table>
       {% if not cfg.mail_enabled %}<p class="small muted">Gmail isn't configured, so inbox checks and email entries are off.</p>{% endif %}

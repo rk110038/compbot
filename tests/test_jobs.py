@@ -276,3 +276,66 @@ def test_manual_queue_clears_closed_and_long_undated_comps():
     assert _get(undated_old).status == "expired" and "No closing date" in _get(undated_old).status_reason
     assert _get(undated_new).status == "manual" and _get(queued_old).status == "queued"
     assert _get(redated).closes_on == today - timedelta(days=2) and _get(redated).status == "expired"
+
+
+def test_stop_finishes_the_current_competition_then_stops(entry_run, monkeypatch):
+    from app.db import JobRun
+    multi = _comp("stop-multi", ["https://s1.example/win", "https://s2.example/win"])
+    rest = [_comp(f"stop-{i}", [f"https://stop{i}.example/win"]) for i in range(2)]
+    tried = entry_run(cap=10, results=[])
+
+    def enter_web(cid, url, settings, profile):
+        tried.append(url)
+        jobs.request_stop("enter")  # pressed while the first site's entry is in progress
+        return "entered"
+
+    monkeypatch.setattr(jobs, "_enter_web", enter_web)
+    summary = jobs._run("enter", jobs._enter, [multi, *rest])
+    assert tried == ["https://s1.example/win"]
+    assert summary == "1 entered - stopped by you, 2 left for the next run"
+    c = _get(multi)
+    assert c.status == "queued" and c.entered_urls == ["https://s1.example/win"] and "Partly entered" in c.status_reason
+    assert all(_get(cid).last_attempt_at is None for cid in rest)
+    with session_scope() as s:
+        jr = s.scalars(select(JobRun).where(JobRun.job == "enter").order_by(JobRun.id.desc())).first()
+        assert jr.status == "stopped" and jr.summary == summary
+    assert not jobs.is_running("enter") and not jobs._stops["enter"].is_set()
+
+
+def test_stop_cuts_the_wait_short_and_needs_a_running_job():
+    import time
+    assert jobs.request_stop("enter") is False  # not running: nothing to stop, and no stale flag left behind
+    assert not jobs._stops["enter"].is_set()
+    jobs._stops["enter"].set()
+    try:
+        t0 = time.monotonic()
+        jobs._wait("enter", 30)
+        assert time.monotonic() - t0 < 1
+    finally:
+        jobs._stops["enter"].clear()
+
+
+def test_stopped_discovery_picks_up_the_rest_next_run(monkeypatch):
+    from datetime import datetime
+
+    from app.db import get_state
+    init_db()
+    threads = [{"source_id": f"stopdisc-{i}", "title": f"E: 30/12 Win a stop test prize {i}", "url": f"https://f/{i}",
+                "body": f"<p>https://www.stop-test-{i}.example/win</p>", "posted_at": datetime(2026, 11, 2),
+                "comments": []} for i in range(3)]
+    monkeypatch.setattr(jobs.mse, "fetch_threads", lambda known, since: [t for t in threads if t["source_id"] not in known])
+    with session_scope() as s:
+        before = get_state(s, "mse_last_run")
+    real = jobs.analyse
+
+    def analyse_then_stop(*a, **k):
+        jobs.request_stop("discover")
+        return real(*a, **k)
+
+    monkeypatch.setattr(jobs, "analyse", analyse_then_stop)
+    summary = jobs._run("discover", jobs._discover)
+    assert "stopped by you after 1 of 3" in summary
+    with session_scope() as s:
+        assert get_state(s, "mse_last_run") == before
+    monkeypatch.setattr(jobs, "analyse", real)
+    assert jobs._run("discover", jobs._discover).startswith("2 new threads")

@@ -80,6 +80,8 @@ td.title { max-width: 520px; }
 .btn.primary:hover { filter: brightness(1.08); }
 .btn.green { background: var(--green); border-color: var(--green); color: #fff; }
 .btn.small { padding: 3px 9px; font-size: 12px; }
+.btn.stop { color: var(--red); border-color: var(--red); }
+.btn.stop:hover:not([disabled]) { background: var(--red-bg); }
 .btn[disabled] { opacity: .5; cursor: not-allowed; }
 .actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 form.inline { display: inline; }

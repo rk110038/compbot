@@ -153,6 +153,7 @@ def render(request: Request, name: str, **ctx) -> HTMLResponse:
         ctx["nav_wins"] = s.scalar(select(func.count(Competition.id)).where(Competition.outcome == "possible_win")) or 0
     ctx["running"] = {n: jobs.progress(n) or "running" for n in ("discover", "enter", "inbox", "maintenance")
                       if jobs.is_running(n)}
+    ctx["stopping"] = {n for n in ctx["running"] if jobs.stop_requested(n)}
     ctx["auth_disabled"] = not cfg.web_password
     ctx["disk"] = disk_status()
     return templates.TemplateResponse(request, name, ctx)
@@ -287,6 +288,23 @@ def run_job(request: Request, job: str):
         return back(request, "/", f"{job.title()} not started: " + (disk_status() or {}).get("message", ""), warn=True)
     started = jobs.run_in_background(job, note=f"Manual run requested: {job}")
     return back(request, "/", f"{job.title()} started" if started else f"{job.title()} is already running")
+
+
+STOP_NOTES = {
+    "discover": "Discovery is stopping after the post it's reading; the rest are picked up next run",
+    "enter": "Entering is stopping once the competition it's on is finished, so no half-sent entry goes unrecorded",
+    "inbox": "The Gmail check is stopping after the email it's reading; the rest are checked next run",
+    "maintenance": "Maintenance is stopping",
+}
+
+
+@app.post("/stop/{job}")
+def stop_job(request: Request, job: str):
+    if job not in STOP_NOTES:
+        raise HTTPException(404)
+    if not jobs.request_stop(job):
+        return back(request, "/", f"{job.title()} isn't running")
+    return back(request, "/", STOP_NOTES[job])
 
 
 # --------------------------------------------------------------------------- competitions
@@ -699,7 +717,8 @@ def _live_status() -> dict:
             what, since = "Closing the browser", status["updated"]  # the entry's done; handing back its result
         between = {"what": what, "for": round(now - since),
                    "left": max(0, round(b["until"] - now)) if b["until"] else None}
-    return {"running": jobs.is_running("enter"), "progress": jobs.progress("enter"), "phase": status.get("phase"),
+    return {"running": jobs.is_running("enter"), "stopping": jobs.stop_requested("enter"),
+            "progress": jobs.progress("enter"), "phase": status.get("phase"),
             "title": status.get("title"), "url": status.get("url"), "result": status.get("result"),
             "status_age": round(now - status["updated"], 1) if status.get("updated") else None,
             "frame_age": frame_age, "between": between}

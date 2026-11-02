@@ -38,6 +38,8 @@ from .sources import mse
 log = logging.getLogger("compbot.jobs")
 
 _locks = {name: threading.Lock() for name in ("discover", "enter", "inbox", "maintenance")}
+_stops = {name: threading.Event() for name in _locks}  # set by the Stop button; jobs check it between steps
+_halted: set[str] = set()  # jobs that actually stopped early because of it
 _progress: dict[str, str] = {}
 _between: dict[str, tuple[str, float, float | None]] = {}  # job -> (what it's doing, since, until), for the Live page
 
@@ -61,6 +63,34 @@ def _step(name: str, what: str, seconds: float | None = None) -> None:
     _between[name] = (what, now, now + seconds if seconds else None)
 
 
+def request_stop(name: str) -> bool:
+    """Ask a running job to stop at its next safe point. False if it isn't running."""
+    if not is_running(name):
+        return False
+    _stops[name].set()
+    return True
+
+
+def stop_requested(name: str) -> bool:
+    return is_running(name) and _stops[name].is_set()
+
+
+def _should_stop(name: str) -> bool:
+    if _stops[name].is_set():
+        _halted.add(name)
+        return True
+    return False
+
+
+def _wait(name: str, seconds: float) -> None:
+    """Sleep between steps, but wake as soon as the job is asked to stop."""
+    left = seconds
+    while left > 0 and not _stops[name].is_set():
+        chunk = min(0.5, left)
+        time.sleep(chunk)
+        left -= chunk
+
+
 def today_local() -> date:
     return datetime.now(ZoneInfo(get_config().tz)).date()
 
@@ -71,6 +101,8 @@ def _run(name: str, fn, *args, _held: bool = False, _note: str | None = None, **
     if not _held and not lock.acquire(blocking=False):
         return f"{name} is already running"
     run_id = None
+    _stops[name].clear()
+    _halted.discard(name)
     try:
         if disk_stalled():
             # A write is stuck on the disk: starting now would just queue behind it and look like a hung run.
@@ -85,9 +117,12 @@ def _run(name: str, fn, *args, _held: bool = False, _note: str | None = None, **
             s.flush()
             run_id = jr.id
         summary = fn(*args, **kwargs) or ""
+        stopped = name in _halted
+        if stopped and "stopped by you" not in summary:
+            summary += " - stopped by you"
         with session_scope() as s:
             jr = s.get(JobRun, run_id)
-            jr.finished_at, jr.status, jr.summary = utcnow(), "ok", summary[:2000]
+            jr.finished_at, jr.status, jr.summary = utcnow(), "stopped" if stopped else "ok", summary[:2000]
         return summary
     except Exception as exc:  # noqa: BLE001
         why = f"{type(exc).__name__}: {exc}"
@@ -108,6 +143,7 @@ def _run(name: str, fn, *args, _held: bool = False, _note: str | None = None, **
     finally:
         _progress.pop(name, None)
         _between.pop(name, None)
+        _stops[name].clear()
         lock.release()
 
 
@@ -151,6 +187,8 @@ def _discover() -> str:
     use_llm = llm.enabled(settings) and settings.get("llm_for_posts", True)
     eff = dict(settings, _ai_answers=bool(llm.enabled(settings) and settings.get("ai_answers", True)))
     for i, t in enumerate(reversed(threads), 1):  # oldest first so ids increase with time
+        if _should_stop("discover"):
+            break
         _progress["discover"] = f"Analysing {i}/{len(threads)}"
         a = analyse(t["title"], t["body"], eff, today_local())
         if a.status == "queued" and a.method == "web_form" and a.entry_urls and all(
@@ -176,9 +214,13 @@ def _discover() -> str:
                       competition_id=comp.id)
         counts[a.status] = counts.get(a.status, 0) + 1
     with session_scope() as s:
-        set_state(s, "mse_last_run", datetime.now(timezone.utc).replace(tzinfo=None).isoformat())
+        done = sum(counts.values())
+        if done == len(threads):  # a stopped run leaves the rest to be picked up next time
+            set_state(s, "mse_last_run", datetime.now(timezone.utc).replace(tzinfo=None).isoformat())
         expired = _expire(s)
         summary = f"{len(threads)} new threads: " + ", ".join(f"{v} {k}" for k, v in sorted(counts.items()))
+        if done < len(threads):
+            summary += f" - stopped by you after {done} of {len(threads)}, the rest are picked up next run"
         if expired:
             summary += f"; {expired} expired"
         log_event(s, "discovery", summary, "success")
@@ -326,6 +368,9 @@ def _enter(comp_ids: list[int] | None = None, force: bool = False) -> str:
 
     for n, cid in enumerate(comp_ids_ordered, 1):
         left = len(comp_ids_ordered) - n + 1
+        if _should_stop("enter"):
+            stopped = f"stopped by you, {left} left for the next run"
+            break
         if budget <= 0:
             stopped = (f"stopped at the daily cap of {cap} entries, {left} left for the next run" if not force
                        else f"stopped after the retry's attempt limit, {left} left")
@@ -363,14 +408,16 @@ def _enter(comp_ids: list[int] | None = None, force: bool = False) -> str:
             continue
         results: dict[str, str] = {}
         for url in urls:
-            if budget <= 0 or errors_in_a_row >= MAX_ERRORS_IN_A_ROW:
+            if budget <= 0 or errors_in_a_row >= MAX_ERRORS_IN_A_ROW or _should_stop("enter"):
                 break
             if _refusal_key(url) in refused:  # refused twice already, earlier in this competition's list
                 continue
             if results:
                 pause = random.uniform(3, 8)
                 _step("enter", "Waiting before the next site", pause)
-                time.sleep(pause)
+                _wait("enter", pause)
+                if _should_stop("enter"):
+                    break
             _step("enter", "Starting the browser")
             results[url] = _enter_web(cid, url, settings, profile)
             spend(results[url])
@@ -386,7 +433,7 @@ def _enter(comp_ids: list[int] | None = None, force: bool = False) -> str:
             lo, hi = int(settings.get("delay_min_seconds", 20)), int(settings.get("delay_max_seconds", 60))
             pause = random.uniform(min(lo, hi), max(lo, hi)) if not comp_ids else 2
             _step("enter", "Waiting before the next competition", pause)
-            time.sleep(pause)
+            _wait("enter", pause)
     summary = ", ".join(f"{v} {k}" for k, v in sorted(stats.items())) or "Nothing to enter"
     if stopped:
         summary += f" - {stopped}"
@@ -588,7 +635,11 @@ def _inbox() -> str:
                                            cfg.imap_folders, since, known)
     counts: dict[str, int] = {}
     titles = {c.id: c.title for c in comps}
+    stopped_at = None
     for i, m in enumerate(msgs, 1):
+        if _should_stop("inbox"):
+            stopped_at = i - 1
+            break
         _progress["inbox"] = f"Classifying {i}/{len(msgs)}"
         if m.message_id in known:
             continue
@@ -641,10 +692,12 @@ def _inbox() -> str:
                 s.get(Email, email_id).action = outcome
                 log_event(s, "inbox", f"Confirmation link for '{follow_up[3][:80]}': {outcome}", "info", follow_up[2])
     with session_scope() as s:
-        if not truncated:
+        if not truncated and stopped_at is None:
             set_state(s, "inbox_last_run", started.isoformat())
         summary = f"{len(msgs)} new emails: " + ", ".join(f"{v} {k}" for k, v in sorted(counts.items()))
-        if truncated:
+        if stopped_at is not None:
+            summary += f" - stopped by you after {stopped_at} of {len(msgs)}, the rest are checked next run"
+        elif truncated:
             summary += " (more waiting - will continue next run)"
         log_event(s, "inbox", summary, "success")
     return summary
@@ -861,6 +914,8 @@ def _maintenance() -> str:
         old = time.time() - 120 * 86400
         if cfg.screenshot_dir.exists():
             for p in cfg.screenshot_dir.glob("*.jpg"):
+                if _should_stop("maintenance"):
+                    break
                 if p.stat().st_mtime < old:
                     p.unlink(missing_ok=True)
                     pruned += 1

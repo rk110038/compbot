@@ -84,3 +84,32 @@ def test_live_status_says_what_happens_between_entries(tmp_path, monkeypatch):
     finally:
         jobs._between.clear()
         lock.release()
+
+
+def test_stop_buttons(tmp_path, monkeypatch):
+    from urllib.parse import unquote_plus
+
+    from app import jobs
+    monkeypatch.setenv("LIVE_DIR", str(tmp_path))
+    from app.main import app
+    P = {**H, "Origin": "http://testserver"}
+    with TestClient(app) as c:
+        r = c.post("/stop/inbox", headers=P, follow_redirects=False)
+        assert r.status_code == 303 and "isn't running" in unquote_plus(r.headers["location"])
+        assert c.post("/stop/nonsense", headers=P).status_code == 404
+        lock = jobs._locks["inbox"]
+        assert lock.acquire(blocking=False)  # as if a Gmail check were going
+        try:
+            page = c.get("/", headers=H).text
+            assert 'action="/stop/inbox"' in page and 'action="/run/inbox"' not in page
+            r = c.post("/stop/inbox", headers=P, follow_redirects=False)
+            assert "stopping after the email" in unquote_plus(r.headers["location"])
+            assert jobs.stop_requested("inbox")
+            page = c.get("/", headers=H).text
+            assert "Stopping…" in page and ">Stopping<" in page  # the button and the header pill
+            assert c.get("/live/status", headers=H).json()["stopping"] is False  # only the entry run's state
+        finally:
+            jobs._stops["inbox"].clear()
+            lock.release()
+        assert 'action="/run/inbox"' in c.get("/", headers=H).text
+        assert 'id="stop-form"' in c.get("/live", headers=H).text
