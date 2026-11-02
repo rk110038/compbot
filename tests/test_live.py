@@ -59,3 +59,28 @@ def test_manual_page_breakdown_and_retry_route(tmp_path, monkeypatch):
         assert r.status_code == 303 and "Re-queued" in r.headers["location"].replace("+", " ")
     with session_scope() as s:
         assert s.get(Competition, cid).status == "queued"
+
+
+def test_live_status_says_what_happens_between_entries(tmp_path, monkeypatch):
+    from app import jobs
+    monkeypatch.setenv("LIVE_DIR", str(tmp_path))
+    from app.main import app
+    lock = jobs._locks["enter"]
+    assert lock.acquire(blocking=False)  # as if an entry run were going
+    try:
+        with TestClient(app) as c:
+            assert "s apart (see Settings)" in c.get("/live", headers=H).text
+            jobs._step("enter", "Waiting before the next competition", 40)
+            b = c.get("/live/status", headers=H).json()["between"]
+            assert b["what"] == "Waiting before the next competition" and 38 <= b["left"] <= 40
+
+            jobs._step("enter", "Starting the browser")
+            since = jobs.between("enter")["since"]
+            (tmp_path / "status.json").write_text(json.dumps({"phase": "Finished", "updated": since - 5}))
+            b = c.get("/live/status", headers=H).json()["between"]  # the last comp's "Finished": not this one's
+            assert b["what"] == "Starting the browser" and b["left"] is None
+            (tmp_path / "status.json").write_text(json.dumps({"phase": "Finished", "updated": time.time()}))
+            assert c.get("/live/status", headers=H).json()["between"]["what"] == "Closing the browser"
+    finally:
+        jobs._between.clear()
+        lock.release()

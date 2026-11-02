@@ -39,6 +39,7 @@ log = logging.getLogger("compbot.jobs")
 
 _locks = {name: threading.Lock() for name in ("discover", "enter", "inbox", "maintenance")}
 _progress: dict[str, str] = {}
+_between: dict[str, tuple[str, float, float | None]] = {}  # job -> (what it's doing, since, until), for the Live page
 
 
 def is_running(name: str) -> bool:
@@ -47,6 +48,17 @@ def is_running(name: str) -> bool:
 
 def progress(name: str) -> str:
     return _progress.get(name, "")
+
+
+def between(name: str) -> dict | None:
+    """What a running job is doing outside the browser (saving, waiting out the delay...), with epoch times."""
+    v = _between.get(name)
+    return {"what": v[0], "since": v[1], "until": v[2]} if v else None
+
+
+def _step(name: str, what: str, seconds: float | None = None) -> None:
+    now = time.time()
+    _between[name] = (what, now, now + seconds if seconds else None)
 
 
 def today_local() -> date:
@@ -95,6 +107,7 @@ def _run(name: str, fn, *args, _held: bool = False, _note: str | None = None, **
         return f"error: {why}"
     finally:
         _progress.pop(name, None)
+        _between.pop(name, None)
         lock.release()
 
 
@@ -314,6 +327,7 @@ def _enter(comp_ids: list[int] | None = None, force: bool = False) -> str:
                 stats["skipped_blocked_site"] = stats.get("skipped_blocked_site", 0) + 1
                 continue
         if method == "email":
+            _step("enter", "Sending the email entry")
             result = _enter_email(cid, settings, profile, force=force)
             stats[result] = stats.get(result, 0) + 1
             spend(result)
@@ -324,6 +338,7 @@ def _enter(comp_ids: list[int] | None = None, force: bool = False) -> str:
         for url in urls:
             if budget <= 0 or errors_in_a_row >= MAX_ERRORS_IN_A_ROW:
                 break
+            _step("enter", "Starting the browser")
             results[url] = _enter_web(cid, url, settings, profile)
             spend(results[url])
             if results[url] == "blocked":
@@ -332,13 +347,17 @@ def _enter(comp_ids: list[int] | None = None, force: bool = False) -> str:
                 if run_blocks[d] >= 2:
                     blocked.add(d)
             if len(urls) > 1:
-                time.sleep(random.uniform(3, 8))
+                pause = random.uniform(3, 8)
+                _step("enter", "Waiting before the next site", pause)
+                time.sleep(pause)
         for o in results.values():
             stats[o] = stats.get(o, 0) + 1
         _finalise_web(cid, results, settings)
         if n < len(comp_ids_ordered) and budget > 0 and errors_in_a_row < MAX_ERRORS_IN_A_ROW:
             lo, hi = int(settings.get("delay_min_seconds", 20)), int(settings.get("delay_max_seconds", 60))
-            time.sleep(random.uniform(min(lo, hi), max(lo, hi)) if not comp_ids else 2)
+            pause = random.uniform(min(lo, hi), max(lo, hi)) if not comp_ids else 2
+            _step("enter", "Waiting before the next competition", pause)
+            time.sleep(pause)
     summary = ", ".join(f"{v} {k}" for k, v in sorted(stats.items())) or "Nothing to enter"
     if stopped:
         summary += f" - {stopped}"
@@ -361,6 +380,7 @@ def _enter_web(cid: int, url: str, settings: dict, profile: dict) -> str:
         comp_context = {"title": comp.title, "question": comp.question, "known_answers": comp.answers,
                         "post_excerpt": (comp.body_text or "")[:800]}
     r = enter_isolated(url, ctx, settings, f"c{cid}_a{att_id}", comp_context)
+    _step("enter", "Saving the result")
     with session_scope() as s:
         att = s.get(EntryAttempt, att_id)
         att.result, att.message, att.details = r.result, r.message, r.details
@@ -372,6 +392,9 @@ def _enter_web(cid: int, url: str, settings: dict, profile: dict) -> str:
         ai_note = (" [AI answered: " + "; ".join(f"{x['answer'][:40]}" + (f" {x['confidence']}%" if x.get("confidence")
                                                                             is not None else "") for x in ai_used) + "]"
                    if ai_used else "")
+        shutdown = ((r.details or {}).get("timing") or {}).get("shutdown_seconds")
+        if isinstance(shutdown, str):
+            ai_note += f" [browser shutdown {shutdown}]"
         log_event(s, "entry", f"{r.result}: {s.get(Competition, cid).title[:80]} - {r.message[:300]}{ai_note}", level, cid)
     return r.result
 

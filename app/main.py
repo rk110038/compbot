@@ -691,10 +691,18 @@ def _live_status() -> dict:
         frame_age = round(_time.time() - (d / "frame.jpg").stat().st_mtime, 1)
     except OSError:
         frame_age = None
+    now, between = _time.time(), None
+    b = jobs.between("enter")
+    if b:
+        what, since = b["what"], b["since"]
+        if what == "Starting the browser" and status.get("phase") == "Finished" and (status.get("updated") or 0) > since:
+            what, since = "Closing the browser", status["updated"]  # the entry's done; handing back its result
+        between = {"what": what, "for": round(now - since),
+                   "left": max(0, round(b["until"] - now)) if b["until"] else None}
     return {"running": jobs.is_running("enter"), "progress": jobs.progress("enter"), "phase": status.get("phase"),
             "title": status.get("title"), "url": status.get("url"), "result": status.get("result"),
-            "status_age": round(_time.time() - status["updated"], 1) if status.get("updated") else None,
-            "frame_age": frame_age}
+            "status_age": round(now - status["updated"], 1) if status.get("updated") else None,
+            "frame_age": frame_age, "between": between}
 
 
 @app.get("/live", response_class=HTMLResponse)

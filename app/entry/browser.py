@@ -1522,7 +1522,10 @@ class Browser:
     def __exit__(self, *exc):
         self.close()
 
-    def enter(self, url: str, ctx: Ctx, settings: dict, shot_prefix: str, comp_context: dict) -> AttemptResult:
+    def enter(self, url: str, ctx: Ctx, settings: dict, shot_prefix: str, comp_context: dict,
+              on_result=None) -> AttemptResult:
+        """Enter one competition. `on_result(res)` is called as soon as the result is known, before the page is
+        closed, so a caller needn't wait for the clean-up."""
         cfg = get_config()
         dry_run = settings.get("entry_mode", "dry_run") != "auto"
         res = AttemptResult(result="error")
@@ -1958,6 +1961,11 @@ class Browser:
                                  "web_searches": websearch.STATS["searches"] - web_start}
             res.details = details
             live.status("Finished", result=f"{res.result}: {res.message[:200]}")
+            if on_result is not None:
+                try:
+                    on_result(res)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("couldn't hand back the result early: %s", exc)
             _pause(page, 0.6)  # let the last frames through before closing
             live.detach()
             try:
@@ -1973,34 +1981,68 @@ def result_as_dict(r: AttemptResult) -> dict:
 # --------------------------------------------------------------------------- isolation / watchdog
 
 ENTRY_TIMEOUT_S = 600  # includes time for the AI to answer questions (and play whole quizzes) on a CPU
+SHUTDOWN_GRACE_S = 20  # closing the browser after the result is in normally takes a second or two
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_WORKER_MODULE = "app.entry.worker"
 
 
 def enter_isolated(url: str, ctx: Ctx, settings: dict, shot_prefix: str, comp_context: dict,
                    timeout: float = ENTRY_TIMEOUT_S) -> AttemptResult:
-    """Run one entry in its own process with a hard time limit, so no single page can stall a whole run."""
+    """Run one entry in its own process with a hard time limit, so no single page can stall a whole run.
+
+    The worker sends its result as soon as it's known and only then closes the browser, so a page that's slow to
+    close costs at most SHUTDOWN_GRACE_S rather than the whole time limit (and its result isn't lost)."""
     import pickle
     import subprocess
     import sys
+    import threading
 
     payload = pickle.dumps({"url": url, "ctx": ctx, "settings": settings, "shot_prefix": shot_prefix,
                             "comp_context": comp_context})
-    proc = subprocess.Popen([sys.executable, "-m", "app.entry.worker"], cwd=str(_PROJECT_ROOT),
+    proc = subprocess.Popen([sys.executable, "-m", _WORKER_MODULE], cwd=str(_PROJECT_ROOT),
                             stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-    try:
-        out, _ = proc.communicate(payload, timeout=timeout)
-    except subprocess.TimeoutExpired:
+    got: list[bytes] = []
+
+    def talk() -> None:
+        try:
+            proc.stdin.write(payload)
+            proc.stdin.close()
+        except OSError:
+            pass
+        got.append(proc.stdout.read())  # ends once the worker has sent its result (or has exited)
+
+    reader = threading.Thread(target=talk, daemon=True)
+    reader.start()
+    reader.join(timeout)
+    if reader.is_alive():
         proc.kill()  # Playwright's driver sees its pipe close and shuts Chromium down with it
         try:
-            proc.communicate(timeout=15)
+            proc.wait(timeout=15)
         except subprocess.TimeoutExpired:
             pass
+        reader.join(5)
         log.warning("entry timed out after %ss: %s", timeout, url)
         return AttemptResult(result="error", message=f"Timed out after {int(timeout)}s (the page never finished "
                                                      "responding) - skipped")
-    if proc.returncode != 0 or not out:
+    out = got[0] if got else b""
+    t_close = time.monotonic()
+    try:
+        proc.wait(timeout=SHUTDOWN_GRACE_S if out else 15)
+        shutdown: float | str = round(time.monotonic() - t_close, 1)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        try:
+            proc.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            pass
+        shutdown = f"stuck (stopped after {SHUTDOWN_GRACE_S}s)"
+        log.warning("browser still closing %ss after the result for %s - stopped it", SHUTDOWN_GRACE_S, url)
+    if not out:
         return AttemptResult(result="error", message=f"Browser process ended unexpectedly (exit {proc.returncode})")
     try:
-        return pickle.loads(out)
+        r = pickle.loads(out)
     except Exception as exc:  # noqa: BLE001
         return AttemptResult(result="error", message=f"Couldn't read the browser result: {exc}"[:500])
+    if isinstance((r.details or {}).get("timing"), dict):
+        r.details["timing"]["shutdown_seconds"] = shutdown
+    return r

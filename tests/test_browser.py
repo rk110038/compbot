@@ -96,6 +96,30 @@ def test_isolated_entry_round_trip(fixture_server, profile):
     res = enter_isolated(f"{fixture_server}/comp_form.html", Ctx(profile=profile, answers=["Charquemont"]),
                          _settings(entry_mode="dry_run", respect_automation_clauses=False), "t11", {}, timeout=120)
     assert res.result == "dry_run_ok", res.message
+    assert isinstance(res.details["timing"]["shutdown_seconds"], float)
+
+
+def test_result_is_handed_back_before_the_page_closes(browser, fixture_server, profile):
+    seen = []
+    res = browser.enter(f"{fixture_server}/comp_form.html", Ctx(profile=profile, answers=["Charquemont"]),
+                        _settings(entry_mode="dry_run", respect_automation_clauses=False), "t14", {},
+                        on_result=lambda r: seen.append((r.result, len(browser.browser.contexts))))
+    assert seen == [("dry_run_ok", 1)] and res.result == "dry_run_ok"  # sent while the entry's page was still open
+    assert not browser.browser.contexts
+
+
+def test_stuck_browser_shutdown_costs_seconds_not_the_whole_time_limit(monkeypatch):
+    # 2 Nov: the Live view sat on "Finished" for minutes; closing the browser had no time limit of its own, and the
+    # result only came back once it was closed (or the 10-minute watchdog fired and threw the result away).
+    import time
+    from app.entry import browser as br
+    monkeypatch.setattr(br, "_WORKER_MODULE", "tests.fixtures.slow_close_worker")
+    monkeypatch.setattr(br, "SHUTDOWN_GRACE_S", 2)
+    t0 = time.time()
+    res = br.enter_isolated("https://example.com/", Ctx(profile={}), _settings(), "t15", {}, timeout=90)
+    assert res.result == "failed" and res.message == "No entry form found on the page"
+    assert res.details["timing"]["shutdown_seconds"] == "stuck (stopped after 2s)"
+    assert time.time() - t0 < 45
 
 
 def test_isolated_entry_hard_timeout():
