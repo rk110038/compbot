@@ -1,5 +1,7 @@
 from sqlalchemy import select
 
+import pytest
+
 from app import jobs
 from app.config import DEFAULT_SETTINGS
 from app.db import Competition, init_db, session_scope
@@ -177,3 +179,50 @@ def test_site_that_ever_loaded_is_not_treated_as_blocking():
         b = jobs.blocked_domains(s)
     assert "alwaysblocks.co.uk" in b
     assert "loadsonce.co.uk" not in b and "loadsonce2.co.uk" not in b
+
+
+@pytest.fixture
+def entry_run(monkeypatch):
+    """Runs _enter against scripted per-attempt results, with no delays and nothing entered earlier today."""
+    from app.db import get_settings, save_profile, save_settings
+    init_db()
+    with session_scope() as s:
+        saved = dict(get_settings(s))
+    tried: list[str] = []
+
+    def setup(cap: int, results: list[str]) -> list[str]:
+        with session_scope() as s:
+            save_profile(s, {"first_name": "Test", "last_name": "Person", "email": "t@example.com"})
+            save_settings(s, {**saved, "entry_mode": "auto", "daily_entry_cap": cap,
+                              "delay_min_seconds": 0, "delay_max_seconds": 0})
+        script = iter(results)
+        monkeypatch.setattr(jobs, "entries_today", lambda *a, **k: 0)
+        monkeypatch.setattr(jobs.time, "sleep", lambda *_: None)
+        monkeypatch.setattr(jobs, "_enter_web", lambda cid, url, settings, profile: tried.append(url) or next(script))
+        return tried
+
+    yield setup
+    with session_scope() as s:
+        save_settings(s, saved)
+
+
+def test_daily_cap_counts_entries_not_attempts(entry_run):
+    # 2 Nov: with 17 entries made, a run stopped after 83 attempts (3 of them entries) with 324 comps still queued,
+    # because blocked, failed and CAPTCHA attempts were using up the 100-entry daily cap.
+    ids = [_comp(f"cap{i}", [f"https://cap{i}.example/win"]) for i in range(6)]
+    tried = entry_run(cap=2, results=["blocked", "failed", "entered", "captcha", "unverified", "entered"])
+    summary = jobs._enter(ids)
+    assert len(tried) == 5
+    assert summary.endswith(" - stopped at the daily cap of 2 entries, 1 left for the next run")
+    assert _get(ids[5]).status == "queued" and _get(ids[5]).last_attempt_at is None
+
+
+def test_run_stops_after_errors_in_a_row_but_not_scattered_errors(entry_run):
+    run = jobs.MAX_ERRORS_IN_A_ROW
+    ids = [_comp(f"err{i}", [f"https://err{i}.example/win"]) for i in range(2 * run + 2)]
+    tried = entry_run(cap=100, results=["error"] * (run - 1) + ["failed"] + ["error"] * (run + 5))
+    summary = jobs._enter(ids)
+    assert len(tried) == 2 * run  # the "failed" reset the count, so it stopped at the second streak
+    assert summary.endswith(f"stopped after {run} errors in a row (is the network or browser OK?), "
+                            "2 left for the next run")
+    assert _get(ids[-1]).last_attempt_at is None

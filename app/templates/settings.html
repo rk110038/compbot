@@ -32,7 +32,7 @@
         <div><label>Entry mode</label><select name="s_entry_mode">
           <option value="dry_run" {{ 'selected' if settings.entry_mode != 'auto' }}>Dry run (fill + screenshot, don't submit)</option>
           <option value="auto" {{ 'selected' if settings.entry_mode == 'auto' }}>Auto (submit entries)</option></select></div>
-        <div><label>Max entries per day</label><input type="number" min="0" name="s_daily_entry_cap" value="{{ settings.daily_entry_cap }}"></div>
+        <div><label>Max entries per day</label><input type="number" min="0" name="s_daily_entry_cap" value="{{ settings.daily_entry_cap }}" title="Counts successful entries only: blocked, failed or CAPTCHA attempts don't use it up"></div>
         <div><label>Failed attempts before manual</label><input type="number" min="1" name="s_max_attempts" value="{{ settings.max_attempts }}"></div>
         <div><label>Delay between entries (s, min)</label><input type="number" min="0" name="s_delay_min_seconds" value="{{ settings.delay_min_seconds }}"></div>
         <div><label>Delay between entries (s, max)</label><input type="number" min="0" name="s_delay_max_seconds" value="{{ settings.delay_max_seconds }}"></div>

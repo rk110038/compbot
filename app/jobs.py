@@ -252,6 +252,9 @@ def blocked_domains(s) -> set[str]:
     return {d for d, n in blocked.items() if n >= 2 and d not in ok and d}
 
 
+MAX_ERRORS_IN_A_ROW = 6  # more than this and the problem is compbot's side (network, browser), not the sites
+
+
 def _enter(comp_ids: list[int] | None = None, force: bool = False) -> str:
     cfg = get_config()
     with session_scope() as s:
@@ -267,12 +270,30 @@ def _enter(comp_ids: list[int] | None = None, force: bool = False) -> str:
         comp_ids_ordered = [c.id for c in comps]
         blocked = blocked_domains(s)
     run_blocks: collections.Counter = collections.Counter()
+    # The daily cap counts entries (as the dashboard does), so blocked, failed or CAPTCHA attempts don't use it up.
+    # A forced retry instead allows a fixed number of attempts.
+    counted = {"dry_run_ok"} if settings.get("entry_mode") != "auto" else ENTERED_RESULTS
     budget = max(0, cap - done_today) if not force else max(1, len(comp_ids_ordered) * 6)
     if budget == 0:
         return f"Daily cap reached ({cap})"
     stats: dict[str, int] = {}
+    errors_in_a_row, stopped = 0, ""
+
+    def spend(result: str) -> None:
+        nonlocal budget, errors_in_a_row
+        if force or result in counted:
+            budget -= 1
+        errors_in_a_row = errors_in_a_row + 1 if result == "error" else 0
+
     for n, cid in enumerate(comp_ids_ordered, 1):
+        left = len(comp_ids_ordered) - n + 1
         if budget <= 0:
+            stopped = (f"stopped at the daily cap of {cap} entries, {left} left for the next run" if not force
+                       else f"stopped after the retry's attempt limit, {left} left")
+            break
+        if errors_in_a_row >= MAX_ERRORS_IN_A_ROW:
+            stopped = (f"stopped after {errors_in_a_row} errors in a row (is the network or browser OK?), "
+                       f"{left} left for the next run")
             break
         with session_scope() as s:
             comp = s.get(Competition, cid)
@@ -295,16 +316,16 @@ def _enter(comp_ids: list[int] | None = None, force: bool = False) -> str:
         if method == "email":
             result = _enter_email(cid, settings, profile, force=force)
             stats[result] = stats.get(result, 0) + 1
-            budget -= 1
+            spend(result)
             continue
         if not urls:
             continue
         results: dict[str, str] = {}
         for url in urls:
-            if budget <= 0:
+            if budget <= 0 or errors_in_a_row >= MAX_ERRORS_IN_A_ROW:
                 break
             results[url] = _enter_web(cid, url, settings, profile)
-            budget -= 1
+            spend(results[url])
             if results[url] == "blocked":
                 d = registrable_domain(url)
                 run_blocks[d] += 1
@@ -315,12 +336,14 @@ def _enter(comp_ids: list[int] | None = None, force: bool = False) -> str:
         for o in results.values():
             stats[o] = stats.get(o, 0) + 1
         _finalise_web(cid, results, settings)
-        if n < len(comp_ids_ordered) and budget > 0:
+        if n < len(comp_ids_ordered) and budget > 0 and errors_in_a_row < MAX_ERRORS_IN_A_ROW:
             lo, hi = int(settings.get("delay_min_seconds", 20)), int(settings.get("delay_max_seconds", 60))
             time.sleep(random.uniform(min(lo, hi), max(lo, hi)) if not comp_ids else 2)
     summary = ", ".join(f"{v} {k}" for k, v in sorted(stats.items())) or "Nothing to enter"
+    if stopped:
+        summary += f" - {stopped}"
     with session_scope() as s:
-        log_event(s, "entry", f"Entry run finished: {summary}", "success")
+        log_event(s, "entry", f"Entry run finished: {summary}", "warn" if "errors in a row" in stopped else "success")
     return summary
 
 

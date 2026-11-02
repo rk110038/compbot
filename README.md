@@ -119,7 +119,7 @@ Secrets and infrastructure go in environment variables (in the YAML). Everything
 | `TZ` | `Europe/London` | |
 | `DATA_DIR` | `/data` | |
 
-GUI settings include the daily entry cap (default 25), delays between entries, retries, how to treat social and Gleam comps, skip keywords (e.g. `Glasgow, Leeds` for local-only prizes), minimum prize value, marketing opt-ins (newsletter comps always opt in, because that *is* the entry; third-party marketing is never ticked unless required), T&C respect, and auto-confirm links.
+GUI settings include the daily entry cap (default 25; it counts successful entries, so blocked, failed or CAPTCHA attempts don't use it up, and a run keeps going until the queue is done or the cap is reached), delays between entries, retries, how to treat social and Gleam comps, skip keywords (e.g. `Glasgow, Leeds` for local-only prizes), minimum prize value, marketing opt-ins (newsletter comps always opt in, because that *is* the entry; third-party marketing is never ticked unless required), T&C respect, and auto-confirm links.
 
 ### AI helper (Ollama, runs on your NAS)
 
