@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import csv
+import hashlib
 import io
 import logging
 import re
@@ -80,9 +81,22 @@ async def lifespan(_app: FastAPI):
         scheduler.shutdown(wait=False)
 
 
+class RevalidatedStatic(StaticFiles):
+    """Static files that browsers re-check on each use (a cheap 304 when unchanged). Without a Cache-Control header,
+    Safari on iPhone guesses its own expiry and can keep showing a previous release's stylesheet."""
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
+# The stylesheet URL carries a hash of its content, so a changed stylesheet is always fetched afresh.
+STATIC_V = hashlib.sha256((BASE / "static" / "style.css").read_bytes()).hexdigest()[:10]
+
 app = FastAPI(title="compbot", version=__version__, docs_url=None, redoc_url=None, openapi_url=None,
               lifespan=lifespan)
-app.mount("/static", StaticFiles(directory=str(BASE / "static")), name="static")
+app.mount("/static", RevalidatedStatic(directory=str(BASE / "static")), name="static")
 
 
 # --------------------------------------------------------------------------- template helpers
@@ -117,6 +131,7 @@ templates.env.filters["local"] = _local
 templates.env.filters["ago"] = _ago
 templates.env.filters["days_left"] = _days_left
 templates.env.globals["version"] = __version__
+templates.env.globals["static_v"] = STATIC_V
 templates.env.globals["cfg"] = cfg
 
 
@@ -197,7 +212,7 @@ async def database_busy(request: Request, exc: OperationalError):
         return PlainTextResponse("Internal Server Error", status_code=500)
     log.warning("database busy on %s %s: %s", request.method, request.url.path, exc)
     page = ("<!doctype html><html lang='en-GB'><head><meta charset='utf-8'><title>Database busy · compbot</title>"
-            "<link rel='stylesheet' href='/static/style.css'></head><body><main><h1>Database busy</h1>"
+            f"<link rel='stylesheet' href='/static/style.css?v={STATIC_V}'></head><body><main><h1>Database busy</h1>"
             f"<div class='banner warn'>⚠️ {html_escape(DISK_BUSY_MESSAGE)}</div>"
             "<p><a class='btn' href='/'>Back to the dashboard</a></p></main></body></html>")
     return HTMLResponse(page, status_code=503, headers={"Retry-After": "60"})

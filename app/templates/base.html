@@ -12,11 +12,12 @@
       return t === 'light' || t === 'dark' ? t : null; };
     const apply = () => { document.documentElement.dataset.theme = pick() || (mq.matches ? 'dark' : 'light'); };
     apply();
-    mq.addEventListener('change', apply);
+    // Safari before iOS 14 only has the older addListener.
+    if (mq.addEventListener) mq.addEventListener('change', apply); else if (mq.addListener) mq.addListener(apply);
     window.cbTheme = { pick, apply };
   })();
   </script>
-  <link rel="stylesheet" href="/static/style.css?v={{ version }}">
+  <link rel="stylesheet" href="/static/style.css?v={{ static_v }}">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏆</text></svg>">
 </head>
 <body>
@@ -55,6 +56,21 @@
 <footer>compbot {{ version }} · times shown in {{ cfg.tz }}</footer>
 <script>
 (function () {
+  // Burger menu (narrow screens): toggles the nav; closes on Escape, a tap or click outside, or choosing a page.
+  // In its own script block so an error elsewhere on the page can't stop it working.
+  const top = document.getElementById('top'), toggle = document.getElementById('nav-toggle');
+  const set = open => { top.classList.toggle('nav-open', open); toggle.setAttribute('aria-expanded', String(open)); };
+  toggle.addEventListener('click', e => { e.stopPropagation(); set(!top.classList.contains('nav-open')); });
+  // iPhone Safari doesn't send 'click' to the document for taps on plain content, so watch touches too.
+  const outside = e => { if (!top.contains(e.target)) set(false); };
+  document.addEventListener('click', outside);
+  document.addEventListener('touchstart', outside, { passive: true });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') set(false); });
+  document.getElementById('site-nav').addEventListener('click', e => { if (e.target.closest('a')) set(false); });
+})();
+</script>
+<script>
+(function () {
   const btn = document.getElementById('theme-btn');
   const next = {null: 'light', light: 'dark', dark: null};  // Auto -> Light -> Dark -> Auto
   const show = () => {
@@ -69,15 +85,6 @@
     show();
   });
   show();
-})();
-(function () {
-  // Burger menu (narrow screens): toggles the nav; closes on Escape, a click outside, or choosing a page.
-  const top = document.getElementById('top'), toggle = document.getElementById('nav-toggle');
-  const set = open => { top.classList.toggle('nav-open', open); toggle.setAttribute('aria-expanded', String(open)); };
-  toggle.addEventListener('click', e => { e.stopPropagation(); set(!top.classList.contains('nav-open')); });
-  document.addEventListener('click', e => { if (!top.contains(e.target)) set(false); });
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') set(false); });
-  document.getElementById('site-nav').addEventListener('click', e => { if (e.target.closest('a')) set(false); });
 })();
 document.addEventListener('click', e => {
   const el = e.target.closest('[data-copy]');
