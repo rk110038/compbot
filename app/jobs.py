@@ -185,13 +185,31 @@ def _discover() -> str:
     return summary
 
 
+UNDATED_MANUAL_DAYS = 30  # a manual-queue comp with no closing date is dropped this long after it was found
+
+
 def _expire(s) -> int:
+    from .analyse import parse_title
+
     today = today_local()
+    # Titles compbot couldn't date when they were found may be readable now ("Ends 12/11/2026", "R:29/11"...).
+    for c in s.scalars(select(Competition).where(Competition.closes_on.is_(None),
+                                                 Competition.status.in_(["new", "queued", "manual", "failed"]))).all():
+        found = c.posted_at or c.discovered_at
+        closes_on = parse_title(c.title, found.date() if found else today)["closes_on"]
+        if closes_on:
+            c.closes_on = closes_on
     rows = s.scalars(select(Competition).where(Competition.closes_on < today,
                                                Competition.status.in_(["new", "queued", "manual", "failed"]))).all()
     for c in rows:
         c.status, c.status_reason = "expired", "Closed before it was entered"
-    return len(rows)
+    undated = s.scalars(select(Competition).where(
+        Competition.closes_on.is_(None), Competition.status == "manual",
+        Competition.discovered_at < utcnow() - timedelta(days=UNDATED_MANUAL_DAYS))).all()
+    for c in undated:
+        c.status, c.status_reason = "expired", (f"No closing date - dropped from the manual queue "
+                                                f"{UNDATED_MANUAL_DAYS} days after it was found")
+    return len(rows) + len(undated)
 
 
 # --------------------------------------------------------------------------- entries

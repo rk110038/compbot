@@ -1,6 +1,7 @@
 """Parse MSE competition threads (title + first post) and decide how each comp should be entered."""
 from __future__ import annotations
 
+import calendar
 import re
 from dataclasses import dataclass, field
 from datetime import date, timedelta
@@ -101,7 +102,10 @@ def link_kind(url: str) -> str:
 
 # --------------------------------------------------------------------------- title parsing
 
-TITLE_DATE_RE = re.compile(r"^\s*E\s*[:;.]?\s*(\d{1,2})\s*/\s*(\d{1,2})(?:\s*/\s*(\d{2,4}))?\s*\??", re.I)
+# "E: 21/11" (MSE's usual form), plus "Ends 12/11/2026", "Closes 5/12" and "R:29/11" (an R typed for the E beside it).
+TITLE_DATE_RE = re.compile(
+    r"^\s*(?:Ending|Ends?|Closing|Closes?|E|R(?=\s*:))\s*[:;.]?\s*(?:on\s+)?"
+    r"(\d{1,2})\s*/\s*(\d{1,2})(?:\s*/\s*(\d{2,4}))?\s*\??", re.I)
 TIME_RE = re.compile(r"\b(\d{1,2}(?:[.:]\d{2})?\s*(?:am|pm)|noon|midday|midnight)\b", re.I)
 PAREN_RE = re.compile(r"\(([^()]*)\)|\[([^\[\]]*)\]")
 TAG_ALIASES = {
@@ -116,15 +120,22 @@ TAG_ALIASES = {
 PRIZE_VALUE_RE = re.compile(r"£\s?(\d{1,3}(?:,\d{3})+|\d+(?:\.\d{1,2})?)\s*(k)?", re.I)
 
 
+def _day_in_month(y: int, month: int, day: int) -> date:
+    """A day past the month's end (posters write "31/11") means its last day."""
+    return date(y, month, min(day, calendar.monthrange(y, month)[1]))
+
+
 def infer_date(day: int, month: int, year: str | None, ref: date) -> date | None:
+    if not (1 <= day <= 31 and 1 <= month <= 12):
+        return None
     try:
         if year:
             y = int(year)
             y = y + 2000 if y < 100 else y
-            return date(y, month, day)
-        cand = date(ref.year, month, day)
+            return _day_in_month(y, month, day)
+        cand = _day_in_month(ref.year, month, day)
         if cand < ref - timedelta(days=60):
-            cand = date(ref.year + 1, month, day)
+            cand = _day_in_month(ref.year + 1, month, day)
         return cand
     except ValueError:
         return None

@@ -248,3 +248,31 @@ def test_retried_blocked_comps_stop_once_the_platform_refuses_twice(entry_run):
         c = _get(cid)
         assert c.status == "manual" and not c.force_next
     assert _get(other).status == "entered"
+
+def test_manual_queue_clears_closed_and_long_undated_comps():
+    from datetime import timedelta
+
+    from app.db import utcnow
+    init_db()
+    today, old = jobs.today_local(), utcnow() - timedelta(days=jobs.UNDATED_MANUAL_DAYS + 1)
+
+    def add(key, title, status="manual", closes_on=None, found=None):
+        with session_scope() as s:
+            c = Competition(source="test", source_id=f"exp-{key}", thread_url="x", title=title, method="web_form",
+                            status=status, closes_on=closes_on, discovered_at=found or utcnow(), posted_at=found)
+            s.add(c)
+            s.flush()
+            return c.id
+
+    closed = add("closed", "E: 01/01 Win a kettle", closes_on=today - timedelta(days=1))
+    open_ = add("open", "E: 01/01 Win a toaster", closes_on=today + timedelta(days=3))
+    undated_old = add("undated-old", "Win a £20 Amazon Voucher (Gleam)", found=old)
+    undated_new = add("undated-new", "Win a copy of a journal (Gleam)")
+    queued_old = add("queued-old", "Win a lamp (IG)", status="queued", found=old)
+    redated = add("redated", f"Ends {(today - timedelta(days=2)):%d/%m/%Y} Win baby keepsakes")  # unreadable before
+    with session_scope() as s:
+        assert jobs._expire(s) >= 3
+    assert _get(closed).status == "expired" and _get(open_).status == "manual"
+    assert _get(undated_old).status == "expired" and "No closing date" in _get(undated_old).status_reason
+    assert _get(undated_new).status == "manual" and _get(queued_old).status == "queued"
+    assert _get(redated).closes_on == today - timedelta(days=2) and _get(redated).status == "expired"

@@ -20,6 +20,20 @@ def test_year_rollover_and_value():
     assert t["prize_value"] == 2000
 
 
+def test_other_closing_date_forms():
+    # Real 2 Nov titles that used to come out undated (so they'd sat in the manual queue for ever).
+    assert parse_title("Ends 12/11/2026 Win Pearhead Baby Keepsake Gifts", TODAY)["closes_on"] == date(2026, 11, 12)
+    t = parse_title("R:29/11 Win a Family Christmas Experience. Royal Station Hotel, Newcastle", TODAY)
+    assert t["closes_on"] == date(2026, 11, 29) and t["prize"].startswith("Win a Family")
+    t = parse_title("E: 31/11 (midday) Win a month's rent payment", TODAY)
+    assert t["closes_on"] == date(2026, 11, 30) and t["closes_time"] == "midday"
+    assert parse_title("Closes 30/02 Win a sledge", TODAY)["closes_on"] == date(2027, 2, 28)
+    assert parse_title("Closing on 5/12 Win a hamper", TODAY)["closes_on"] == date(2026, 12, 5)
+    for title in ["Win a £20 Amazon Voucher (Gleam)", "Rolls 12/11 of wrapping paper to win", "E: 32/11 Win a lamp",
+                  "E: 12/13 Win a lamp"]:
+        assert parse_title(title, TODAY)["closes_on"] is None, title
+
+
 def test_answer_extraction_variants():
     b = parse_body("<p>Where in France?<br>answer = <strong>Charquemont</strong></p><p>https://example.com/win</p>")
     assert b["answers"] == ["Charquemont"]
