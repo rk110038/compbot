@@ -226,3 +226,25 @@ def test_run_stops_after_errors_in_a_row_but_not_scattered_errors(entry_run):
     assert summary.endswith(f"stopped after {run} errors in a row (is the network or browser OK?), "
                             "2 left for the next run")
     assert _get(ids[-1]).last_attempt_at is None
+
+
+def test_retried_blocked_comps_stop_once_the_platform_refuses_twice(entry_run):
+    # 2 Nov: "Retry blocked" re-queued ~30 magazine-platform comps (comps.<magazine>/competition/<slug>/<n>.php) and
+    # every link was tried, all refused (HTTP 403). Two refusals are enough to know; the rest go back to you.
+    def mag(site, n):
+        return f"https://competitions.{site}/competition/win_tickets_{site.split('.')[0]}/{n}.php"
+    multi = _comp("mag-multi", [mag("womansweekly.com", 1), mag("marieclaire.co.uk", 2), mag("idealhome.co.uk", 3)])
+    single = [_comp(f"mag-{i}", [mag(f"site{i}.co.uk", 10 + i)]) for i in range(3)]
+    other = _comp("other-site", ["https://www.unrelated-shop.example/win"])
+    ids = [multi, *single, other]
+    with session_scope() as s:
+        for cid in ids[:-1]:
+            s.get(Competition, cid).force_next = True  # what the manual queue's retry does
+    tried = entry_run(cap=10, results=["blocked", "blocked", "entered"])
+    summary = jobs._enter(ids)
+    assert tried == [mag("womansweekly.com", 1), mag("marieclaire.co.uk", 2), "https://www.unrelated-shop.example/win"]
+    assert "3 skipped_blocked_site" in summary
+    for cid in ids[:-1]:
+        c = _get(cid)
+        assert c.status == "manual" and not c.force_next
+    assert _get(other).status == "entered"

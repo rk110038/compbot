@@ -234,6 +234,13 @@ def _pending_urls(comp: Competition) -> list[str]:
     return [u for u in urls if u not in done]
 
 
+def _refusal_key(url: str) -> str:
+    """What refuses compbot's browser: the site, or the shared platform behind many magazine sites' competitions."""
+    from .analyse import BOT_BLOCKED_URL_RE
+
+    return "the magazine competition platform" if BOT_BLOCKED_URL_RE.search(url) else registrable_domain(url)
+
+
 def _urls_to_try(comp: Competition, blocked: set[str] | None = None) -> list[str]:
     from .analyse import BOT_BLOCKED_URL_RE
 
@@ -283,6 +290,7 @@ def _enter(comp_ids: list[int] | None = None, force: bool = False) -> str:
         comp_ids_ordered = [c.id for c in comps]
         blocked = blocked_domains(s)
     run_blocks: collections.Counter = collections.Counter()
+    refused: set[str] = set()  # sites/platforms that refused compbot twice in this run: not tried again, even on a retry
     # The daily cap counts entries (as the dashboard does), so blocked, failed or CAPTCHA attempts don't use it up.
     # A forced retry instead allows a fixed number of attempts.
     counted = {"dry_run_ok"} if settings.get("entry_mode") != "auto" else ENTERED_RESULTS
@@ -312,9 +320,10 @@ def _enter(comp_ids: list[int] | None = None, force: bool = False) -> str:
             comp = s.get(Competition, cid)
             pending = _pending_urls(comp)
             urls = _urls_to_try(comp, blocked) or (list(comp.entry_urls or []) if force else [])
-            if comp.force_next:  # you asked to retry this one: try every site once, block memory or not
+            if comp.force_next:  # you asked to retry this one: try its sites despite the block memory...
                 urls = pending or list(comp.entry_urls or [])
                 comp.force_next = False
+            urls = [u for u in urls if _refusal_key(u) not in refused]  # ...unless they've refused twice today
             method = comp.method
             _progress["enter"] = f"{n}/{len(comp_ids_ordered)}: {comp.title[:60]}"
             if method == "web_form" and pending and not urls:
@@ -338,18 +347,20 @@ def _enter(comp_ids: list[int] | None = None, force: bool = False) -> str:
         for url in urls:
             if budget <= 0 or errors_in_a_row >= MAX_ERRORS_IN_A_ROW:
                 break
+            if _refusal_key(url) in refused:  # refused twice already, earlier in this competition's list
+                continue
+            if results:
+                pause = random.uniform(3, 8)
+                _step("enter", "Waiting before the next site", pause)
+                time.sleep(pause)
             _step("enter", "Starting the browser")
             results[url] = _enter_web(cid, url, settings, profile)
             spend(results[url])
             if results[url] == "blocked":
-                d = registrable_domain(url)
-                run_blocks[d] += 1
-                if run_blocks[d] >= 2:
-                    blocked.add(d)
-            if len(urls) > 1:
-                pause = random.uniform(3, 8)
-                _step("enter", "Waiting before the next site", pause)
-                time.sleep(pause)
+                key = _refusal_key(url)
+                run_blocks[key] += 1
+                if run_blocks[key] >= 2:
+                    refused.add(key)
         for o in results.values():
             stats[o] = stats.get(o, 0) + 1
         _finalise_web(cid, results, settings)
