@@ -49,6 +49,17 @@ def signed_in(page_html: str) -> bool:
     return not any(s in page_html for s in ('id="logInForm"', "/register/from_entry/", "CompNotLoggedIn("))
 
 
+def _sign_in_tips() -> str:
+    cfg = get_config()
+    tips = []
+    if "@" not in (cfg.cdb_username or ""):
+        tips.append("CDB_USERNAME must be the email address you sign in to Competition Database with.")
+    tips.append(f"compbot was given a {len(cfg.cdb_password or '')}-character password: if that's not the length of "
+                "yours, or it contains a $, put it in single quotes in .env (CDB_PASSWORD='...'; Docker Compose reads "
+                "$ as the start of a variable), then recreate the container (docker compose up -d).")
+    return " ".join(tips)
+
+
 def login(client: httpx.Client) -> None:
     cfg = get_config()
     if not cfg.cdb_enabled:
@@ -62,10 +73,17 @@ def login(client: httpx.Client) -> None:
     time.sleep(1.0)
     r = client.post(BASE + "/login/", data=data, headers={"Referer": BASE + "/login/"})
     r.raise_for_status()
+    refused = re.search(r"Logon Error:\s*(.*?)(?:<br|</div>|$)", r.text, re.S | re.I)
+    if refused:
+        raise CdbError(f"it didn't accept the sign-in. It said \u201c{_text(refused.group(1))}\u201d. {_sign_in_tips()}")
     time.sleep(1.0)
     check = client.get(LIST_URL.format(page=1))
     if not signed_in(check.text):
-        raise CdbError("Competition Database didn't accept the sign-in: check CDB_USERNAME and CDB_PASSWORD")
+        still_form = 'id="logInForm"' in r.text
+        raise CdbError("it didn't accept the sign-in" + (
+            f" (it showed the sign-in form again). {_sign_in_tips()}" if still_form else
+            ": the sign-in went through, but the competition list still shows the visitor view (no entry links). "
+            "Tell Scout - the site may have changed."))
 
 
 def resolve_entry(client: httpx.Client, href: str) -> str | None:

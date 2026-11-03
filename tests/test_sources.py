@@ -141,20 +141,36 @@ def test_competition_database_reads_newest_first_and_stops_at_known(monkeypatch)
 
 def test_competition_database_rejects_a_visitor_view(monkeypatch):
     visitor = _cdb_page([_cdb_card("aaa1", "X - Y", "1 day and 1 hour", "/register/from_entry/")], 1)
+    refused = ('<form id="logInForm"><div class="alert alert-danger">Logon Error: Invalid username and/or password '
+               'supplied<br />\n<br />\nDid you <a href="/reset_password/">forget your password?</a></div></form>')
+    state = {"post": refused}
 
     def handler(req):
         if req.url.path == "/login/":
-            return httpx.Response(200, text="<form id='logInForm'></form>")
+            return httpx.Response(200, text=state["post"] if req.method == "POST" else "<form id='logInForm'></form>")
         return httpx.Response(200, text=visitor)
 
     monkeypatch.setattr(cdb, "get_config", lambda: dataclasses.replace(get_config(), cdb_username="me",
-                                                                         cdb_password="bad"))
+                                                                         cdb_password="abc"))
     monkeypatch.setattr(cdb, "_client", lambda: httpx.Client(transport=httpx.MockTransport(handler)))
     monkeypatch.setattr(cdb.time, "sleep", lambda *_: None)
     ok, msg = cdb.self_test()
-    assert not ok and "didn't accept the sign-in" in msg
+    # the site's own reason, plus the usual .env slips (an email address, and $ in a password)
+    assert not ok and "“Invalid username and/or password supplied”" in msg
+    assert "must be the email address" in msg and "3-character password" in msg and "single quotes" in msg
+    state["post"] = "<p>Welcome back</p>"  # accepted, yet the list still has visitor-only links
+    assert "still shows the visitor view" in cdb.self_test()[1]
     monkeypatch.setattr(cdb, "get_config", lambda: dataclasses.replace(get_config(), cdb_username=None))
     assert "Not set up" in cdb.self_test()[1]
+
+
+def test_logins_from_env_files_are_tidied(monkeypatch):
+    from app import config
+    monkeypatch.setenv("CDB_USERNAME", "  me@example.com ")
+    monkeypatch.setenv("CDB_PASSWORD", "'pa$$ word'")
+    assert config._secret("CDB_USERNAME") == "me@example.com" and config._secret("CDB_PASSWORD") == "pa$$ word"
+    monkeypatch.setenv("CDB_PASSWORD", '"x"')
+    assert config._secret("CDB_PASSWORD") == "x"
 
 
 def test_competitions_time_reads_every_page(monkeypatch):

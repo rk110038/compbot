@@ -46,7 +46,8 @@ services:
       # Or/also Ollama's hosted web search: an ollama.com account's API key (https://ollama.com/settings/keys).
       OLLAMA_API_KEY: ""
       # --- Competition Database (optional): your free account's login, to also find comps there. ---
-      # One account per person (their terms). Check it with Settings -> "Test Competition Database sign-in".
+      # CDB_USERNAME is the email address you sign in with. One account per person (their terms).
+      # Check it with Settings -> "Test Competition Database sign-in".
       CDB_USERNAME: ""
       CDB_PASSWORD: ""
     depends_on:

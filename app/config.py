@@ -113,9 +113,17 @@ def get_config() -> Config:
         user_agent=_env("USER_AGENT", "compbot/1.0 (personal competition tracker; daily check)"),
         headless=_bool(_env("HEADLESS"), True),
         scheduler_enabled=_bool(_env("SCHEDULER_ENABLED"), True),
-        cdb_username=_env("CDB_USERNAME"),
-        cdb_password=_env("CDB_PASSWORD"),
+        cdb_username=_secret("CDB_USERNAME"),
+        cdb_password=_secret("CDB_PASSWORD"),
     )
+
+
+def _secret(name: str) -> str | None:
+    """A login from the environment, without the stray spaces or wrapping quotes .env files often add."""
+    value = (_env(name) or "").strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+        value = value[1:-1]
+    return value or None
 
 
 # Behaviour settings editable in the GUI (stored in the database).
