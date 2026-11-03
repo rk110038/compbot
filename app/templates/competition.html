@@ -69,7 +69,7 @@
     </div>
 
     <div class="card">
-      <h2>Original post</h2>
+      <h2>{{ 'Original post' if c.source == 'mse' else 'What the listing says' }}</h2>
       <div class="post">{{ c.body_text }}</div>
     </div>
   </div>

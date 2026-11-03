@@ -146,7 +146,7 @@ DEFAULT_SETTINGS: dict = {
     "llm_for_forms": True,               # use the LLM (if configured) for fields heuristics can't map
     "llm_for_email": False,              # send candidate win emails (subject + snippet) to the LLM
     "llm_model": "",                     # model chosen in Settings (blank = LLM_MODEL from the environment)
-    "ai_answers": True,                  # let the AI answer competition questions the MSE post didn't answer
+    "ai_answers": True,                  # let the AI answer competition questions the listing didn't answer
     "ai_min_confidence": 80,             # only use AI answers it is at least this sure of (0-100)
     "ai_double_check": True,             # a second AI pass must not judge the answer wrong before it's used
     "ai_web_search": True,               # look questions up on the web (needs SEARXNG_URL or OLLAMA_API_KEY)

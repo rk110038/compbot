@@ -214,7 +214,7 @@ def _discover() -> str:
         outcome = _add_listing(listing, t["title"], a, matcher)
         counts[outcome] = counts.get(outcome, 0) + 1
     done = sum(counts.values())
-    summary = f"{len(threads)} new threads: " + ", ".join(f"{v} {k}" for k, v in sorted(counts.items()))
+    summary = f"MSE: {len(threads)} new threads: " + ", ".join(f"{v} {k}" for k, v in sorted(counts.items()))
     if done < len(threads):
         summary += f" - stopped by you after {done} of {len(threads)}, the rest are picked up next run"
     with session_scope() as s:

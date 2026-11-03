@@ -245,7 +245,7 @@ def test_tile_quiz_in_a_carousel_with_retry(browser, fixture_server, profile):
     assert res.result == "entered", (res.message, res.details["steps"])
     steps = "\n".join(res.details["steps"])
     assert "clicked 'Take the quiz'" in steps and "clicked 'Start the quiz'" in steps
-    assert "\u201cMonte Carlo\u201d (the MSE post)" in steps
+    assert "\u201cMonte Carlo\u201d (the listing's answer)" in steps
     assert "clicked 'Retry'" in steps and "was wrong - trying" in steps
     assert res.details["quiz"]["answered"] == 2
 

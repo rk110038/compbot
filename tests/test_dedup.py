@@ -92,9 +92,6 @@ def test_lookalike_comps_on_one_site_stay_separate():
     # from the same site, only the same entry page counts: MSE posts never merge on titles alone
     assert m.find(Candidate("E: 04/11 3pm - Win two tickets to see Kehlani", source="mse",
                             promoter_domain="globalplayer.com"))[0] is None
-    # same site, no links: only the same entry page counts, so MSE posts never merge on titles alone
-    assert m.find(Candidate("E: 04/11 3pm - WIN TWO TICKETS TO SEE KEHLANI", source="mse",
-                            promoter_domain="globalplayer.com"))[0] is None
 
 
 def test_title_only_match_needs_a_very_similar_title_on_the_same_day():

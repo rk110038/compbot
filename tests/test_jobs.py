@@ -340,7 +340,7 @@ def test_stopped_discovery_picks_up_the_rest_next_run(monkeypatch):
     with session_scope() as s:
         assert get_state(s, "mse_last_run") == before
     monkeypatch.setattr(jobs, "analyse", real)
-    assert jobs._run("discover", jobs._discover).startswith("2 new threads")
+    assert jobs._run("discover", jobs._discover).startswith("MSE: 2 new threads")
 
 
 def test_queue_only_holds_comps_an_entry_run_can_enter():
@@ -424,7 +424,7 @@ def test_discovery_keeps_one_competition_per_comp_across_sites(monkeypatch):
     listings = [_ct("m1", "Merge Test Hamper", closes, "merge-test.example", ["Blue"]),
                 _ct("m2", "Unique Merge Widget Bundle", closes)]
     summary = _discover_with(monkeypatch, threads, listings)
-    assert summary.startswith("2 new threads: 1 already listed (merged)")
+    assert summary.startswith("MSE: 2 new threads: 1 already listed (merged)")
     assert "Competitions-Time: 2 new listings: 1 already listed (merged), 1 manual" in summary
     with session_scope() as s:
         c = s.scalars(select(Competition).where(Competition.source_id == "merge-1")).one()

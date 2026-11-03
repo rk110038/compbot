@@ -995,7 +995,7 @@ def _ai_record(record: dict, res: dict) -> dict:
 
 
 def _ai_fill(page, frame, plan, settings: dict, comp_context: dict, details: dict):
-    """Ask the AI about competition questions the MSE post didn't answer (and, if allowed, tie-breakers)."""
+    """Ask the AI about competition questions the listing didn't answer (and, if allowed, tie-breakers)."""
     min_conf = int(settings.get("ai_min_confidence", 75) or 0)
     page_text = None
     out = []
@@ -1213,13 +1213,13 @@ def _match_quiz_option(texts: list[str], candidates: list[str], fuzzy: int) -> s
 
 def _quiz_order(g: dict, ctx: Ctx, settings: dict, comp_context: dict, page_text: str,
                 details: dict) -> tuple[list[str], str]:
-    """Options in the order to try them: the known answer (MSE post), else the AI's pick, then the rest."""
+    """Options in the order to try them: the listing's answer, else the AI's pick, then the rest."""
     texts = [o["text"] for o in g["options"] if o["text"] and not o["dis"]]
     first, source = None, "a guess"
     if ctx.answers:
         first = _match_quiz_option(texts, list(ctx.answers), fuzzy=92)
         if first:
-            source = "the MSE post"
+            source = "the listing's answer"
     if first is None and llm.enabled(settings) and settings.get("ai_answers", True):
         res = llm.answer_with_lookup(g["question"], texts, page_text, comp_context, settings,
                                      int(settings.get("ai_min_confidence", 75) or 0))
@@ -1241,7 +1241,8 @@ def play_quiz(page, context, live, ctx: Ctx, settings: dict, comp_context: dict,
               done_idx: set[str], deadline: float, gen: list[int], skip_questions: list[str] | None = None):
     """Play a click-to-answer quiz (answer tiles/buttons rather than form fields) until an entry form appears.
 
-    Answers come from the MSE post, then the AI, then a guess; when the quiz says a pick was wrong and lets you try
+    Answers come from the listing (the MSE post, or another site's suggested answer), then the AI, then a guess; when
+    the quiz says a pick was wrong and lets you try
     again, the next option is tried. `skip_questions` are never played (e.g. ones already on the page before the
     entry was submitted). Returns (page, best_form_or_None, summary).
     """

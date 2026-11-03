@@ -51,11 +51,12 @@
     <div class="card">
       <h2>Jobs</h2>
       <table>
-        {% for name, label in [('discover', 'Discover (MSE)'), ('enter', 'Enter competitions'), ('inbox', 'Check Gmail'), ('maintenance', 'Maintenance')] %}
+        {% for name, label in [('discover', 'Find competitions'), ('enter', 'Enter competitions'), ('inbox', 'Check Gmail'), ('maintenance', 'Maintenance')] %}
         {% set r = last_runs[name] %}
         <tr><td><b>{{ label }}</b>
+          {% if name == 'discover' %}<div class="small muted">From MSE{{ ' · Competitions-Time' if settings.source_ct }}{{ ' · Competition Database' if settings.source_cdb and cfg.cdb_enabled }}</div>{% endif %}
           <div class="small muted">Last: {{ r.started_at | ago if r else 'never' }}{% if r %} · {{ badge('ok' if r.status == 'ok' else r.status) }}{% endif %}</div>
-          {% if r and r.summary %}<div class="small muted">{{ r.summary[:160] }}</div>{% endif %}
+          {% if r and r.summary %}<div class="small muted">{{ r.summary[:300] }}</div>{% endif %}
           {% if next_runs.get(name) %}<div class="small muted">Next: {{ next_runs[name].strftime('%a %d %b %H:%M') }}</div>{% endif %}
         </td>
         <td>{% if name in running %}<form method="post" action="/stop/{{ name }}"><button class="btn small stop" {{ 'disabled' if name in stopping }} title="Stops at the next safe point; anything not done is picked up next run">{{ 'Stopping…' if name in stopping else 'Stop' }}</button></form>
