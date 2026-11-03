@@ -292,7 +292,8 @@ def test_stop_finishes_the_current_competition_then_stops(entry_run, monkeypatch
     monkeypatch.setattr(jobs, "_enter_web", enter_web)
     summary = jobs._run("enter", jobs._enter, [multi, *rest])
     assert tried == ["https://s1.example/win"]
-    assert summary == "1 entered - stopped by you, 2 left for the next run"
+    assert summary == "1 entered - still queued: 1 partly entered (the other sites next run) - stopped by you, " \
+                      "2 left for the next run"
     c = _get(multi)
     assert c.status == "queued" and c.entered_urls == ["https://s1.example/win"] and "Partly entered" in c.status_reason
     assert all(_get(cid).last_attempt_at is None for cid in rest)
@@ -339,3 +340,49 @@ def test_stopped_discovery_picks_up_the_rest_next_run(monkeypatch):
         assert get_state(s, "mse_last_run") == before
     monkeypatch.setattr(jobs, "analyse", real)
     assert jobs._run("discover", jobs._discover).startswith("2 new threads")
+
+
+def test_queue_only_holds_comps_an_entry_run_can_enter():
+    # 3 Nov: a run finished with 1 still "queued". Failed-once comps rightly wait for one more try, but nothing may sit
+    # in the queue that no run will ever pick up.
+    from datetime import timedelta
+
+    from app.config import DEFAULT_SETTINGS
+    init_db()
+
+    def add(key, method="web_form", urls=None, entered=None, daily=False, failed=0, closes=None):
+        with session_scope() as s:
+            c = Competition(source="test", source_id=f"park-{key}", thread_url="x", title=f"Park {key}", method=method,
+                            status="queued", entry_urls=urls if urls is not None else [f"https://{key}.example/win"],
+                            entered_urls=entered or [], is_daily=daily, failed_attempts=failed, email_to="a@b.example",
+                            closes_on=closes)
+            s.add(c)
+            s.flush()
+            return c.id
+
+    social, nolink = add("social", method="social", urls=[]), add("nolink", urls=[])
+    email = add("email", method="email", urls=[])
+    done = add("done", urls=["https://d1.example/w", "https://d2.example/w"],
+               entered=["https://d1.example/w", "https://d2.example/w"])
+    daily = add("daily", urls=["https://dy.example/w"], entered=["https://dy.example/w"], daily=True)
+    retry, fresh = add("retry", failed=1), add("fresh")
+    today = jobs.today_local()
+    closed, closes_today = add("closed", closes=today - timedelta(days=1)), add("closes-today", closes=today)
+    with session_scope() as s:
+        jobs._due_competitions(s, dict(DEFAULT_SETTINGS, enter_email_comps=False), None)
+    assert _get(social).status == "manual" and "can't enter social" in _get(social).status_reason
+    assert _get(nolink).status == "manual" and "No entry link" in _get(nolink).status_reason
+    assert _get(email).status == "manual" and "switched off" in _get(email).status_reason
+    assert _get(done).status == "entered"
+    assert _get(closed).status == "expired"  # closed yesterday: gone now, not after the next discovery run
+    for cid in (daily, retry, fresh, closes_today):
+        assert _get(cid).status == "queued"
+
+
+def test_run_summary_says_what_is_left_to_retry(entry_run):
+    # 3 Nov: "It says successfully entered but leaves a queue of 1" - the summary now says why one is still queued.
+    ids = [_comp(f"left{i}", [f"https://left{i}.example/win"]) for i in range(3)]
+    entry_run(cap=100, results=["entered", "failed", "entered"])
+    summary = jobs._enter(ids)
+    assert summary == "2 entered, 1 failed - still queued: 1 to retry after a failed try"
+    assert _get(ids[1]).status == "queued" and _get(ids[1]).status_reason == "Attempt 1 failed - will retry"

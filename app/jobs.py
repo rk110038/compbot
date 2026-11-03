@@ -268,6 +268,7 @@ def _due_competitions(s, settings: dict, comp_ids: list[int] | None) -> list[Com
     today = today_local()
     if comp_ids:
         return list(s.scalars(select(Competition).where(Competition.id.in_(comp_ids))).all())
+    _park_unenterable(s, settings)
     start_local = datetime.combine(today, datetime.min.time(), ZoneInfo(get_config().tz))
     start_utc = start_local.astimezone(timezone.utc).replace(tzinfo=None)
     q = select(Competition).where(
@@ -284,6 +285,36 @@ def _due_competitions(s, settings: dict, comp_ids: list[int] | None) -> list[Com
     if not settings.get("enter_email_comps", True):
         q = q.where(Competition.method != "email")
     return list(s.scalars(q).all())
+
+
+def _park_unenterable(s, settings: dict) -> int:
+    """Queued comps no entry run would ever pick up (closed, re-queued by hand, links removed, email entries switched
+    off...) leave the queue with the reason, instead of sitting in it until (or for ever after) the next discovery."""
+    expired = _expire(s)
+    if expired:
+        it = "they" if expired != 1 else "it"
+        log_event(s, "entry", f"{expired} competition{'s' if expired != 1 else ''} had closed before {it} could be "
+                              "entered - marked expired")
+    moved = 0
+    for c in s.scalars(select(Competition).where(Competition.status == "queued")).all():
+        why = None
+        if c.method not in ("web_form", "email"):
+            why = f"compbot can't enter {c.method.replace('_', ' ')} competitions automatically - enter it yourself"
+        elif c.method == "web_form" and not c.entry_urls:
+            why = "No entry link found - enter it yourself, or add the link on this page and re-queue it"
+        elif c.method == "email" and not settings.get("enter_email_comps", True):
+            why = "Email entries are switched off in Settings - enter it yourself"
+        elif c.method == "web_form" and not c.is_daily and set(c.entry_urls) <= set(c.entered_urls or []):
+            c.status, c.status_reason = "entered", "Entered on every site"
+            moved += 1
+            continue
+        if why:
+            c.status, c.status_reason = "manual", why
+            moved += 1
+    if moved:
+        log_event(s, "entry", f"Took {moved} competition{'s' if moved != 1 else ''} out of the queue that no entry "
+                              "run could enter (see each one's reason)", "warn")
+    return moved
 
 
 def _pending_urls(comp: Competition) -> list[str]:
@@ -337,6 +368,7 @@ MAX_ERRORS_IN_A_ROW = 6  # more than this and the problem is compbot's side (net
 
 def _enter(comp_ids: list[int] | None = None, force: bool = False) -> str:
     cfg = get_config()
+    run_started = utcnow()
     with session_scope() as s:
         settings = get_settings(s)
         profile = get_profile(s)
@@ -435,6 +467,17 @@ def _enter(comp_ids: list[int] | None = None, force: bool = False) -> str:
             _step("enter", "Waiting before the next competition", pause)
             _wait("enter", pause)
     summary = ", ".join(f"{v} {k}" for k, v in sorted(stats.items())) or "Nothing to enter"
+    if comp_ids_ordered and settings.get("entry_mode") == "auto":
+        with session_scope() as s:
+            left = s.scalars(select(Competition).where(Competition.id.in_(comp_ids_ordered),
+                                                        Competition.status == "queued",
+                                                        Competition.last_attempt_at >= run_started)).all()
+            partly = sum(1 for c in left if c.entered_urls)
+            retry = sum(1 for c in left if not c.entered_urls and c.failed_attempts > 0)
+        notes = ([f"{retry} to retry after a failed try"] if retry else []) + (
+            [f"{partly} partly entered (the other sites next run)"] if partly else [])
+        if notes:
+            summary += " - still queued: " + ", ".join(notes)
     if stopped:
         summary += f" - {stopped}"
     with session_scope() as s:

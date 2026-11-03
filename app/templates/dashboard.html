@@ -10,7 +10,7 @@
 
 <div class="grid stats">
   <div class="card stat"><div class="label">Discovered</div><div class="value">{{ stats.discovered }}</div></div>
-  <div class="card stat"><div class="label">Queued</div><div class="value">{{ stats.queued }}</div></div>
+  <div class="card stat"><div class="label">Queued</div><div class="value"><a href="/competitions?status=queued">{{ stats.queued }}</a></div>{% if stats.queued %}<div class="small muted">{% if stats.queued_retry %}{{ stats.queued_retry }} to retry after a failed try{% else %}waiting{% endif %}{% if next_runs.get('enter') %} · next run {{ next_runs['enter'].strftime('%a %H:%M') }}{% endif %}</div>{% endif %}</div>
   <div class="card stat"><div class="label">Competitions entered</div><div class="value green">{{ stats.entered }}</div><div class="small muted">all time{% if stats.by_you %} · {{ stats.by_you }} by you{% endif %}</div></div>
   <div class="card stat"><div class="label">{{ 'Auto entries today' if settings.entry_mode == 'auto' else 'Dry runs today' }}</div><div class="value">{{ stats.today }}<span class="small muted"> / {{ settings.daily_entry_cap }}</span></div><div class="small muted">{{ 'since midnight · daily cap' if settings.entry_mode == 'auto' else 'not submitted' }}</div></div>
   <div class="card stat"><div class="label">Manual queue</div><div class="value amber"><a href="/manual">{{ stats.manual }}</a></div></div>

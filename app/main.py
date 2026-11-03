@@ -240,6 +240,8 @@ def dashboard(request: Request):
         stats = {
             "discovered": count(),
             "queued": count(Competition.status == "queued"),
+            "queued_retry": count(Competition.status == "queued",
+                                  or_(Competition.failed_attempts > 0, Competition.entry_count > 0)),
             "manual": count(Competition.status == "manual"),
             "entered": count(or_(Competition.status == "entered", Competition.entry_count > 0)),
             "won": count(Competition.outcome == "won"),

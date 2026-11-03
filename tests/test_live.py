@@ -113,3 +113,17 @@ def test_stop_buttons(tmp_path, monkeypatch):
             lock.release()
         assert 'action="/run/inbox"' in c.get("/", headers=H).text
         assert 'id="stop-form"' in c.get("/live", headers=H).text
+
+
+def test_dashboard_says_why_comps_are_still_queued():
+    from app.db import Competition, init_db, session_scope
+    from app.main import app
+    init_db()
+    with session_scope() as s:
+        s.add(Competition(source="t", source_id="dash-retry-1", thread_url="x", title="Win a kettle", method="web_form",
+                          status="queued", entry_urls=["https://k.example/win"], failed_attempts=1,
+                          status_reason="Attempt 1 failed - will retry"))
+    with TestClient(app) as c:
+        page = c.get("/", headers=H).text
+        assert 'href="/competitions?status=queued"' in page and "to retry after a failed try" in page
+        assert "Attempt 1 failed - will retry" in c.get("/competitions?status=queued", headers=H).text
