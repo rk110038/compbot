@@ -64,6 +64,14 @@
     </div>
   </div>
   <div class="card">
+    <h2>Where compbot finds competitions</h2>
+    <p class="small muted">Every site is read once per discovery run. The same competition found on several sites (or posted twice) is kept as one competition with all its listings, and an entry page is never entered twice: see "Found on" on each competition.</p>
+    <label class="check"><input type="checkbox" checked disabled><span>MoneySavingExpert Competitions Time forum <small>Always on: the main source, usually with answers and entry links.</small></span></label>
+    <label class="check"><input type="checkbox" name="s_source_ct" {{ 'checked' if settings.source_ct }}><span>Competitions-Time.co.uk <small>A hand-checked list (about 120 open). Most are also on MSE. It doesn't give bots its entry links, so for the rest compbot looks the promoter's page up {% if web_search %}with web search ({{ web_search }}){% else %}with web search, <b>which isn't set up</b>, so they go to the manual queue with an Open link{% endif %}.</small></span></label>
+    <label class="check"><input type="checkbox" name="s_source_cdb" {{ 'checked' if settings.source_cdb }} {{ 'disabled' if not cfg.cdb_enabled }}>{% if not cfg.cdb_enabled and settings.source_cdb %}<input type="hidden" name="s_source_cdb" value="on">{% endif %}<span>Competition Database <small>Its "Simple Form" list (about 400 open, many not on MSE), newest first. Entry links are for members only, so compbot signs in with your account. {% if cfg.cdb_enabled %}Signed in as <b>{{ cfg.cdb_username }}</b>.{% else %}<b>Not set up</b>: add <code>CDB_USERNAME</code> and <code>CDB_PASSWORD</code> to compbot's environment (see the README).{% endif %}</small></span></label>
+    {% if cfg.cdb_enabled %}<div class="actions" style="margin:2px 0 6px 26px"><button class="btn small" formaction="/sources/test-cdb" formmethod="post">Test Competition Database sign-in</button> <span class="small muted">Signs in and reads the newest few (unsaved changes on this page are not saved).</span></div>{% endif %}
+  </div>
+  <div class="card">
     <h2>🤖 AI helper</h2>
     {% if ollama %}
       {% if ollama.ok %}

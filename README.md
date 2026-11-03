@@ -4,7 +4,7 @@ A self-hosted competition assistant for TrueNAS SCALE (or any Docker host). Ever
 
 ![compbot dashboard](docs/dashboard.png)
 
-1. **Discovers** new competitions posted in MoneySavingExpert's [Competitions Time](https://forums.moneysavingexpert.com/categories/competitions-time) forum (via the forum's public API).
+1. **Discovers** new competitions posted in MoneySavingExpert's [Competitions Time](https://forums.moneysavingexpert.com/categories/competitions-time) forum (via the forum's public API), plus, optionally, [Competitions-Time.co.uk](https://www.competitions-time.co.uk) and [Competition Database](https://www.competitiondatabase.co.uk). The same comp found on several sites, or posted twice, is kept as **one** competition and entered once (see [Where competitions come from](#where-competitions-come-from)).
 2. **Triages** each one: web form, email entry, Instagram/Facebook/X, Gleam, app/account-only, purchase-required, magazine puzzles. It pulls out the closing date, entry link(s), the answer posted by other members, and "daily" / multi-site (MD) flags.
 3. **Enters** the ones it can, using your saved details: it fills web forms in a headless Chromium (Playwright) and sends email entries from your competition Gmail. It takes screenshots before and after every submission.
 4. **Checks your competition Gmail** (Inbox and Spam) for wins among the noise. It scores each email, matches it to a competition you entered, clicks "confirm your entry" links, flags likely scams, and alerts you on a possible win.
@@ -82,7 +82,7 @@ Default schedule (Europe/London): discover 07:00, enter 07:30, inbox 08:00 and 2
 | Page | What it's for |
 |---|---|
 | **Dashboard** | Totals (entered, won, lost, win rate), entries per day, jobs with **Run now**, comps closing soon, recent activity |
-| **Competitions** | Every thread found, filterable by status, method and outcome, with CSV export. Each comp has a detail page with the original post, every attempt with screenshots, related emails and buttons to enter, dry-run, mark won/lost, skip, edit the answer or link |
+| **Competitions** | Every competition found, filterable by status, method, outcome and the site it was found on, with CSV export. Each comp has a detail page with the original post, the sites it was found on, every attempt with screenshots, related emails and buttons to enter, dry-run, mark won/lost, skip, edit the answer or link |
 | **Manual queue** | Comps that need you. Click-to-copy answers and personal details, **Open ↗**, then **I've entered it**. Marking manual entries matters, because it lets the inbox checker match a win email to them |
 | **Inbox** | Classified emails (possible win, loss, confirm, entry acknowledgement, scam suspect, promo). Confirm or reject wins and link emails to competitions |
 | **Wins** | Confirmed and possible wins with total stated prize value |
@@ -96,6 +96,21 @@ Quizzes that unlock the entry form (answer tiles or buttons, "Reveal question", 
 Statuses: `queued` (will be auto-entered) → `entered` (or `manual`, `skipped`, `expired`). A comp whose first try fails stays `queued` for one more try on the next run (the dashboard's **Queued** card and the run summary say how many are waiting to retry); a multi-site comp entered on only some sites stays `queued` for the rest. Each entry run first moves out anything it could never enter: closed comps expire, and comps with no entry link, a method compbot can't enter, or email entries switched off go to the manual queue with the reason. Anything not yet entered expires once its closing date passes (checked at 03:00, after each discovery run and at the start of each entry run); a manual-queue comp with no closing date in its title expires 30 days after it was found. Outcomes: `pending` → `possible_win` → `won` / `lost`. Entered comps are marked **lost** automatically 60 days after closing if no win email arrived (most promoters only contact winners).
 
 **Daily comps** (tagged "Daily") are re-entered every day until they close. **(MD) threads** list the same prize on several magazine sites, and compbot enters each one (configurable).
+
+## Where competitions come from
+
+| Site | How compbot reads it | Notes |
+|---|---|---|
+| **MSE Competitions Time** | The forum's public API, once a day | Always on. Usually has the entry link and members' answers |
+| **Competitions-Time.co.uk** | Its public listing pages (about 6 pages, 2 s apart) | Settings → *Where compbot finds competitions*. Hand-checked, about 120 open; about 90% are also on MSE. Its "Enter" buttons go through a redirect that its robots.txt asks bots not to follow, so compbot never does: for comps that aren't on MSE it looks the promoter's page up with web search (SearXNG / Ollama, see the AI section), and otherwise puts them in the manual queue (*No entry link*) with an **Open link** button for you |
+| **Competition Database** | Its *Simple Form Competitions* list, newest first, signed in as you (2.5 s between pages) | Needs `CDB_USERNAME` and `CDB_PASSWORD` (your [free account](https://www.competitiondatabase.co.uk/#sign_up_now)); entry links are only shown to members. About 400 open, many not on MSE. The first run reads the whole list (a few minutes); after that it stops once it reaches comps it has seen. Its own giveaways are never entered (its terms ban automated entries to them). Its terms allow one account per person: don't share it. Use **Settings → Test Competition Database sign-in** to check it |
+
+**Duplicates.** About 90% of Competitions-Time's comps and most of Competition Database's are also on MSE, and MSE sometimes has the same comp posted twice. compbot keeps one competition and adds each extra listing to it (shown as *Found on* on its page, and in the run summary as *already listed (merged)*), copying across anything it was missing: an entry link, an answer or a closing date. A comp waiting in the manual queue for an answer goes back in the queue when another site supplies one. Neither the link nor the title is enough on its own, so a listing is only treated as the same comp when:
+
+1. it has **the same specific entry page** (ignoring `www`, tracking tags like `utm_source`, and trailing slashes). Hub pages that many different comps share, such as a publisher's `/competitions` page or John Lewis rewards, don't count; or
+2. it comes from **another site**, has **no entry link of its own** (or the comp has none), and matches on the **promoter's website, a similar title and the same closing date**. Without a website the title has to be very similar. Rare words count more than common ones ("Kehlani" says more than "tickets"), and different £ amounts are never the same comp.
+
+Two different specific entry pages are never merged: an (MD) comp on two magazine sites can be entered on each. In testing on 60 days of MSE posts, looser title matching merged dozens of different comps (Liverpool shirts signed by different players, different panto tickets), so compbot errs towards keeping comps separate. As a safety net, an entry run never enters a page already entered for another competition in the last 120 days. It marks the second one *Already entered as #123* instead (hub pages excepted).
 
 ## Configuration
 
@@ -113,6 +128,7 @@ Secrets and infrastructure go in environment variables (in the YAML). Everything
 | `OLLAMA_URL` | set by `docker-compose.yml` | Where the bundled Ollama runs (`http://ollama:11434`) |
 | `SEARXNG_URL` | set by `docker-compose.searxng.yml` | Your SearXNG, for the AI's web look-ups (`http://searxng:8080`) |
 | `OLLAMA_API_KEY` | — | Optional: use Ollama's hosted web search for look-ups (instead of, or as a fallback to, SearXNG) |
+| `CDB_USERNAME` / `CDB_PASSWORD` | — | Optional: your Competition Database login, to also find comps there (see *Where competitions come from*) |
 | `OLLAMA_TAG` | `latest` | (Compose) pin the bundled Ollama to a published version, e.g. `0.40.13` |
 | `COMPBOT_UID` / `COMPBOT_GID` | `568` | (Compose) user compbot runs as; must own `./data` |
 | `COMPOSE_FILE` | `docker-compose.yml` | (Compose) add your GPU file and the web search file, see the AI section |
@@ -170,7 +186,7 @@ Then use **Settings → AI helper → Test web search**. Only the search words l
 * Your details live only in the SQLite database on your dataset.
 * The GUI requires a password. POSTs are checked for same-origin. Screenshots are only served to signed-in users.
 * Win emails are never auto-confirmed as wins: you confirm them. Emails that ask for fees, bank details or crypto are flagged as **scam suspect**. Genuine promoters never charge you to claim a prize.
-* compbot polls the MSE API once a day with a 1.5 s pause between pages, and spaces out entries (20–60 s by default).
+* compbot polls the MSE API once a day with a 1.5 s pause between pages, reads Competitions-Time and Competition Database (if switched on) a page every 2–2.5 s, never follows links a site's robots.txt asks bots to avoid, and spaces out entries (20–60 s by default).
 * Links from forum posts and emails are untrusted. The browser, T&C fetches and confirmation clicks refuse private/LAN/loopback addresses, so a malicious link can't reach your NAS or home network.
 * With web look-ups on, the only thing sent out is the search words the AI writes for a competition question. The AI never sees your details, and search result pages aren't opened.
 * Entries that were submitted but showed no confirmation message are flagged **check entry**, with before/after screenshots, rather than silently counted.
@@ -191,6 +207,10 @@ Project layout:
 ```
 app/
   sources/mse.py     MSE forum API client
+  sources/ct.py      Competitions-Time.co.uk listing pages
+  sources/cdb.py     Competition Database (signed in): simple-form comps, newest first
+  sources/common.py  turns any site's listing into an MSE-style post for analyse.py
+  dedup.py           one competition, many listings: same entry page / same site + title + date matching
   analyse.py         title/post parsing and triage rules
   entry/forms.py     form-field → profile/answer heuristics, T&C clause detector (pure, unit-tested)
   entry/browser.py   Playwright engine: cookies, CAPTCHA/bot-block detection, form choice, fill, submit, verify

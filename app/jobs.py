@@ -12,14 +12,16 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import or_, select
 
 from . import llm
-from .analyse import apply_analysis, analyse, registrable_domain
+from .analyse import COMP_URL_HINT, NON_ENTRY_URL_HINT, Analysis, apply_analysis, analyse, registrable_domain
 from .config import get_config
 from .db import (
     DISK_BUSY_MESSAGE,
+    SOURCE_LABELS,
     Competition,
     Email,
     EntryAttempt,
     JobRun,
+    Listing,
     disk_stalled,
     disk_status,
     entries_today,
@@ -32,8 +34,11 @@ from .db import (
     set_state,
     utcnow,
 )
+from .dedup import HUB_MIN_COMPS, Candidate, Matcher, canonical_url, is_generic_path, recent_comps, title_similarity, \
+    title_tokens
 from .entry.forms import Ctx
-from .sources import mse
+from .sources import cdb, ct, mse
+from .sources.common import as_post
 
 log = logging.getLogger("compbot.jobs")
 
@@ -177,9 +182,11 @@ def run_discovery() -> str:
 def _discover() -> str:
     with session_scope() as s:
         settings = get_settings(s)
-        known = set(s.scalars(select(Competition.source_id)).all())
+        known = set(s.scalars(select(Listing.source_id)).all()) | set(s.scalars(select(Competition.source_id)).all())
         last = get_state(s, "mse_last_run")
         blocked = blocked_domains(s)
+        comps, comp_sources = recent_comps(s, today_local())
+    matcher = Matcher(comps, comp_sources)
     since = mse.default_since(datetime.fromisoformat(last) if last else None, int(settings.get("backfill_days", 14)))
     _progress["discover"] = "Fetching threads from MSE"
     threads = mse.fetch_threads(known, since)
@@ -191,9 +198,7 @@ def _discover() -> str:
             break
         _progress["discover"] = f"Analysing {i}/{len(threads)}"
         a = analyse(t["title"], t["body"], eff, today_local())
-        if a.status == "queued" and a.method == "web_form" and a.entry_urls and all(
-                registrable_domain(u) in blocked for u in a.entry_urls):
-            a.status, a.reason = "manual", "This site has blocked compbot's browser before - enter it yourself"
+        _unblock_check(a, blocked)
         if use_llm and a.status == "manual" and a.method in ("unknown", "web_form") and not a.answers:
             hint = llm.analyse_post(t["title"], a.text, a.entry_urls + a.other_links, settings)
             if hint:
@@ -204,28 +209,193 @@ def _discover() -> str:
                     a.answers = [str(x) for x in hint["answers"] if str(x).strip()][:5]
                 if a.entry_urls and (a.answers or not a.question) and hint.get("method") == "web_form":
                     a.method, a.status, a.reason = "web_form", "queued", "Web form (post analysed by LLM)"
-        with session_scope() as s:
-            comp = Competition(source="mse", source_id=t["source_id"], thread_url=t["url"], title=t["title"][:500],
-                               posted_at=t["posted_at"])
-            apply_analysis(comp, a)
-            s.add(comp)
-            s.flush()
-            log_event(s, "discovery", f"New: {comp.title} -> {comp.status} ({comp.status_reason})",
-                      competition_id=comp.id)
-        counts[a.status] = counts.get(a.status, 0) + 1
+        listing = {"source": "mse", "source_id": t["source_id"], "url": t["url"], "title": t["title"],
+                   "posted_at": t["posted_at"], "closes_precise": True}
+        outcome = _add_listing(listing, t["title"], a, matcher)
+        counts[outcome] = counts.get(outcome, 0) + 1
+    done = sum(counts.values())
+    summary = f"{len(threads)} new threads: " + ", ".join(f"{v} {k}" for k, v in sorted(counts.items()))
+    if done < len(threads):
+        summary += f" - stopped by you after {done} of {len(threads)}, the rest are picked up next run"
     with session_scope() as s:
-        done = sum(counts.values())
         if done == len(threads):  # a stopped run leaves the rest to be picked up next time
             set_state(s, "mse_last_run", datetime.now(timezone.utc).replace(tzinfo=None).isoformat())
+
+    for name, fetch in (("ct", ct.fetch_listings), ("cdb", cdb.fetch_listings)):
+        part = _discover_source(name, fetch, settings, eff, known, blocked, matcher)
+        if part:
+            summary += f"; {part}"
+    with session_scope() as s:
         expired = _expire(s)
-        summary = f"{len(threads)} new threads: " + ", ".join(f"{v} {k}" for k, v in sorted(counts.items()))
-        if done < len(threads):
-            summary += f" - stopped by you after {done} of {len(threads)}, the rest are picked up next run"
         if expired:
             summary += f"; {expired} expired"
         log_event(s, "discovery", summary, "success")
     return summary
 
+
+def _unblock_check(a: Analysis, blocked: set[str]) -> None:
+    if a.status == "queued" and a.method == "web_form" and a.entry_urls and all(
+            registrable_domain(u) in blocked for u in a.entry_urls):
+        a.status, a.reason = "manual", "This site has blocked compbot's browser before - enter it yourself"
+
+
+def _discover_source(name: str, fetch, settings: dict, eff: dict, known: set[str], blocked: set[str],
+                     matcher: Matcher) -> str:
+    """Read one extra competition site. Returns its part of the run summary ('' when it's switched off)."""
+    label = SOURCE_LABELS[name]
+    if not settings.get(f"source_{name}", True) or _should_stop("discover"):
+        return ""
+    if name == "cdb" and not get_config().cdb_enabled:
+        return ""
+    _progress["discover"] = f"Fetching competitions from {label}"
+    try:
+        listings = fetch(known, lambda: _should_stop("discover"))
+    except Exception as exc:  # noqa: BLE001 - one site failing mustn't stop the others
+        with session_scope() as s:
+            log_event(s, "discovery", f"{label}: couldn't read the list ({exc})", "warn")
+        return f"{label}: couldn't read the list ({str(exc)[:120]})"
+    counts: dict[str, int] = {}
+    for i, listing in enumerate(listings, 1):
+        if _should_stop("discover"):
+            break
+        if listing["source_id"] in known:  # listed twice in one read
+            continue
+        _progress["discover"] = f"{label}: {i}/{len(listings)}"
+        title, body = as_post(listing)
+        a = analyse(title, body, eff, today_local())
+        if listing.get("closes_on"):
+            a.closes_on = listing["closes_on"]
+        a.promoter_domain = a.promoter_domain or listing.get("promoter_domain")
+        if not a.entry_urls and a.method in ("unknown", "web_form") and a.status not in ("expired", "skipped") \
+                and not matcher.find(_candidate(listing, a))[0]:
+            found = _find_entry_page(listing)
+            if found:
+                listing = dict(listing, entry_urls=[found])
+                title, body = as_post(listing)
+                a = analyse(title, body, eff, today_local())
+                if listing.get("closes_on"):
+                    a.closes_on = listing["closes_on"]
+                a.reason += "; entry page found by web search"
+        _unblock_check(a, blocked)
+        if not a.entry_urls and a.method in ("unknown", "web_form") and a.status not in ("expired", "skipped"):
+            a.method, a.status = "web_form", "manual"
+            a.reason = (f"No entry link: {label} doesn't give its entry links to bots"
+                        + (" and web search didn't find the page" if name == "ct" else "")
+                        + " - open it with Open link, or paste the link on this page and re-queue it")
+        if listing.get("manual_link") and listing["manual_link"] not in a.other_links:
+            a.other_links = a.other_links + [listing["manual_link"]]
+        outcome = _add_listing(listing, title, a, matcher)
+        counts[outcome] = counts.get(outcome, 0) + 1
+        known.add(listing["source_id"])
+    if not listings:
+        return f"{label}: nothing new"
+    return f"{label}: {len(listings)} new listings: " + ", ".join(f"{v} {k}" for k, v in sorted(counts.items()))
+
+
+def _candidate(listing: dict, a: Analysis) -> Candidate:
+    return Candidate(title=listing.get("title") or "", source=listing["source"], entry_urls=list(a.entry_urls),
+                     promoter_domain=a.promoter_domain or listing.get("promoter_domain"), closes_on=a.closes_on,
+                     closes_precise=listing.get("closes_precise", True), extra_title=listing.get("company") or "")
+
+
+AGGREGATOR_DOMAINS = {"competitions-time.co.uk", "moneysavingexpert.com", "competitiondatabase.co.uk", "loquax.co.uk",
+                      "theprizefinder.com", "superlucky.me", "latestfreestuff.co.uk", "hotukdeals.com",
+                      "facebook.com", "instagram.com", "x.com", "twitter.com", "tiktok.com", "pinterest.com",
+                      "pinterest.co.uk", "youtube.com", "reddit.com"}
+
+
+def _find_entry_page(listing: dict) -> str | None:
+    """Look a listing's competition page up on the web (Competitions-Time doesn't give bots its entry links)."""
+    from urllib.parse import urlparse
+
+    from . import websearch
+
+    if listing.get("source") != "ct" or not websearch.providers():
+        return None
+    domain = listing.get("promoter_domain")
+    want = title_tokens(listing.get("title"))
+    query = f"{listing.get('title')} competition" + (f" site:{domain}" if domain else "")
+    best, best_score = None, 0.0
+    for r in websearch.search(query, n=8):
+        url = r.get("url") or ""
+        d = registrable_domain(url)
+        if not url or d in AGGREGATOR_DOMAINS or (domain and d != domain) or is_generic_path(url):
+            continue
+        if NON_ENTRY_URL_HINT.search(urlparse(url).path):
+            continue
+        sim = title_similarity(want, title_tokens(f"{r.get('title')} {r.get('content')}"))
+        looks_like_comp = bool(COMP_URL_HINT.search(url))
+        if sim < (0.5 if domain else 0.6) or (not domain and not looks_like_comp):
+            continue
+        score = sim + (0.2 if looks_like_comp else 0)
+        if score > best_score:
+            best, best_score = url, score
+    return best
+
+
+def _add_listing(listing: dict, title: str, a: Analysis, matcher: Matcher) -> str:
+    """Store a listing: as another listing of a competition compbot already has, or as a new competition.
+    Returns what happened, for the run summary."""
+    source, label = listing["source"], SOURCE_LABELS.get(listing["source"], listing["source"])
+    dup, why = matcher.find(_candidate(listing, a))
+    with session_scope() as s:
+        row = Listing(source=source, source_id=listing["source_id"], url=(listing.get("url") or "")[:500],
+                      title=(listing.get("title") or title)[:500])
+        if dup is not None:
+            comp = s.get(Competition, dup.id)
+            row.competition_id = comp.id
+            s.add(row)
+            filled = _fill_gaps(comp, a, label)
+            log_event(s, "discovery", f"Also listed on {label} ({why}): {comp.title[:100]}"
+                      + (f" - added the {', '.join(filled)} from there" if filled else ""), competition_id=comp.id)
+            matcher.note_source(dup, source)
+            if "entry link" in filled:
+                dup.entry_urls = list(comp.entry_urls)
+                matcher.index_urls(dup, dup.entry_urls)
+            return "already listed (merged)"
+        comp = Competition(source=source, source_id=listing["source_id"], thread_url=(listing.get("url") or "")[:500],
+                           title=title[:500], posted_at=listing.get("posted_at"))
+        apply_analysis(comp, a)
+        s.add(comp)
+        s.flush()
+        row.competition_id = comp.id
+        s.add(row)
+        log_event(s, "discovery", f"New ({label}): {comp.title} -> {comp.status} ({comp.status_reason})",
+                  competition_id=comp.id)
+    matcher.add(comp, {source})
+    return a.status
+
+
+def _fill_gaps(comp: Competition, a: Analysis, label: str) -> list[str]:
+    """Copy what another listing knows and this competition doesn't. Returns what was added."""
+    added = []
+    open_ = comp.status not in ("expired", "skipped") and (comp.closes_on is None or comp.closes_on >= today_local())
+    if not comp.entry_urls and a.entry_urls:
+        comp.entry_urls = list(a.entry_urls)
+        comp.promoter_domain = comp.promoter_domain or a.promoter_domain
+        added.append("entry link")
+        reason = comp.status_reason or ""
+        if open_ and comp.status in ("manual", "new") and (
+                comp.method == "unknown" or reason.startswith(("No entry link", "Couldn't work out"))):
+            comp.method, comp.status = "web_form", "queued"
+            comp.status_reason = f"Web form (entry link from {label})"
+    if not comp.answers and a.answers:
+        comp.answers = list(a.answers)
+        added.append("answer" if len(a.answers) == 1 else "answers")
+        if open_ and comp.status == "manual" and (comp.status_reason or "").startswith(("Needs an answer",
+                                                                                          "Email entry needs answers")):
+            comp.status, comp.status_reason = "queued", f"Answer from {label}"
+    if not comp.question and a.question:
+        comp.question = a.question
+    if comp.closes_on is None and a.closes_on:
+        comp.closes_on, comp.closes_time = a.closes_on, comp.closes_time or a.closes_time
+        added.append("closing date")
+    if comp.prize_value is None and a.prize_value:
+        comp.prize_value = a.prize_value
+    extra = [u for u in a.other_links if u not in (comp.other_links or []) and u not in (comp.entry_urls or [])]
+    if extra:
+        comp.other_links = list(comp.other_links or []) + extra[:3]
+    return added
 
 UNDATED_MANUAL_DAYS = 30  # a manual-queue comp with no closing date is dropped this long after it was found
 
@@ -364,6 +534,52 @@ def blocked_domains(s) -> set[str]:
 
 
 MAX_ERRORS_IN_A_ROW = 6  # more than this and the problem is compbot's side (network, browser), not the sites
+TWIN_DAYS = 120  # an entry page entered for another competition this recently isn't entered again
+
+
+def _entered_pages(s) -> dict[str, dict[int, date | None]]:
+    """Entry pages entered for real (by compbot or you) recently -> {competition: its closing date}."""
+    rows = s.execute(select(EntryAttempt.url, EntryAttempt.competition_id, Competition.closes_on)
+                     .join(Competition, Competition.id == EntryAttempt.competition_id).where(
+        EntryAttempt.started_at >= utcnow() - timedelta(days=TWIN_DAYS),
+        EntryAttempt.mode.in_(["auto", "manual"]), EntryAttempt.result.in_(list(ENTERED_RESULTS)))).all()
+    out: dict[str, dict[int, date | None]] = {}
+    for url, cid, closes in rows:
+        key = canonical_url(url)
+        if key:
+            out.setdefault(key, {})[cid] = closes
+    return out
+
+
+def _entered_as(pages: dict[str, dict[int, date | None]], url: str, comp: Competition, is_hub) -> int | None:
+    """The other competition this entry page was already entered for in the same round, if any. Hub pages don't
+    count (a rewards or competitions page shared by many different comps), nor does an earlier round of a comp that
+    reuses its page (a different closing date)."""
+    if is_hub(url):
+        return None
+    everyone = pages.get(canonical_url(url), {})
+    if len(everyone) >= HUB_MIN_COMPS:
+        return None
+    same_round = [cid for cid, closes in everyone.items() if cid != comp.id and (
+        comp.closes_on is None or closes is None or abs((closes - comp.closes_on).days) <= 1)]
+    return min(same_round) if same_round else None
+
+
+def _skip_twins(s, comp: Competition, pages: dict, is_hub, stats: dict) -> bool:
+    """The same competition found twice (two sites, or posted twice) is entered once: pages already entered for the
+    other one are counted as entered here. True when nothing is left to enter."""
+    twins = {u: o for u in _pending_urls(comp) if (o := _entered_as(pages, u, comp, is_hub))}
+    if not twins:
+        return False
+    comp.entered_urls = list(dict.fromkeys(list(comp.entered_urls or []) + list(twins)))
+    note = ("Already entered as " + ", ".join(f"#{o}" for o in sorted(set(twins.values())))
+            + " (the same competition, found twice)")
+    log_event(s, "entry", f"{note}: {comp.title[:80]}", "info", comp.id)
+    stats["already entered"] = stats.get("already entered", 0) + 1
+    if _pending_urls(comp):
+        return False
+    comp.status, comp.status_reason = "entered", note
+    return True
 
 
 def _enter(comp_ids: list[int] | None = None, force: bool = False) -> str:
@@ -380,7 +596,10 @@ def _enter(comp_ids: list[int] | None = None, force: bool = False) -> str:
         done_today = entries_today(s, cfg.tz, settings.get("entry_mode") != "auto")
         comps = _due_competitions(s, settings, comp_ids)
         comp_ids_ordered = [c.id for c in comps]
+        closes_by_id = {c.id: c.closes_on for c in comps}
         blocked = blocked_domains(s)
+        entered_pages = _entered_pages(s)
+        is_hub = Matcher(recent_comps(s, today_local())[0]).is_hub
     run_blocks: collections.Counter = collections.Counter()
     refused: set[str] = set()  # sites/platforms that refused compbot twice in this run: not tried again, even on a retry
     # The daily cap counts entries (as the dashboard does), so blocked, failed or CAPTCHA attempts don't use it up.
@@ -413,6 +632,8 @@ def _enter(comp_ids: list[int] | None = None, force: bool = False) -> str:
             break
         with session_scope() as s:
             comp = s.get(Competition, cid)
+            if comp.method == "web_form" and not comp.is_daily and _skip_twins(s, comp, entered_pages, is_hub, stats):
+                continue
             pending = _pending_urls(comp)
             urls = _urls_to_try(comp, blocked) or (list(comp.entry_urls or []) if force else [])
             if comp.force_next:  # you asked to retry this one: try its sites despite the block memory...
@@ -461,6 +682,9 @@ def _enter(comp_ids: list[int] | None = None, force: bool = False) -> str:
         for o in results.values():
             stats[o] = stats.get(o, 0) + 1
         _finalise_web(cid, results, settings)
+        for u, r in results.items():
+            if r in ENTERED_RESULTS:
+                entered_pages.setdefault(canonical_url(u), {})[cid] = closes_by_id.get(cid)
         if n < len(comp_ids_ordered) and budget > 0 and errors_in_a_row < MAX_ERRORS_IN_A_ROW:
             lo, hi = int(settings.get("delay_min_seconds", 20)), int(settings.get("delay_max_seconds", 60))
             pause = random.uniform(min(lo, hi), max(lo, hi)) if not comp_ids else 2
@@ -603,7 +827,9 @@ def _enter_email(cid: int, settings: dict, profile: dict, force: bool = False) -
         comp = s.get(Competition, cid)
         subject, body = emailer.compose_entry(comp, profile)
         to = comp.email_to
-        post_text, links = comp.body_text or "", list(comp.other_links or []) + list(comp.entry_urls or [])
+        post_text, links = comp.body_text or "", [
+            u for u in list(comp.other_links or []) + list(comp.entry_urls or [])
+            if registrable_domain(u) not in AGGREGATOR_DOMAINS]  # listing sites' own links (and their bot-free redirects)
         dry = settings.get("entry_mode") != "auto"
         att = EntryAttempt(competition_id=cid, url=f"mailto:{to}", mode="dry_run" if dry else "email")
         s.add(att)
@@ -781,11 +1007,14 @@ RETRY_CATEGORIES: dict[str, dict] = {
            "help": "The T&Cs are checked again on retry, so these come back unless the T&Cs have changed."},
     "other": {"label": "Other", "retry": True, "help": ""},
     "login": {"label": "Needs you to sign in", "retry": False, "help": "compbot can't log in to sites for you."},
+    "nolink": {"label": "No entry link", "retry": False,
+               "help": "The site that listed it doesn't give its entry links to bots. Use Open link, or paste the entry "
+                       "link on the competition's page and re-queue it."},
     "social": {"label": "Social media, Gleam, app, vote or magazine", "retry": False,
                "help": "Not something compbot can enter automatically."},
 }
 CATEGORY_ORDER = ["question", "failed", "error", "needs_input", "phone", "captcha", "blocked", "tc", "other",
-                  "login", "social"]
+                  "nolink", "login", "social"]
 QUESTION_NOTES_RE = ("question with no known answer", "required choice with no known answer", "AI wasn't sure",
                      "AI couldn't", "second check")
 
@@ -799,6 +1028,8 @@ def manual_category(c: Competition, last: EntryAttempt | None) -> str:
     if c.method in ("social", "widget", "magazine", "vote", "purchase"):
         return "social"
     reason = c.status_reason or ""
+    if c.method == "web_form" and not c.entry_urls and reason.startswith("No entry link"):
+        return "nolink"
     if last is None:
         if reason.startswith(("Needs an answer", "Re-queued: the AI")) or "needs answers" in reason:
             return "question"

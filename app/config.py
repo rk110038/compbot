@@ -46,6 +46,12 @@ class Config:
     user_agent: str
     headless: bool
     scheduler_enabled: bool
+    cdb_username: str | None = None
+    cdb_password: str | None = None
+
+    @property
+    def cdb_enabled(self) -> bool:
+        return bool(self.cdb_username and self.cdb_password)
 
     @property
     def db_path(self) -> Path:
@@ -107,6 +113,8 @@ def get_config() -> Config:
         user_agent=_env("USER_AGENT", "compbot/1.0 (personal competition tracker; daily check)"),
         headless=_bool(_env("HEADLESS"), True),
         scheduler_enabled=_bool(_env("SCHEDULER_ENABLED"), True),
+        cdb_username=_env("CDB_USERNAME"),
+        cdb_password=_env("CDB_PASSWORD"),
     )
 
 
@@ -124,6 +132,8 @@ DEFAULT_SETTINGS: dict = {
     "widget_handling": "manual",         # skip | manual  (Gleam/Rafflecopter/etc.)
     "presumed_lost_days": 60,            # days after closing with no win email before marking lost
     "backfill_days": 14,                 # on first run, import threads posted in the last N days
+    "source_ct": True,                   # also find comps on Competitions-Time.co.uk
+    "source_cdb": True,                  # also find comps on Competition Database (needs CDB_USERNAME/CDB_PASSWORD)
     "llm_for_posts": True,               # use the LLM (if configured) to analyse unclear posts
     "llm_for_forms": True,               # use the LLM (if configured) for fields heuristics can't map
     "llm_for_email": False,              # send candidate win emails (subject + snippet) to the LLM

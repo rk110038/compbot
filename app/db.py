@@ -89,6 +89,9 @@ class Competition(Base):
         back_populates="competition", cascade="all, delete-orphan", order_by="EntryAttempt.id.desc()"
     )
     emails: Mapped[list["Email"]] = relationship(back_populates="competition", order_by="Email.id.desc()")
+    listings: Mapped[list["Listing"]] = relationship(
+        back_populates="competition", cascade="all, delete-orphan", order_by="Listing.id"
+    )
 
     @property
     def closes_label(self) -> str:
@@ -100,6 +103,28 @@ class Competition(Base):
     @property
     def answer_text(self) -> str:
         return " | ".join(self.answers or [])
+
+
+SOURCE_LABELS = {"mse": "MSE", "ct": "Competitions-Time", "cdb": "Competition Database"}
+
+
+class Listing(Base):
+    """Where a competition was found. One competition can be listed on several sites (or posted twice on one)."""
+    __tablename__ = "listings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    competition_id: Mapped[int] = mapped_column(ForeignKey("competitions.id"), index=True)
+    source: Mapped[str] = mapped_column(String(20), index=True)   # mse | ct | cdb
+    source_id: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    url: Mapped[str] = mapped_column(String(500), default="")
+    title: Mapped[str] = mapped_column(String(500), default="")
+    found_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    competition: Mapped[Competition] = relationship(back_populates="listings")
+
+    @property
+    def label(self) -> str:
+        return SOURCE_LABELS.get(self.source, self.source)
 
 
 class EntryAttempt(Base):
@@ -292,7 +317,19 @@ def init_db(url: str | None = None) -> None:
 
     Base.metadata.create_all(_engine)
     _add_missing_columns(_engine)
+    _backfill_listings(_engine)
     _SessionLocal = sessionmaker(bind=_engine, expire_on_commit=False)
+
+
+def _backfill_listings(engine) -> None:
+    """Competitions found before listings existed get a listing for the site they came from."""
+    from sqlalchemy import text
+
+    with engine.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO listings (competition_id, source, source_id, url, title, found_at) "
+            "SELECT c.id, COALESCE(c.source, 'mse'), c.source_id, COALESCE(c.thread_url, ''), c.title, c.discovered_at "
+            "FROM competitions c WHERE NOT EXISTS (SELECT 1 FROM listings l WHERE l.source_id = c.source_id)"))
 
 
 def _add_missing_columns(engine) -> None:

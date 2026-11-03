@@ -58,7 +58,7 @@
     <div class="actions" style="align-items:start; justify-content:flex-end">
       {% for u in c.entry_urls %}<a class="btn primary" href="{{ u }}" target="_blank" rel="noopener noreferrer">Open{% if c.entry_urls|length > 1 %} {{ loop.index }}{% endif %} ↗</a>{% endfor %}
       {% if not c.entry_urls and c.other_links %}<a class="btn primary" href="{{ c.other_links[0] }}" target="_blank" rel="noopener noreferrer">Open link ↗</a>{% endif %}
-      <a class="btn" href="{{ c.thread_url }}" target="_blank" rel="noopener noreferrer">Thread ↗</a>
+      <a class="btn" href="{{ c.thread_url }}" target="_blank" rel="noopener noreferrer">Listing ↗</a>
       <form class="inline" method="post" action="/competitions/{{ c.id }}/action"><input type="hidden" name="action" value="mark_entered"><button class="btn green">I've entered it</button></form>
       {% if why and categories[why].retry and c.method in ('web_form', 'email') %}<form class="inline" method="post" action="/competitions/{{ c.id }}/action"><input type="hidden" name="action" value="requeue"><button class="btn" title="Send back to the queue for another automatic try">↻ Retry</button></form>{% endif %}
       <form class="inline" method="post" action="/competitions/{{ c.id }}/action"><input type="hidden" name="action" value="skip"><button class="btn">Skip</button></form>

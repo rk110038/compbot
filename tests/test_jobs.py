@@ -325,6 +325,7 @@ def test_stopped_discovery_picks_up_the_rest_next_run(monkeypatch):
                 "body": f"<p>https://www.stop-test-{i}.example/win</p>", "posted_at": datetime(2026, 11, 2),
                 "comments": []} for i in range(3)]
     monkeypatch.setattr(jobs.mse, "fetch_threads", lambda known, since: [t for t in threads if t["source_id"] not in known])
+    monkeypatch.setattr(jobs.ct, "fetch_listings", lambda known, should_stop=None: [])
     with session_scope() as s:
         before = get_state(s, "mse_last_run")
     real = jobs.analyse
@@ -386,3 +387,140 @@ def test_run_summary_says_what_is_left_to_retry(entry_run):
     summary = jobs._enter(ids)
     assert summary == "2 entered, 1 failed - still queued: 1 to retry after a failed try"
     assert _get(ids[1]).status == "queued" and _get(ids[1]).status_reason == "Attempt 1 failed - will retry"
+
+
+def _discover_with(monkeypatch, threads, ct_listings):
+    monkeypatch.setattr(jobs.mse, "fetch_threads", lambda known, since: [t for t in threads if t["source_id"] not in known])
+    monkeypatch.setattr(jobs.ct, "fetch_listings",
+                        lambda known, should_stop=None: [x for x in ct_listings if x["source_id"] not in known])
+    monkeypatch.setattr(jobs.cdb, "fetch_listings", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no CDB")))
+    return jobs._run("discover", jobs._discover)
+
+
+def _ct(cid, title, closes, domain=None, answers=None):
+    return {"source": "ct", "source_id": f"ct:{cid}", "url": f"https://www.competitions-time.co.uk/x#{cid}",
+            "title": title, "company": "", "closes_on": closes, "closes_precise": True, "posted_at": None,
+            "entry_urls": [], "promoter_domain": domain, "description": "", "question": None,
+            "answers": answers or [], "tags": [], "notes": [],
+            "manual_link": f"https://www.competitions-time.co.uk/redir/{cid}"}
+
+
+def test_discovery_keeps_one_competition_per_comp_across_sites(monkeypatch):
+    # 3 Nov: ~90% of Competitions-Time's comps were already on MSE, and MSE had comps posted twice
+    from datetime import datetime, timedelta
+
+    from app.db import Listing
+    init_db()
+    closes = jobs.today_local() + timedelta(days=40)
+    e = f"E: {closes:%d/%m}"
+    threads = [  # newest first, as MSE returns them
+        {"source_id": "merge-2", "title": f"{e} Win the Merge Test Hamper!", "url": "https://mse/2",
+         "body": "<p>https://www.merge-test.example/win-hamper/?utm_source=mse</p>",
+         "posted_at": datetime(2026, 11, 3), "comments": 0},
+        {"source_id": "merge-1", "title": f"{e} Win a Merge Test hamper", "url": "https://mse/1",
+         "body": "<p>Q: What colour is the box?</p><p>https://merge-test.example/win-hamper</p>",
+         "posted_at": datetime(2026, 11, 2), "comments": 0},
+    ]
+    listings = [_ct("m1", "Merge Test Hamper", closes, "merge-test.example", ["Blue"]),
+                _ct("m2", "Unique Merge Widget Bundle", closes)]
+    summary = _discover_with(monkeypatch, threads, listings)
+    assert summary.startswith("2 new threads: 1 already listed (merged)")
+    assert "Competitions-Time: 2 new listings: 1 already listed (merged), 1 manual" in summary
+    with session_scope() as s:
+        c = s.scalars(select(Competition).where(Competition.source_id == "merge-1")).one()
+        assert sorted(x.source_id for x in c.listings) == ["ct:m1", "merge-1", "merge-2"]
+        assert c.answers == ["Blue"] and c.status == "queued" and c.status_reason == "Answer from Competitions-Time"
+        assert s.scalars(select(Competition).where(Competition.source_id == "merge-2")).first() is None
+        w = s.scalars(select(Competition).where(Competition.source_id == "ct:m2")).one()
+        assert w.status == "manual" and w.status_reason.startswith("No entry link: Competitions-Time")
+        assert w.other_links == ["https://www.competitions-time.co.uk/redir/m2"]
+        assert jobs.manual_category(w, None) == "nolink"
+        assert s.scalars(select(Listing).where(Listing.source_id == "ct:m2")).one().competition_id == w.id
+    # nothing new second time round
+    assert "Competitions-Time: nothing new" in _discover_with(monkeypatch, threads, listings)
+
+
+def test_discovery_looks_up_entry_pages_competitions_time_hides(monkeypatch):
+    from datetime import timedelta
+
+    from app import websearch
+    init_db()
+    closes = jobs.today_local() + timedelta(days=30)
+    results = [{"url": "https://widgets-ws.example/", "title": "Widgets home", "content": ""},
+               {"url": "https://widgets-ws.example/terms", "title": "Widget Bundle terms", "content": ""},
+               {"url": "https://widgets-ws.example/competitions/win-a-rare-widget-bundle",
+                "title": "Win a Rare Widget Bundle", "content": "Enter our rare widget bundle competition"}]
+    searched = []
+    monkeypatch.setattr(websearch, "providers", lambda: ["searxng"])
+    monkeypatch.setattr(websearch, "search", lambda q, n=6, use_cache=True: searched.append(q) or results)
+    _discover_with(monkeypatch, [], [_ct("ws1", "Rare Widget Bundle", closes, "widgets-ws.example")])
+    assert searched == ["Rare Widget Bundle competition site:widgets-ws.example"]
+    with session_scope() as s:
+        c = s.scalars(select(Competition).where(Competition.source_id == "ct:ws1")).one()
+        assert c.entry_urls == ["https://widgets-ws.example/competitions/win-a-rare-widget-bundle"]
+        assert c.method == "web_form" and c.status == "queued" and "found by web search" in c.status_reason
+
+
+def test_entry_run_never_enters_the_same_page_twice(entry_run):
+    # the same comp found twice (and not merged) is entered once; hub pages shared by many comps are still entered
+    from app.db import EntryAttempt
+    a = _comp("twin-a", ["https://twin.example/win-x?utm_source=a"])
+    b = _comp("twin-b", ["https://www.twin.example/win-x/"])
+    hub_done, hub = _comp("hub-a", ["https://hub-twin.example/competitions"]), _comp("hub-b", ["https://hub-twin.example/competitions"])
+    with session_scope() as s:
+        for cid, url in ((a, "https://twin.example/win-x?utm_source=a"), (hub_done, "https://hub-twin.example/competitions")):
+            s.add(EntryAttempt(competition_id=cid, url=url, mode="auto", result="entered"))
+            s.get(Competition, cid).status = "entered"
+    tried = entry_run(cap=10, results=["entered"])
+    summary = jobs._enter([b, hub])
+    assert tried == ["https://hub-twin.example/competitions"]
+    assert "1 already entered" in summary
+    c = _get(b)
+    assert c.status == "entered" and c.status_reason == f"Already entered as #{a} (the same competition, found twice)"
+    assert c.entry_count == 0
+
+def test_entry_run_enters_each_round_of_a_comp_that_reuses_its_page(entry_run):
+    from datetime import timedelta
+
+    from app.db import EntryAttempt
+    page = "https://rounds.example/win-this-week"
+    old, new = _comp("round-1", [page]), _comp("round-2", [page])
+    with session_scope() as s:
+        s.get(Competition, old).closes_on = jobs.today_local() - timedelta(days=7)
+        s.get(Competition, old).status = "entered"
+        s.get(Competition, new).closes_on = jobs.today_local() + timedelta(days=7)
+        s.add(EntryAttempt(competition_id=old, url=page, mode="auto", result="entered"))
+    tried = entry_run(cap=10, results=["entered"])
+    jobs._enter([new])
+    assert tried == [page] and _get(new).status == "entered" and _get(new).entry_count == 1
+
+
+def test_email_entries_never_open_listing_sites_links(monkeypatch):
+    from app.config import DEFAULT_SETTINGS
+    init_db()
+    with session_scope() as s:
+        c = Competition(source="ct", source_id="ct:email-links", thread_url="x", title="E: 30/12 Win tea", method="email",
+                        status="queued", email_to="tea@promo.example",
+                        other_links=["https://www.competitions-time.co.uk/redir/5", "https://promo.example/tea-terms"])
+        s.add(c)
+        s.flush()
+        cid = c.id
+    seen = []
+    monkeypatch.setattr(jobs, "_email_clause", lambda text, links: seen.extend(links) or None)
+    jobs._enter_email(cid, dict(DEFAULT_SETTINGS, entry_mode="dry_run"), {"first_name": "A", "last_name": "B"})
+    assert seen == ["https://promo.example/tea-terms"]
+
+
+def test_competitions_time_email_comps_stay_email_comps(monkeypatch):
+    from datetime import timedelta
+
+    from app import websearch
+    init_db()
+    monkeypatch.setattr(websearch, "providers", lambda: ["searxng"])
+    monkeypatch.setattr(websearch, "search", lambda *a, **k: (_ for _ in ()).throw(AssertionError("searched")))
+    listing = dict(_ct("em1", "Afternoon Tea For Two", jobs.today_local() + timedelta(days=20), "teacomp-promo.example"),
+                   description="To enter, email your name and address to teacomp@teacomp-promo.example")
+    _discover_with(monkeypatch, [], [listing])
+    with session_scope() as s:
+        c = s.scalars(select(Competition).where(Competition.source_id == "ct:em1")).one()
+        assert c.method == "email" and c.email_to == "teacomp@teacomp-promo.example" and not c.entry_urls

@@ -27,11 +27,13 @@ from . import __version__, jobs
 from .config import DEFAULT_PROFILE, DEFAULT_SETTINGS, get_config
 from .db import (
     DISK_BUSY_MESSAGE,
+    SOURCE_LABELS,
     Competition,
     Email,
     EntryAttempt,
     Event,
     JobRun,
+    Listing,
     disk_stalled,
     disk_status,
     entries_today,
@@ -318,7 +320,7 @@ METHODS = ["web_form", "email", "social", "widget", "account", "vote", "magazine
 
 @app.get("/competitions", response_class=HTMLResponse)
 def competitions(request: Request, status: str = "", method: str = "", outcome: str = "", q: str = "",
-                 sort: str = "posted", review: str = "", page: int = 1):
+                 sort: str = "posted", review: str = "", source: str = "", page: int = 1):
     page = max(1, page)
     with session_scope() as s:
         stmt = select(Competition)
@@ -332,6 +334,8 @@ def competitions(request: Request, status: str = "", method: str = "", outcome: 
             stmt = stmt.where(Competition.outcome == outcome)
         if q:
             stmt = stmt.where(Competition.title.ilike(f"%{q}%"))
+        if source in SOURCE_LABELS:
+            stmt = stmt.where(Competition.id.in_(select(Listing.competition_id).where(Listing.source == source)))
         total = s.scalar(select(func.count()).select_from(stmt.subquery())) or 0
         order = {"posted": [Competition.id.desc()],
                  "closing": [Competition.closes_on.is_(None), Competition.closes_on],
@@ -340,8 +344,9 @@ def competitions(request: Request, status: str = "", method: str = "", outcome: 
         rows = s.scalars(stmt.order_by(*order).offset((page - 1) * 50).limit(50)).all()
     pages = max(1, (total + 49) // 50)
     return render(request, "competitions.html", rows=rows, total=total, page=page, pages=pages,
-                  f={"status": status, "method": method, "outcome": outcome, "q": q, "sort": sort, "review": review},
-                  statuses=STATUSES, outcomes=OUTCOMES, methods=METHODS)
+                  f={"status": status, "method": method, "outcome": outcome, "q": q, "sort": sort, "review": review,
+                     "source": source},
+                  statuses=STATUSES, outcomes=OUTCOMES, methods=METHODS, sources=SOURCE_LABELS)
 
 
 @app.get("/competitions/{cid}", response_class=HTMLResponse)
@@ -352,9 +357,10 @@ def competition_detail(request: Request, cid: int):
             raise HTTPException(404)
         attempts = list(c.attempts)
         emails = list(c.emails)
+        listings = list(c.listings)
         events = s.scalars(select(Event).where(Event.competition_id == cid).order_by(Event.id.desc()).limit(30)).all()
     return render(request, "competition.html", c=c, attempts=attempts, emails=emails, events=events,
-                  statuses=STATUSES, outcomes=OUTCOMES, methods=METHODS)
+                  listings=listings, statuses=STATUSES, outcomes=OUTCOMES, methods=METHODS)
 
 
 @app.post("/competitions/{cid}/action")
@@ -659,6 +665,14 @@ def ai_test_search(request: Request):
     return back(request, "/settings", msg, warn=not ok)
 
 
+@app.post("/sources/test-cdb")
+def test_cdb(request: Request):
+    from .sources import cdb
+
+    ok, msg = cdb.self_test()
+    return back(request, "/settings", msg, warn=not ok)
+
+
 @app.post("/settings/clear-dry-runs")
 def clear_dry_runs(request: Request, requeue_manual: str = Form("")):
     if jobs.is_running("enter"):
@@ -804,10 +818,15 @@ def export_csv():
 
     buf = io.StringIO()
     w = csv.writer(buf)
-    w.writerow(cols)
+    w.writerow(cols + ["found_on"])
     with session_scope() as s:
+        found: dict[int, list[str]] = {}
+        for cid, src in s.execute(select(Listing.competition_id, Listing.source).order_by(Listing.id)).all():
+            label = SOURCE_LABELS.get(src, src)
+            if label not in found.setdefault(cid, []):
+                found[cid].append(label)
         for c in s.scalars(select(Competition).order_by(Competition.id)).all():
-            w.writerow([cell(getattr(c, k)) for k in cols])
+            w.writerow([cell(getattr(c, k)) for k in cols] + [cell(found.get(c.id, []))])
     buf.seek(0)
     return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv",
                              headers={"Content-Disposition": "attachment; filename=competitions.csv"})

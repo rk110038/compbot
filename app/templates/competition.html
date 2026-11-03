@@ -22,7 +22,8 @@
       <h2>Actions</h2>
       <div class="actions">
         {% for e in c.entry_urls %}<a class="btn" href="{{ e }}" target="_blank" rel="noopener noreferrer">Open entry page{% if c.entry_urls|length > 1 %} {{ loop.index }}{% endif %} ↗</a>{% endfor %}
-        <a class="btn" href="{{ c.thread_url }}" target="_blank" rel="noopener noreferrer">MSE thread ↗</a>
+        {% if not c.entry_urls %}{% for l in c.other_links if '/redir/' in l %}<a class="btn" href="{{ l }}" target="_blank" rel="noopener noreferrer">Open link ↗</a>{% endfor %}{% endif %}
+        {% for l in listings or [] %}<a class="btn" href="{{ l.url }}" target="_blank" rel="noopener noreferrer">{{ 'MSE thread' if l.source == 'mse' else l.label }} ↗</a>{% else %}<a class="btn" href="{{ c.thread_url }}" target="_blank" rel="noopener noreferrer">Listing ↗</a>{% endfor %}
         {% set btns = [('enter_now', 'Enter automatically now', 'primary')] if settings.entry_mode == 'auto' else [] %}
         {% for a, label, cls in btns + [('dry_run_now', 'Dry-run now', ''), ('mark_entered', "I've entered it", 'green')] %}
         <form class="inline" method="post" action="/competitions/{{ c.id }}/action"><input type="hidden" name="action" value="{{ a }}"><button class="btn {{ cls }}">{{ label }}</button></form>
@@ -80,6 +81,7 @@
         <dt>Prize</dt><dd>{{ c.prize }}</dd>
         <dt>Closes</dt><dd>{{ c.closes_label }} <span class="muted">({{ c.closes_on | days_left }})</span></dd>
         <dt>Posted</dt><dd>{{ c.posted_at | local('%d %b %Y %H:%M') }}</dd>
+        {% if listings %}<dt>Found on</dt><dd>{% for l in listings %}<a href="{{ l.url }}" target="_blank" rel="noopener noreferrer">{{ l.label }}</a> <span class="muted small">{{ l.found_at | local('%d %b') }}</span>{{ '' if loop.last else ' · ' }}{% endfor %}</dd>{% endif %}
         <dt>Promoter</dt><dd>{{ c.promoter_domain or '–' }}</dd>
         <dt>Question</dt><dd>{{ c.question or '–' }}</dd>
         <dt>Entries made</dt><dd>{{ c.entry_count }}{% if c.entered_at %} (first {{ c.entered_at | local('%d %b') }}){% endif %}</dd>

@@ -104,3 +104,21 @@ def test_locked_database_fails_fast_with_a_clear_message(monkeypatch):
 def get_db_path() -> str:
     from app.config import get_config
     return str(get_config().db_path)
+
+
+def test_competitions_from_before_listings_get_one():
+    from sqlalchemy import select
+
+    from app import db
+    db.init_db()
+    with db.session_scope() as s:
+        s.add(db.Competition(source="mse", source_id="pre-listing-1", thread_url="https://mse/old", title="Old comp"))
+    with db.session_scope() as s:  # as an older compbot left it: no listing
+        for row in s.scalars(select(db.Listing).where(db.Listing.source_id == "pre-listing-1")).all():
+            s.delete(row)
+    db.init_db()
+    db.init_db()  # and only once
+    with db.session_scope() as s:
+        rows = s.scalars(select(db.Listing).where(db.Listing.source_id == "pre-listing-1")).all()
+        assert len(rows) == 1 and rows[0].source == "mse" and rows[0].url == "https://mse/old"
+        assert rows[0].competition.title == "Old comp"

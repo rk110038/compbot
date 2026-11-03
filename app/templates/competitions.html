@@ -11,13 +11,14 @@
   <select name="status"><option value="">Any status</option>{% for s in statuses %}<option {{ 'selected' if f.status == s }}>{{ s }}</option>{% endfor %}</select>
   <select name="method"><option value="">Any method</option>{% for m in methods %}<option {{ 'selected' if f.method == m }}>{{ m }}</option>{% endfor %}</select>
   <select name="outcome"><option value="">Any outcome</option>{% for o in outcomes %}<option {{ 'selected' if f.outcome == o }}>{{ o }}</option>{% endfor %}</select>
+  <select name="source"><option value="">Found anywhere</option>{% for k, l in sources.items() %}<option value="{{ k }}" {{ 'selected' if f.source == k }}>On {{ l }}</option>{% endfor %}</select>
   <select name="sort">
     {% for k, l in [('posted', 'Newest'), ('closing', 'Closing soonest'), ('value', 'Prize value'), ('updated', 'Recently updated')] %}
     <option value="{{ k }}" {{ 'selected' if f.sort == k }}>{{ l }}</option>{% endfor %}
   </select>
   <label class="check" style="padding:0"><input type="checkbox" name="review" value="1" {{ 'checked' if f.review }}> Needs checking</label>
   <button class="btn">Filter</button>
-  {% if f.q or f.status or f.method or f.outcome or f.review %}<a href="/competitions">Clear</a>{% endif %}
+  {% if f.q or f.status or f.method or f.outcome or f.review or f.source %}<a href="/competitions">Clear</a>{% endif %}
 </form>
 <div class="card" style="padding:0">
 <table>
