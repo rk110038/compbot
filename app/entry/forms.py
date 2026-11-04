@@ -122,7 +122,7 @@ PERSONAL_Q_RE = re.compile(
 QUESTION_START_RE = re.compile(
     r"^(q ?\d*\b|question|name (one|a|the|an)\b|which|what|who|where|when|how (many|much|long|old is)|unscramble|"
     r"complete|fill in|spot|count|identify|guess|true or false)\b")  # \b: "Country" isn't "count...", nor "WhatsApp"
-ANSWER_FIELD_RE = re.compile(r"\banswer|\bquestion\b|\bq ?\d\b|\bquiz\b|\bguess\b|solution|code ?word|secret word")
+ANSWER_FIELD_RE = re.compile(r"\banswer|\bquestion\b|\bq ?\d\b|\bquiz\b|\bguess\b|solution|code ?word|secret word|key ?word")
 CREATIVE_RE = re.compile(
     r"tie ?break|in (\d+|ten|twenty|fifty|25|15) words|tell us|why (do|would|should|you)|caption|slogan|sentence|"
     r"describe|\bcomment|\bmessage\b|\bstory\b|\bpoem\b|\breason\b")
@@ -326,6 +326,35 @@ def county_candidates(county: str) -> list[str]:
     return list(dict.fromkeys(out))
 
 
+# English counties by region, for "Region" lists ("South East", "East of England"...).
+UK_REGIONS = {
+    "North East": ["northumberland", "tyne and wear", "county durham", "durham", "teesside"],
+    "North West": ["cumbria", "lancashire", "greater manchester", "merseyside", "cheshire"],
+    "Yorkshire and the Humber": ["north yorkshire", "west yorkshire", "south yorkshire", "east riding of yorkshire",
+                                 "east yorkshire", "yorkshire", "humberside"],
+    "East Midlands": ["derbyshire", "nottinghamshire", "lincolnshire", "leicestershire", "rutland", "northamptonshire"],
+    "West Midlands": ["herefordshire", "shropshire", "staffordshire", "warwickshire", "west midlands", "worcestershire"],
+    "East of England": ["bedfordshire", "cambridgeshire", "essex", "hertfordshire", "norfolk", "suffolk"],
+    "London": ["greater london", "london", "middlesex"],
+    "South East": ["berkshire", "buckinghamshire", "east sussex", "west sussex", "sussex", "hampshire", "isle of wight",
+                   "kent", "oxfordshire", "surrey"],
+    "South West": ["bristol", "cornwall", "devon", "dorset", "gloucestershire", "somerset", "wiltshire"],
+}
+
+
+def region_candidates(p: dict) -> list[str]:
+    """For a "Region" list: your county's region of England ("South East"), then your country (some forms' "Region"
+    is United Kingdom / Europe / USA)."""
+    counties = {normalise(c).rstrip(".") for c in county_candidates(str(p.get("county") or ""))}
+    out = []
+    for region, names in UK_REGIONS.items():
+        if counties & set(names):
+            out += [region, f"{region} England", f"{region} of England"]
+            if region == "East of England":
+                out.append("East Anglia")
+    return out + option_candidates("country", p)
+
+
 def option_candidates(key: str, p: dict) -> list[str]:
     dob = _parse_dob(p)
     if key == "county":
@@ -402,6 +431,8 @@ def map_choice(f: Field, ctx: Ctx) -> Action:
     if key in {"title", "country", "county", "gender", "dob_day", "dob_month", "dob_year"} or (
             key in {"town"} and f.options):
         o = choose_option(f.options, option_candidates(key, ctx.profile))
+        if not o and key == "county" and re.search(r"\bregion\b", label_d + " " + normalise(f.name)):
+            o = choose_option(f.options, region_candidates(ctx.profile))
         if o:
             return Action(kind, o.get("idx") or o.get("value"), source=key)
         if f.required:
@@ -456,7 +487,8 @@ def map_text(f: Field, ctx: Ctx) -> Action:
         return Action("unknown" if f.required and f.type == "file" else "skip", note=f"{f.type} field")
     key = None
     label = _label_text(f)
-    if MATH_CHECK_RE.search(label) and not ctx.answers:
+    if MATH_CHECK_RE.search(label) and (not ctx.answers or len(label.split()) <= 6):
+        # "9 + 3 equals" is a CAPTCHA by another name, even on a comp whose question has a known answer.
         return Action("unknown", note="captcha: maths anti-spam check")
     if OTHER_PERSON_RE.search(label) and re.search(r"name|e ?mail|phone|number|address", label):
         return Action("unknown" if f.required else "skip", note="asks for someone else's details")

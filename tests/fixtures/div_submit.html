@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Win an audio drama</title></head>
+<body>
+<h1>Win New Pathways</h1>
+<p>We have FIVE copies to give away. To enter, just tell us:</p>
+<!-- Doctor Who Magazine: the buttons are <div class="mrmButton" onclick=...>, one of them hidden. -->
+<form id="f" class="mrmform" action="#">
+  <label>First Name* <input name="fn" required></label>
+  <label>Surname* <input name="sn" required></label>
+  <label>Email Address* <input type="email" name="em" required></label>
+  <div class="mrmField" style="display:none"><label>Address Search</label><input name="pc_search"><a class="mrmButton" onclick="window.__searched=1">Search</a></div>
+  <div class="mrmField"><div class="mrmButton" onclick="go()">SUBMIT</div></div>
+</form>
+<script>
+function go() {
+  const f = document.getElementById('f');
+  document.body.innerHTML = (f.fn.value && f.em.value) ? '<h2>Thank you for entering!</h2>' : '<p>Please complete the form</p>';
+}
+</script>
+</body></html>

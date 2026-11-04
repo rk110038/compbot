@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Magazine competition entry</title>
+<style>#card{height:320px;overflow:hidden;border:1px solid #ccc;width:500px} #scroll{height:100%;overflow-y:auto;padding:0 1rem}</style></head>
+<body>
+<!-- Microsoft Forms: the questions sit in a card you scroll, so most of them start out below the card's fold. -->
+<div id="card"><div id="scroll">
+  <h2>Magazine Competition Entry</h2>
+  <p>We will only use your information with your consent.</p><p>Here is how we'll use and store your data.</p>
+  <p>By entering the competition, all entrants consent to the use of their personal data.</p>
+  <p>Your responses will be stored securely.</p><p>Any personal details will be anonymised after 2 years.</p>
+  <p>Your participation is entirely voluntary.</p><p>If you have any questions, please contact us.</p>
+  <form id="f">
+    <fieldset><legend>If you are happy to enter the competition and agree to the terms, please select Yes *</legend>
+      <label><input type="radio" name="agree" value="Yes" required> Yes</label>
+      <label><input type="radio" name="agree" value="No"> No</label></fieldset>
+    <label>First name * <input name="fn" required></label>
+    <label>Email * <input type="email" name="em" required></label>
+    <button type="submit">Submit</button>
+  </form>
+</div></div>
+<script>
+document.getElementById('f').addEventListener('submit', e => {
+  e.preventDefault();
+  document.getElementById('scroll').innerHTML = e.target.agree.value === 'Yes' ? '<p>Your response was submitted.</p>' : '<p>WRONG</p>';
+});
+</script>
+</body></html>

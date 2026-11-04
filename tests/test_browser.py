@@ -367,3 +367,156 @@ def test_promo_teasers_after_submit_are_not_a_follow_up_quiz(browser, fixture_se
     assert "other.html" not in (res.final_url or "")
     acts = {f["label"]: (f["action"], f["source"]) for f in res.details["fields"]}
     assert acts["County"] == ("fill", "county"), acts
+
+
+# --------------------------------------------------------------------------- 4 Nov failure analysis
+
+
+def test_confirmations_that_were_missed(browser, fixture_server, profile):
+    # Muddy Stilettos ("Huzzah, you have now entered!") and Leeds List ("Your form has been successfully received")
+    # were read as "nothing changed" and entered again on the next run - up to four more times.
+    for page in ("now_entered.html", "form_received.html"):
+        res = browser.enter(f"{fixture_server}/{page}", Ctx(profile=profile), _settings(entry_mode="auto"), "fa1", {})
+        assert res.result == "entered", (page, res.message)
+        assert sum("clicked" in s for s in res.details["steps"]) == 1, res.details["steps"]
+
+
+def test_server_saying_already_entered_counts_as_entered(browser, fixture_server, profile):
+    # Welcome to Fife: the page showed nothing, but the server replied HTTP 409 "already been used to enter".
+    res = browser.enter(f"{fixture_server}/already_used.html", Ctx(profile=profile), _settings(entry_mode="auto"),
+                        "fa2", {})
+    assert res.result == "entered" and "already" in res.message, res.message
+
+
+def test_bot_checks_turning_the_entry_down_go_to_you(browser, fixture_server, profile):
+    # Visit Northumberland: "Unable to verify reCaptcha" (server); Klaviyo: "An error occurred when submitting".
+    res = browser.enter(f"{fixture_server}/recaptcha_refused.html", Ctx(profile=profile), _settings(entry_mode="auto"),
+                        "fa3", {})
+    assert res.result == "captcha" and "Unable to verify reCaptcha" in res.message, res.message
+    res = browser.enter(f"{fixture_server}/klaviyo_refused.html", Ctx(profile=profile), _settings(entry_mode="auto"),
+                        "fa4", {})
+    assert res.result == "blocked" and "Klaviyo" in res.message, res.message
+    res = browser.enter(f"{fixture_server}/imperva_refused.html", Ctx(profile=profile), _settings(entry_mode="auto"),
+                        "fa4b", {})  # uDiscover Music: "Oops an error occurred" behind Imperva
+    assert res.result == "blocked" and "bot protection" in res.message, res.message
+
+
+def test_button_held_by_a_bot_check_is_a_captcha(browser, fixture_server, profile, monkeypatch):
+    # SheerLuxe / SLMan: a hidden Turnstile keeps the button on "Solving captcha..." for ever.
+    from app.entry import browser as engine
+    monkeypatch.setattr(engine, "CAPTCHA_BUTTON_WAIT_S", 1)
+    res = browser.enter(f"{fixture_server}/turnstile_stuck.html", Ctx(profile=profile), _settings(entry_mode="auto"),
+                        "fa5", {})
+    assert res.result == "captcha" and "Solving captcha" in res.message, res.message
+    res = browser.enter(f"{fixture_server}/turnstile_stuck.html", Ctx(profile=profile), _settings(entry_mode="dry_run"),
+                        "fa6", {})
+    assert res.result == "captcha", res.message
+
+
+def test_waits_while_the_button_says_sending(browser, fixture_server, profile):
+    # TUI: "Sending..." for a good while before the thank-you.
+    res = browser.enter(f"{fixture_server}/busy_then_done.html", Ctx(profile=profile), _settings(entry_mode="auto"),
+                        "fa7", {})
+    assert res.result == "entered", (res.message, res.details["steps"])
+    assert any("busy" in s for s in res.details["steps"])
+
+
+def test_age_gate_is_answered(browser, fixture_server, profile):
+    # Brains Brewery: "Are you over 18?" sat on top of the form.
+    res = browser.enter(f"{fixture_server}/age_gate.html", Ctx(profile=profile), _settings(entry_mode="auto"), "fa8", {})
+    assert res.result == "entered", (res.message, res.details["steps"])
+    assert any("answered the age check" in s for s in res.details["steps"])
+    child = dict(profile, dob="2015-01-01")  # never for someone under 18
+    res = browser.enter(f"{fixture_server}/age_gate.html", Ctx(profile=child), _settings(entry_mode="auto"), "fa9", {})
+    assert not any("age check" in s for s in res.details["steps"]) and res.result != "entered"
+
+
+def test_follows_the_here_link_instead_of_signing_up_to_the_newsletter(browser, fixture_server, profile):
+    # Velvet / Sea Angler: "click HERE and complete the online form"; Sea Angler's only form was its newsletter.
+    ctx = Ctx(profile=profile, answers=["UNIVERSE"])
+    res = browser.enter(f"{fixture_server}/here_link.html", ctx, _settings(entry_mode="auto"), "fl1", {})
+    assert res.result == "entered", (res.message, res.details["steps"])
+    assert any("followed 'HERE'" in s for s in res.details["steps"]) and "newsletter_done" not in (res.final_url or "")
+    res = browser.enter(f"{fixture_server}/here_link.html", Ctx(profile=profile, answers=["UNIVERSE"]),
+                        _settings(entry_mode="dry_run"), "fl2", {})
+    assert res.result == "dry_run_ok" and (res.final_url or "").endswith("here_target.html"), res.message
+    assert "would press \u201cEnter\u201d" in res.message
+
+
+def test_follows_a_tap_to_enter_link(browser, fixture_server, profile):
+    # Vegan Food & Living: "TAP TO ENTER".
+    res = browser.enter(f"{fixture_server}/tap_link.html", Ctx(profile=profile, answers=["UNIVERSE"]),
+                        _settings(entry_mode="dry_run"), "fl3", {})
+    assert res.result == "dry_run_ok", (res.message, res.details["steps"])
+    assert "clicked 'TAP TO ENTER'" in res.details["steps"]
+
+
+def test_google_forms_style_choices_and_div_submit(browser, fixture_server, profile):
+    # eVision / Diggerland (Google Forms): a required "Would you like ... news via email?" Yes/No made of
+    # <div role=checkbox> was left blank, so the form never went. Answered "No" (not a newsletter comp).
+    res = browser.enter(f"{fixture_server}/aria_choices.html", Ctx(profile=profile), _settings(entry_mode="auto"),
+                        "ag1", {})
+    assert res.result == "entered", (res.message, res.details)
+    acts = {f["label"][:30]: (f["action"], f["note"]) for f in res.details["fields"]}
+    assert ("radio", "yes/no") in acts.values(), acts
+
+
+def test_cookie_gated_form_is_found_on_a_second_try(browser, fixture_server, profile):
+    # Some shops only load their competition embed once cookies are accepted.
+    res = browser.enter(f"{fixture_server}/cookie_gate.html", Ctx(profile=profile), _settings(entry_mode="dry_run"),
+                        "cg1", {})
+    assert res.result == "dry_run_ok", (res.message, res.details)
+    assert "Reject all" in res.details["cookies"] and "accepted: Accept all" in res.details["cookies"]
+    assert "the entry form appeared once cookies were accepted" in res.details["steps"]
+
+
+def test_sign_in_walls_and_widgets_go_to_you_first_time(browser, fixture_server, profile):
+    # Living North / The Lady / Delia ("You need to sign in to enter") and MoneyMagpie's Gleam widget were reported as
+    # "No entry form found" and retried.
+    res = browser.enter(f"{fixture_server}/login_wall.html", Ctx(profile=profile), _settings(entry_mode="auto"), "lw1", {})
+    assert res.result == "login" and "You need to sign in to enter this competition" in res.message, res.message
+    res = browser.enter(f"{fixture_server}/gleam_widget.html", Ctx(profile=profile), _settings(entry_mode="auto"), "lw2", {})
+    assert res.result == "widget" and "Gleam" in res.message, res.message
+
+
+def test_div_submit_button(browser, fixture_server, profile):
+    # Doctor Who Magazine: SUBMIT is a <div onclick> (and a hidden "Search" one sits in the form too).
+    res = browser.enter(f"{fixture_server}/div_submit.html", Ctx(profile=profile), _settings(entry_mode="auto"), "ds1", {})
+    assert res.result == "entered", (res.message, res.details["steps"])
+
+
+def test_formless_page_presses_the_entry_button_not_the_footer_sign_up(browser, fixture_server, profile):
+    # Great British Chefs: no <form>; compbot also filled the footer newsletter box and found no button.
+    res = browser.enter(f"{fixture_server}/formless.html", Ctx(profile=profile), _settings(entry_mode="auto"), "ds2", {})
+    assert res.result == "entered", (res.message, res.details)
+    assert not any("Newsletter" in f["label"] or f["label"] == "Search" for f in res.details["fields"])
+
+
+def test_form_inside_a_scrolling_card(browser, fixture_server, profile):
+    # Slimming World (Microsoft Forms): the questions are in a card you scroll, below its fold.
+    res = browser.enter(f"{fixture_server}/scroll_panel.html", Ctx(profile=profile), _settings(entry_mode="auto"), "sp1", {})
+    assert res.result == "entered", (res.message, res.details)
+
+def test_entry_form_asking_your_age_is_not_mistaken_for_an_age_gate(browser, fixture_server, profile):
+    # Its "Enter" button sends the entry: pressing it as an age gate's "yes" would submit, even in a dry run.
+    res = browser.enter(f"{fixture_server}/modal_age_question.html", Ctx(profile=profile), _settings(entry_mode="dry_run"),
+                        "ag2", {})
+    assert res.result == "dry_run_ok", (res.result, res.message, res.details["steps"])
+    assert not any("age check" in s for s in res.details["steps"])
+
+
+def test_off_screen_carousel_slides_stay_hidden(browser):
+    # Scrolling a panel down is reaching it; a sideways-scrolling carousel's other slides are still out of view.
+    from app.entry.browser import JS_HELPERS
+    page = browser.browser.new_page(viewport={"width": 800, "height": 600})
+    try:
+        page.set_content("""
+          <div style="width:300px;overflow:hidden"><div id="track" style="display:flex;overflow-x:auto;width:300px">
+            <button id="s1" style="flex:0 0 300px">Slide 1</button><button id="s2" style="flex:0 0 300px">Slide 2</button>
+          </div></div>
+          <div style="height:120px;overflow:hidden"><div style="height:120px;overflow-y:auto">
+            <p style="height:300px">Long text</p><button id="below">Below the fold</button></div></div>""")
+        vis = page.evaluate("() => {" + JS_HELPERS + " return ['s1', 's2', 'below'].map(id => __cbVis(document.getElementById(id))); }")
+        assert vis == [True, False, True], vis
+    finally:
+        page.close()

@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Monthly giveaway</title></head>
+<body>
+<h1>Monthly Giveaway</h1>
+<h2>Sign up to enter the draw</h2>
+<!-- TUI: the button says "Sending..." for a good while before the thank-you appears. -->
+<form id="f">
+  <label>First name * <input name="fn" required></label>
+  <label>Last name * <input name="ln" required></label>
+  <label>Email * <input type="email" name="email" required></label>
+  <label><input type="checkbox" name="tc" required> I agree to the Terms & Conditions</label>
+  <button type="submit" id="go">Enter the giveaway draw</button>
+</form>
+<script>
+document.getElementById('f').addEventListener('submit', e => {
+  e.preventDefault();
+  const b = document.getElementById('go'); b.disabled = true; b.textContent = 'Sending...';
+  setTimeout(() => { document.getElementById('f').outerHTML = '<h2>Thanks for entering - good luck!</h2>'; }, 8000);
+});
+</script>
+</body></html>

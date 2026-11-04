@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Win a night out</title></head>
+<body>
+<h1>Win a festive night out for 10</h1>
+<div class="box"><h2>Enter now for a chance to WIN</h2>
+<p id="msg"></p>
+<!-- Leeds List: a thank-you strip appears above the form, which stays on the page. -->
+<form id="f">
+  <label>First Name <input name="fn" required></label>
+  <label>Last Name <input name="ln" required></label>
+  <label>Email <input type="email" name="em" required></label>
+  <label>Postcode <input name="pc"></label>
+  <button type="submit">ENTER NOW</button>
+</form></div>
+<script>
+document.getElementById('f').addEventListener('submit', e => {
+  e.preventDefault();
+  document.getElementById('msg').innerHTML = '<b>Thank you</b> Your form has been successfully received.';
+});
+</script>
+</body></html>

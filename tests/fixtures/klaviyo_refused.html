@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Win a shopping spree</title></head>
+<body>
+<h1>Win a £500 shopping spree</h1>
+<h2>Enter the competition</h2>
+<!-- A Klaviyo sign-up form on a Shopify shop: it refuses automated browsers with a generic message. -->
+<form id="kf" class="needsclick klaviyo-form klaviyo-form-version-cid_1">
+  <input type="email" name="email" placeholder="Email" aria-label="Email" required>
+  <input name="first_name" placeholder="First name" aria-label="First name">
+  <button type="submit">ENTER NOW</button>
+</form>
+<p id="out"></p>
+<script>
+document.getElementById('kf').addEventListener('submit', e => {
+  e.preventDefault();
+  document.getElementById('out').textContent = 'An error occurred when submitting. Please try again later.';
+});
+</script>
+</body></html>

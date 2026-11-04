@@ -53,23 +53,32 @@ const __cbVis = (el) => {
   if (!el || !el.getBoundingClientRect) return false;
   const s = getComputedStyle(el);
   if (s.display === 'none' || s.visibility === 'hidden' || parseFloat(s.opacity || '1') < 0.05) return false;
-  const r = el.getBoundingClientRect();
-  if (r.width < 2 || r.height < 2) return false;
+  let r = el.getBoundingClientRect();
+  if (r.width < 2 || r.height < 2) {
+    // An inline link wrapped round a block ("<a><div class=button>TAP TO ENTER</div></a>") has an empty box of its
+    // own: what you see and click is the child.
+    const kid = Array.from(el.children || []).find(c => { const cr = c.getBoundingClientRect(); return cr.width >= 2 && cr.height >= 2; });
+    if (!kid || s.display !== 'inline') return false;
+    r = kid.getBoundingClientRect();
+  }
   if (r.right + window.scrollX < 0 || r.bottom + window.scrollY < 0) return false;
-  let clip = s.position !== 'fixed';
+  let clipX = s.position !== 'fixed', clipY = clipX;
   let p = el.parentElement;
   while (p && p !== document.body) {
     const ps = getComputedStyle(p);
     if (ps.display === 'none' || ps.visibility === 'hidden' || parseFloat(ps.opacity || '1') < 0.05) return false;
-    if (clip) {
+    if (clipX || clipY) {
       // Cut off by an overflow:hidden box, e.g. the other slides of a carousel quiz (or a collapsed panel).
-      const cx = /hidden|clip/.test(ps.overflowX), cy = /hidden|clip/.test(ps.overflowY);
+      const cx = clipX && /hidden|clip/.test(ps.overflowX), cy = clipY && /hidden|clip/.test(ps.overflowY);
       if (cx || cy) {
         const pr = p.getBoundingClientRect();
         if (cx && (r.right <= pr.left + 1 || r.left >= pr.right - 1)) return false;
         if (cy && (r.bottom <= pr.top + 1 || r.top >= pr.bottom - 1)) return false;
       }
-      if (ps.position === 'fixed') clip = false;
+      if (ps.position === 'fixed') clipX = clipY = false;
+      // Inside a panel you scroll down (a Microsoft Forms card): what's below its fold is reached by scrolling, not
+      // hidden. Sideways scrolling isn't let off: that's how carousels keep their other slides out of view.
+      if (/auto|scroll/.test(ps.overflowY) && p.scrollHeight > p.clientHeight + 4) clipY = false;
     }
     p = p.parentElement;
   }
@@ -111,6 +120,7 @@ JS_EXTRACT = "(prefix) => {\n" + JS_HELPERS + r"""
   };
   const ctxText = (el) => { let n = el.parentElement; for (let i = 0; i < 4 && n; i++) { const t = txt(n); if (t.length > 40) return t.slice(0, 400); n = n.parentElement; } return ''; };
   const isReq = (el, label) => el.required || el.getAttribute('aria-required') === 'true' || /\*\s*$|\(required\)/i.test(label || '');
+  const CHROME = 'header, nav, footer, [role=banner], [role=navigation], [role=contentinfo], [role=search], #footer, .footer, [id*=site-footer i], [class*=site-footer i], [class*=page-footer i], [id*=page-footer i]';
   const choiceVis = (el) => vis(el) || (el.labels && Array.from(el.labels).some(vis)) || vis(el.closest('label')) || vis(el.parentElement);
   let counter = 0;
   const all = __cbAll(document, '[data-cb-idx]').map(e => e.getAttribute('data-cb-idx'));
@@ -123,6 +133,8 @@ JS_EXTRACT = "(prefix) => {\n" + JS_HELPERS + r"""
     const fields = [], groups = {};
     for (const el of __cbAll(root, 'input, select, textarea')) {
       if (root === document.body && el.form) continue;
+      // Without a <form> to go by, the site's header search box and footer newsletter aren't part of the entry.
+      if (root === document.body && __cbClosest(el, CHROME)) continue;
       const type = (el.tagName === 'INPUT' ? (el.getAttribute('type') || 'text') : el.tagName).toLowerCase();
       if (['hidden', 'submit', 'button', 'image', 'reset'].includes(type)) continue;
       if (el.disabled || el.readOnly) continue;
@@ -136,7 +148,7 @@ JS_EXTRACT = "(prefix) => {\n" + JS_HELPERS + r"""
         if (!groups[key]) {
           let gl = '';
           const rg = el.closest('[role=radiogroup]');
-          if (rg) { gl = rg.getAttribute('aria-label') || ''; const lb = rg.getAttribute('aria-labelledby'); if (!gl && lb) gl = txt(__cbById(rg, lb)); }
+          if (rg) { gl = rg.getAttribute('aria-label') || ''; const lb = rg.getAttribute('aria-labelledby'); if (!gl && lb) gl = lb.split(/\s+/).map(id => txt(__cbById(rg, id))).join(' ').trim(); }
           if (!gl) {
             // The smallest container holding just this group: use its own question label, not an option label.
             const isOptionLabel = l => l.querySelector('input') || (l.htmlFor && (__cbById(l, l.htmlFor) || {}).type === 'radio') || (l.closest('label') && l.closest('label').querySelector('input[type=radio]'));
@@ -206,6 +218,45 @@ JS_EXTRACT = "(prefix) => {\n" + JS_HELPERS + r"""
       if (el.tagName === 'SELECT') f.options = Array.from(el.options).map(o => ({value: o.value, text: (o.text || '').trim()}));
       fields.push(f);
     }
+    // ARIA choice widgets aren't <input>s: Google Forms draws its tick boxes and radio buttons as
+    // div[role=checkbox] / div[role=radio] under the question's [role=heading].
+    const ariaGroups = new Map();
+    for (const el of __cbAll(root, '[role=radio], [role=checkbox]')) {
+      if (el.matches('input') || el.querySelector('input:not([type=hidden])')) continue;
+      const lab = el.closest('label');
+      if (lab && lab.querySelector('input:not([type=hidden])')) continue;  // a styled stand-in for a real <input> already read above
+      if (root === document.body && (el.closest('form') || __cbClosest(el, CHROME))) continue;
+      if (el.getAttribute('aria-disabled') === 'true' || !vis(el)) continue;
+      const box = el.closest('[role=radiogroup], [role=group], [role=list], fieldset') || el.parentElement;
+      if (!ariaGroups.has(box)) ariaGroups.set(box, []);
+      ariaGroups.get(box).push(el);
+    }
+    const markIdx = o => { let i = o.getAttribute('data-cb-idx'); if (!i) { i = prefix + (counter++); o.setAttribute('data-cb-idx', i); } return i; };
+    for (const [box, els] of ariaGroups) {
+      const item = box.closest('[role=listitem]') || box.parentElement;
+      let q = '';
+      const lb = box.getAttribute('aria-labelledby');
+      if (lb) q = lb.split(/\s+/).map(id => txt(__cbById(box, id))).join(' ').trim();
+      if (!q) q = (box.getAttribute('aria-label') || '').trim();
+      if (!q && item) { const h = item.querySelector('[role=heading], legend, h1, h2, h3, h4, h5'); if (h) q = txt(h); }
+      if (!q) { const prev = box.previousElementSibling; if (prev && txt(prev).length < 300) q = txt(prev); }
+      const req = /\*\s*$/.test(q) || box.getAttribute('aria-required') === 'true' || !!(item && item.querySelector('[aria-label*="required" i]'));
+      const optText = o => (o.getAttribute('aria-label') || o.getAttribute('data-value') || txt(o) || '').trim();
+      const isOn = o => o.getAttribute('aria-checked') === 'true';
+      if (els.length === 1 && els[0].getAttribute('role') === 'checkbox') {
+        const o = els[0], ot = optText(o);
+        fields.push({idx: markIdx(o), tag: 'input', type: 'checkbox', name: '', id: o.id || '',
+          label: (ot + (q && !ot.includes(q) ? ' - ' + q : '')).slice(0, 300), placeholder: '', autocomplete: '',
+          aria: o.getAttribute('aria-label') || '', required: req, options: [], context: q.slice(0, 300), maxlength: null,
+          checked: isOn(o)});
+        continue;
+      }
+      const g = {idx: markIdx(els[0]), tag: 'radio', type: 'radio', name: '', id: box.id || '', label: q.slice(0, 300),
+        placeholder: '', autocomplete: '', aria: '', required: req, options: [], context: q.slice(0, 300), maxlength: null,
+        checked: els.some(isOn)};
+      for (const o of els) g.options.push({value: optText(o), text: optText(o), idx: markIdx(o)});
+      fields.push(g);
+    }
     const btns = __cbAll(root, 'button, input[type=submit], input[type=image], input[type=button], [role=button], a.button, a.btn, a[class*=button i], a[class*=btn i], a[class*=cta i]').filter(vis);
     let formId = '';
     if (root !== document.body) {
@@ -227,9 +278,15 @@ JS_EXTRACT = "(prefix) => {\n" + JS_HELPERS + r"""
       }
     }
     const meta = (root === document.body) ? '' : ((root.id || '') + ' ' + (typeof root.className === 'string' ? root.className : '') + ' ' + (root.getAttribute('action') || '')).toLowerCase();
+    // A pop-up layer: a dialog, or anything fixed in place on top of the page (Klaviyo/Shopify sign-up pop-ups).
+    let inPopup = false;
+    if (root !== document.body) {
+      inPopup = !!__cbClosest(root, '[role=dialog], [aria-modal=true], dialog, [class*=popup i], [class*=modal i]');
+      for (let n = root; n && n !== document.body && !inPopup; n = n.parentElement) if (getComputedStyle(n).position === 'fixed') inPopup = true;
+    }
     out.push({isForm: root.tagName === 'FORM', formId, fields, hasPassword: !!root.querySelector('input[type=password]'),
       submitTexts: btns.map(b => (txt(b) || b.value || b.getAttribute('aria-label') || '').slice(0, 60)),
-      text: txt(root).slice(0, 1500), heading, meta,
+      text: txt(root).slice(0, 1500), heading, meta, inPopup,
       inFooter: root !== document.body && !!__cbClosest(root, 'footer, [role=contentinfo], #footer, .footer, [id*=site-footer i], [class*=site-footer i], [class*=page-footer i], [id*=page-footer i]')});
   }
   return out;
@@ -240,26 +297,49 @@ JS_MARK_SUBMIT = "(idx) => {\n" + JS_HELPERS + r"""
   const vis = __cbVis, txt = __cbTxt;
   __cbAll(document, '[data-cb-submit]').forEach(e => e.removeAttribute('data-cb-submit'));
   const el = __cbOne(`[data-cb-idx="${idx}"]`);
-  let root = el && el.form ? el.form : null;
-  if (!root && el) { let n = el.parentElement; while (n && !n.querySelector('button, input[type=submit], input[type=button], [role=button]')) n = n.parentElement; root = n; }
-  if (!root) root = document.body;
   const good = /^(enter|submit|send|sign ?up|subscribe|register|join|go|count me in|take part|enter now|enter competition|enter the (competition|draw|prize draw)|submit entry|enter draw|i'?m in|done|continue|next|confirm|win|enter to win|let'?s go|play|ok)\b/i;
   const bad = /cancel|reset|back|close|log ?in|sign ?in|search|menu|cookie|accept all|reject|share|facebook|twitter|instagram|print|basket|cart/i;
-  let best = null, bestScore = -99;
-  // Link-style buttons count too, e.g. Wayin/Cheetah forms' <a class="xCTA xButton">Submit</a> (Future plc comps).
-  for (const b of root.querySelectorAll('button, input[type=submit], input[type=image], input[type=button], [role=button], a.button, a.btn, a[class*=button i], a[class*=btn i], a[class*=cta i]')) {
-    if (!vis(b)) continue;
+  // Link-style buttons count too, e.g. Wayin/Cheetah forms' <a class="xCTA xButton">Submit</a> (Future plc comps), and
+  // script-driven <div>s, e.g. Doctor Who Magazine's <div class="mrmButton" onclick=...>SUBMIT</div>.
+  const SEL = 'button, input[type=submit], input[type=image], input[type=button], [role=button], a.button, a.btn, a[class*=button i], a[class*=btn i], a[class*=cta i], div[onclick], span[onclick], div[class*=button i], div[class*=btn i], div[class*=submit i], span[class*=button i]';
+  const form = el ? (el.form || el.closest('form')) : null;
+  // Another form's button: one whose own form has fields of its own and not ours (the footer newsletter, say).
+  const otherForm = b => {
+    const f = b.form || b.closest('form');
+    if (!f || !el || f === form || f.contains(el)) return false;
+    return Array.from(f.querySelectorAll('input:not([type=hidden]), textarea, select')).some(vis);
+  };
+  const after = b => !!(el && (el.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING));
+  const score = b => {
+    if (!vis(b) || otherForm(b)) return -99;
     const t = (txt(b) || b.value || b.getAttribute('aria-label') || '').trim();
+    const plain = b.tagName === 'DIV' || b.tagName === 'SPAN';
+    if (plain && (t.length > 30 || b.querySelector('input, select, textarea, button, a'))) return -99;
     const type = (b.getAttribute('type') || '').toLowerCase();
     let s = 0;
-    if (type === 'submit' || (b.tagName === 'INPUT' && type !== 'button')) s += 3;
+    // A <button> with no type inside a form submits it.
+    if (type === 'submit' || (b.tagName === 'INPUT' && type !== 'button') || (b.tagName === 'BUTTON' && !type && b.closest('form'))) s += 3;
     else if (b.tagName === 'INPUT') s += 1;  // <input type="button" value="Next">, e.g. Dotdigital's paged forms
     if (good.test(t)) s += 4;
     if (bad.test(t)) s -= 6;
-    if (b.tagName === 'A') s -= 1;
-    if (s > bestScore) { best = b; bestScore = s; }
+    if (b.tagName === 'A' || plain) s -= 1;
+    if (after(b)) s += 1;  // a form's button comes after its fields
+    return s;
+  };
+  // The field's own form first, then wider and wider boxes around the field until a likely submit button turns up
+  // (Great British Chefs has no <form>; Riddle puts "Submit and continue" in a <form> of its own).
+  const roots = [];
+  if (form) roots.push(form);
+  for (let n = el && el.parentElement, i = 0; n && i < 12; n = n.parentElement, i++) if (!roots.includes(n)) roots.push(n);
+  if (!roots.length) roots.push(document.body);
+  let best = null, bestScore = -99;
+  for (const root of roots) {
+    let rb = null, rs = -99;
+    for (const b of __cbAll(root, SEL)) { const s = score(b); if (s > rs) { rb = b; rs = s; } }
+    if (rb && (rs >= 5 || (root === form && rs >= 0))) { best = rb; bestScore = rs; break; }
+    if (rs > bestScore) { best = rb; bestScore = rs; }
   }
-  if (!best || bestScore < 0) return null;
+  if (!best || bestScore < (best && form && form.contains(best) ? 0 : 2)) return null;
   best.setAttribute('data-cb-submit', '1');
   return (txt(best) || best.value || 'submit').slice(0, 60);
 }
@@ -268,6 +348,10 @@ JS_MARK_SUBMIT = "(idx) => {\n" + JS_HELPERS + r"""
 JS_SET_CHECKED = "([idx, want]) => {\n" + JS_HELPERS + r"""
   const el = __cbOne(`[data-cb-idx="${idx}"]`);
   if (!el) return false;
+  if (el.tagName !== 'INPUT' && el.hasAttribute('role')) {  // ARIA tick box / radio (Google Forms): click until it agrees
+    if ((el.getAttribute('aria-checked') === 'true') !== want) el.click();
+    return (el.getAttribute('aria-checked') === 'true') === want;
+  }
   if (el.checked !== want) { const l = el.labels && el.labels[0]; (l || el).click(); }
   if (el.checked !== want && el.type === 'checkbox') { el.click(); }
   if (el.checked !== want) {
@@ -291,13 +375,16 @@ JS_VALIDITY = "(idx) => {\n" + JS_HELPERS + r"""
 }
 """
 
-JS_COOKIES = "() => {\n" + JS_HELPERS + r"""
+JS_COOKIES = "(acceptMode) => {\n" + JS_HELPERS + r"""
   const vis = __cbVis;
-  const ids = ['onetrust-reject-all-handler', 'onetrust-accept-btn-handler', 'CybotCookiebotDialogBodyButtonDecline',
-    'CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll', 'didomi-notice-disagree-button', 'didomi-notice-agree-button',
-    'truste-consent-required', 'truste-consent-button', 'cookie-reject', 'cookie-accept'];
+  // Normally compbot refuses cookies. acceptMode is the second try on a page that showed no entry form after a refusal
+  // (some sites only load their competition embed once you accept).
+  const rejectIds = ['onetrust-reject-all-handler', 'CybotCookiebotDialogBodyButtonDecline', 'didomi-notice-disagree-button',
+    'truste-consent-required', 'cookie-reject'];
+  const acceptIds = ['onetrust-accept-btn-handler', 'CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll',
+    'didomi-notice-agree-button', 'truste-consent-button', 'cookie-accept'];
   const mark = b => { document.querySelectorAll('[data-cb-cookie]').forEach(e => e.removeAttribute('data-cb-cookie')); b.setAttribute('data-cb-cookie', '1'); };
-  for (const id of ids) { const b = document.getElementById(id); if (b && vis(b)) { mark(b); return id; } }
+  for (const id of (acceptMode ? acceptIds : rejectIds.concat(acceptIds))) { const b = document.getElementById(id); if (b && vis(b)) { mark(b); return id; } }
   const reject = /^(reject all|reject|reject all cookies|decline|decline all|necessary only|only necessary|essential only|use necessary cookies only|refuse all|deny|disagree|do not consent|continue without accepting)$/i;
   const accept = /^(accept all|accept|accept all cookies|accept cookies|i accept|agree|i agree|allow all|allow all cookies|allow cookies|got it|ok|okay|agree and close|accept & close|accept and close|yes,? i'?m happy|i understand|understood|ok,? got it|that'?s fine|accept (and|&) continue|accept all (and|&) continue|agree (and|&) continue|consent)$/i;
   const banner = '[id*=cookie i],[class*=cookie i],[id*=consent i],[class*=consent i],[id*=gdpr i],[class*=gdpr i],[class*=cmp i],[id*=cmp i],[aria-label*=cookie i],[aria-label*=consent i],[id*=privacy i],[class*=privacy i],[role=dialog],[aria-modal=true]';
@@ -306,11 +393,32 @@ JS_COOKIES = "() => {\n" + JS_HELPERS + r"""
   // Never press a button belonging to a real form (one with text/email fields): that could submit an entry.
   const inEntryForm = b => { const f = b.closest('form'); return !!(f && f.querySelector('input[type=text],input[type=email],input:not([type]),textarea')); };
   const btns = Array.from(document.querySelectorAll('button, [role=button], a, input[type=button]')).filter(b => vis(b) && !inEntryForm(b));
-  for (const re of [reject, accept]) {
+  for (const re of (acceptMode ? [accept] : [reject, accept])) {
     for (const b of btns) {
       const t = (b.innerText || b.value || '').replace(/\s+/g, ' ').trim();
       if (re.test(t) && (framey || b.closest(banner))) { mark(b); return t; }
     }
+  }
+  return null;
+}
+"""
+
+# "Are you over 18?" pop-ups (drinks brands) that sit on top of the page and its entry form.
+JS_AGE_GATE = "() => {\n" + JS_HELPERS + r"""
+  const vis = __cbVis, txt = __cbTxt;
+  const ask = /\b(are you (over|aged?) (18|eighteen)|over (18|eighteen)\s*\?|of legal (drinking|purchase|purchasing) age|verify (your|that you are of legal) age|confirm (that )?you are (over|at least|aged?) (18|eighteen)|age verification)\b/i;
+  const yes = /^(yes|yes,? i am|yes,? i'?m over (18|eighteen)|i am( over)? (18|eighteen)( or over)?|i'?m over (18|eighteen)|over (18|eighteen)|i am of legal (drinking )?age|enter|enter site|enter the site|confirm|i confirm)!?$/i;
+  for (const box of document.querySelectorAll('[role=dialog], [aria-modal=true], dialog, [class*=age i], [id*=age i], [class*=modal i], [class*=popup i], [class*=overlay i]')) {
+    if (!vis(box)) continue;
+    const t = txt(box);
+    if (t.length > 900 || !ask.test(t)) continue;
+    // An entry form that asks "Are you over 18?" as one of its questions isn't an age gate: its "Enter" button
+    // would send the entry (in a dry run too). Only a box with nothing to fill in counts.
+    if (Array.from(box.querySelectorAll('input:not([type=hidden]):not([type=checkbox]):not([type=radio]), textarea, select')).some(vis)) continue;
+    const inEntryForm = b => { const f = b.closest('form'); return !!(f && Array.from(f.querySelectorAll('input:not([type=hidden]), textarea, select')).some(vis)); };
+    const b = Array.from(box.querySelectorAll('button, a, [role=button], input[type=button]')).find(x =>
+      vis(x) && (x.getAttribute('type') || '').toLowerCase() !== 'submit' && !inEntryForm(x) && yes.test(txt(x) || x.value || ''));
+    if (b) { document.querySelectorAll('[data-cb-cookie]').forEach(e => e.removeAttribute('data-cb-cookie')); b.setAttribute('data-cb-cookie', '1'); return txt(b) || b.value; }
   }
   return null;
 }
@@ -359,13 +467,18 @@ JS_TERMS_LINKS = r"""
   .map(a => a.href).filter(h => /^https?:/i.test(h)).slice(0, 3)
 """
 
-JS_REVEAL = "(dryRun) => {\n" + JS_HELPERS + r"""
+JS_REVEAL = "([dryRun, linksOnly]) => {\n" + JS_HELPERS + r"""
   const vis = __cbVis;
   const txt = el => __cbTxt(el).replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}\u{200D}]/gu, '').replace(/\s+/g, ' ').trim();
   // Buttons that only open the entry form or quiz: safe to press even in a dry run.
   const safe = /^((let'?s )?(start|begin|take|do|play|try)( the| our| this| a)?( quiz| game| competition| challenge| test)?( now| here)?|get started|let'?s (go|start|play)|show (the )?(form|questions?)|reveal (the )?(form|question)|continue)!?$/i;
   // Buttons that might themselves submit an entry: only pressed for real entries.
-  const enter = /^(enter( now| here| (the |this |our )?(competition|comp|giveaway|prize draw|draw|quiz)| to win| now for free)?|click (here )?to enter|take part|enter (&|and) win|i want to win|join (in|now)|(join|sign ?up|subscribe|register|opt in)( now)? to enter|count me in)!?$/i;
+  const enter = /^(enter( now| here| (the |this |our )?(competition|comp|giveaway|prize draw|draw|quiz|reader treat)( here| now)?| to win| now for free)?|(click|tap) (here )?to enter( the (competition|comp|giveaway|prize draw|draw))?( now| here)?|click here to enter now|take part|enter (&|and) win|i want to win|join (in|now)|(join|sign ?up|subscribe|register|opt in)( now)? to enter|count me in|(submit|send) your entry)!?$/i;
+  // "For your chance to win, click HERE and complete the online form": the word "here" is the link to the entry form.
+  const hereWord = /^(click )?here!?$/i;
+  const hereSentence = /\b(enter|entry|entries|form|chance to win|to win)\b/i;
+  const notEntry = /\b(terms|t ?& ?c'?s?|t'?s ?(&|and) ?c'?s|conditions|rules|privacy|cookies?|unsubscribe|newsletter|subscribe|winners?|results?|previous|book now|tickets? (from|at)|order)\b/i;
+  const notEntryPath = /\/(terms|t-?and-?c|tandc|privacy|cookie|rules|winners?)\b/i;
   // A start button greyed out until "I've read the rules" is ticked: that box is the gate.
   const gateRe = /\b(read|understood?|accept|agree|ready|rules|terms|t'?s? ?(&|and) ?c'?s|conditions|over (the age of )?18|18 or over|aged 18)\b/i;
   const notGate = /marketing|newsletter|offers|partners|third|e-?mail me|contact me|keep me (updated|informed)|updates|news\b/i;
@@ -393,13 +506,25 @@ JS_REVEAL = "(dryRun) => {\n" + JS_HELPERS + r"""
     const t = (txt(b) || b.value || '').trim();
     const isLink = b.tagName === 'A' && /^https?:/i.test(b.href || '');
     const offsite = isLink && new URL(b.href, location.href).host !== location.host;
-    const isSafe = safe.test(t), isEnter = enter.test(t);
-    if (!isSafe && !isEnter) continue;
+    const samePage = isLink && new URL(b.href, location.href).href.split('#')[0] === location.href.split('#')[0];
+    let isSafe = safe.test(t), isEnter = enter.test(t), isHere = false;
+    if (!isSafe && !isEnter && isLink && !samePage && hereWord.test(t)) {
+      const box = b.closest('p, li, td, h2, h3, h4, h5, div') || b.parentElement;
+      const whole = box ? txt(box) : '';
+      const sentence = whole.split(/(?<=[.!?])\s+/).find(s => s.includes(t)) || whole;
+      let path = '';
+      try { path = new URL(b.href, location.href).pathname; } catch (e) {}
+      isHere = sentence.length <= 320 && hereSentence.test(sentence) && !notEntry.test(sentence) && !notEntryPath.test(path);
+    }
+    if (!isSafe && !isEnter && !isHere) continue;
+    // Links-only: when the page's only form is a newsletter sign-up, look for a link to the real entry form elsewhere.
+    if (linksOnly && (!isLink || samePage || isSafe && !isEnter)) continue;
     if (isEnter && !isSafe && dryRun && !isLink) continue;
     let gate = null;
     if (isDisabled(b)) { gate = findGate(b); if (!gate) continue; }
     let s = 0;
     if (/quiz|competition|draw|giveaway|enter/i.test(t)) s += 6;
+    if (isHere) s += 4;
     if (/^(play|play now|start|begin|try)!?$/i.test(t)) s -= 4;          // generic: could be a game or video
     if (/^continue$/i.test(t)) s -= 3;                                    // e.g. a form's welcome screen
     if (offsite && /^(play|start|begin|try|take)/i.test(t)) s -= 8;       // e.g. a fantasy-game promo
@@ -418,7 +543,7 @@ JS_REVEAL = "(dryRun) => {\n" + JS_HELPERS + r"""
     const lab = (bestGate.labels && bestGate.labels[0]) || bestGate.closest('label');
     gateLabel = (txt(lab) || txt(bestGate.parentElement)).slice(0, 120);
   }
-  return {label: (txt(best) || best.value || '').trim(), gate: gateLabel};
+  return {label: (txt(best) || best.value || '').trim(), gate: gateLabel, href: best.tagName === 'A' ? (best.href || '') : ''};
 }
 """
 
@@ -668,14 +793,22 @@ SUCCESS_RE = re.compile(
     r"submitted|confirmed|successful|complete)|you(?:'re| are| have been) (?:now )?(?:entered|in the (?:prize )?draw|"
     r"successfully|subscribed|on the list)|successfully (?:entered|submitted|subscribed|registered|signed up)|good luck|"
     r"check your (?:e-?mail|inbox)|we(?:'ve| have) (?:received|got) your|confirmation e-?mail|you(?:'re| are) in\b|"
-    r"almost there|nearly there|almost finished|please confirm your|thanks for signing up|thank you for subscribing|"
+    r"almost there|nearly there|almost finished|please confirm your (?:e-?mail|subscription|sign[- ]?up|entry|address)|"
+    r"thanks for signing up|thank you for subscribing|"
     r"welcome to the (?:club|list|family|community)|subscription (?:is )?confirmed|thank you!?$|"
+    # Muddy Stilettos: "Huzzah, you have now entered!"; Leeds List: "Your form has been successfully received";
+    # Google Forms: "Your response has been recorded".
+    r"you(?:'ve| have) (?:now |successfully |been ){1,3}entered|(?:your|the) (?:form|entry|submission|response|answers?|"
+    r"details) (?:has |have |was |were |is )?(?:been )?(?:successfully )?(?:received|recorded|submitted|sent)|"
     # Referral widgets (Viral Loops, Gleam...) swap the form for "share your link for more entries" once you're in.
     r"share (?:your|this) (?:unique |personal |referral )*link|(?:earn|get|unlock) (?:more|extra|bonus) entries",
     re.I | re.M)
 ALREADY_RE = re.compile(
     r"already (?:been )?entered|already (?:subscribed|registered|signed up|a subscriber)|only (?:one|1) entry|you "
-    r"have already|duplicate entry|already taken part|already on (?:our|the) list", re.I)
+    r"have already|duplicate entry|already taken part|already on (?:our|the) list|"
+    # Fife (its server's reply): "This email has already been used to enter this competition."
+    r"already been used to enter|(?:e-?mail|address|entry) (?:address )?(?:has )?already been (?:used|entered|submitted)",
+    re.I)
 ERROR_RE = re.compile(
     r"(?:is|are) required|this field is required|please (?:enter|fill|complete|select|check|provide|tick|accept|answer)|"
     r"\binvalid\b|not (?:a )?valid|something went wrong|please try again|must (?:be|accept|agree)|error", re.I)
@@ -685,6 +818,25 @@ CLOSED_RE = re.compile(
     r"(?:competition|promotion|prize draw|giveaway|this comp\w*) (?:is |has )?(?:now )?(?:closed|ended|finished)|"
     r"no longer (?:accepting|open|available)|entries (?:are|have) (?:now )?closed|has now closed|this competition "
     r"has expired", re.I)
+# The entry form is only for signed-in members (Living North, The Lady, Delia): nothing to fill in until you sign in.
+LOGIN_WALL_RE = re.compile(
+    r"you (?:need|have|must) (?:to )?(?:be )?(?:log(?:ged)? ?in|sign(?:ed)? ?in)|"
+    r"(?:log ?in|sign ?in|logged in|signed in)\b[^.\n]{0,60}?\bto (?:enter|view (?:the|this) (?:form|"
+    r"competition|question)|see (?:the|this) (?:form|question|competition)|take part|access (?:the|this) (?:form|"
+    r"competition))", re.I)
+# The site's own bot check turned the entry down after it was sent (seen in its message or its server's reply).
+CAPTCHA_REFUSAL_RE = re.compile(
+    r"unable to verify (?:the )?re-?captcha|re-?captcha v?\d? ?(?:test|check|verification) failed|verify that you are "
+    r"not a robot|failed to validate (?:the )?captcha|not a valid captcha|captcha (?:verification|validation|check) "
+    r"failed|could not verify your entry|invalid captcha", re.I)
+BOT_REFUSAL_RE = re.compile(r"seem(?:s)? like spam|flagged as spam|marked as spam|spam (?:filter|protection|check)", re.I)
+# A pressed button still saying it's working ("Sending...", "Entering..."): give the site longer.
+BUSY_RE = re.compile(r"^(?:sending|submitting|entering|loading|processing|please wait|working|saving|solving captcha|"
+                     r"verifying|checking)\b|(?:\.\.\.|\u2026)$", re.I)
+# A submit button held back by a bot check that's still "working" (SheerLuxe's Turnstile: "Solving captcha...").
+CAPTCHA_BUSY_RE = re.compile(r"captcha|verifying|checking (?:you|your browser)|are you (?:a )?human|robot", re.I)
+CAPTCHA_BUTTON_WAIT_S = 15  # how long a button held by a bot check gets to come free
+BUSY_WAIT_S = 20            # how long a "Sending..." button gets after the usual wait
 
 MAX_FORM_PAGES = 8  # multi-page forms and quizzes (one question per page)
 
@@ -848,12 +1000,13 @@ def _click_marked(frame, attr: str = "data-cb-cookie") -> bool:
         return bool(_safe_eval(frame, JS_CLICK_SEL, f'[{attr}="1"]', default=False))
 
 
-def dismiss_cookies(page) -> list[str]:
+def dismiss_cookies(page, accept: bool = False) -> list[str]:
+    """Answer cookie banners: refuse where the banner lets you (accept=True on the second try, see enter())."""
     clicked = []
     for _ in range(2):
         found = False
         for fr in _all_frames(page):
-            r = _safe_eval(fr, JS_COOKIES)
+            r = _safe_eval(fr, JS_COOKIES, accept)
             if r and _click_marked(fr):
                 clicked.append(str(r))
                 found = True
@@ -864,12 +1017,69 @@ def dismiss_cookies(page) -> list[str]:
     return clicked
 
 
+REJECTED_COOKIES_RE = re.compile(r"reject|decline|necessary|essential|refuse|deny|disagree|do not consent|without accept",
+                                 re.I)
+
+
+def _age_ok(ctx: Ctx | None) -> bool:
+    """Whether to say yes to "Are you over 18?": always, unless the profile's date of birth says otherwise."""
+    from datetime import date
+
+    try:
+        dob = date.fromisoformat(str((ctx.profile if ctx else {}).get("dob") or "").strip())
+    except ValueError:
+        return True
+    today = date.today()
+    return (today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))) >= 18
+
+
+def answer_age_gate(page, ctx: Ctx | None) -> str | None:
+    """Answer an "Are you over 18?" pop-up covering the page, as you would."""
+    if not _age_ok(ctx):
+        return None
+    for fr in _all_frames(page):
+        label = _safe_eval(fr, JS_AGE_GATE)
+        if label and _click_marked(fr):
+            _pause(page, 1.0)
+            return str(label)
+    return None
+
+
+# Challenge frames, checked from outside the page too: Cloudflare Turnstile draws its frame inside a *closed* shadow
+# root, which no page script can see into (Meribel).
+CHALLENGE_FRAME_RE = [
+    (re.compile(r"challenges\.cloudflare\.com/.*turnstile|challenges\.cloudflare\.com/cdn-cgi/challenge-platform/.*/"
+                r"(?:turnstile|managed)", re.I), "Cloudflare Turnstile"),
+    (re.compile(r"hcaptcha\.com/.*(?:frame=challenge|frame=checkbox)", re.I), "hCaptcha"),
+    (re.compile(r"recaptcha/(?:api2|enterprise)/bframe", re.I), "reCAPTCHA challenge"),
+    (re.compile(r"recaptcha/(?:api2|enterprise)/anchor(?!.*size=invisible)", re.I), "reCAPTCHA checkbox"),
+]
+
+
+def _challenge_frame(page) -> str | None:
+    for fr in page.frames:
+        try:
+            url = fr.url or ""
+            label = next((lab for rx, lab in CHALLENGE_FRAME_RE if rx.search(url)), None)
+            if not label or fr.is_detached():
+                continue
+            el = fr.frame_element()
+            box = el.bounding_box()
+            # reCAPTCHA parks its challenge frame off-page and hidden until it's needed (invisible reCAPTCHA).
+            if box and box["width"] >= 30 and box["height"] >= 30 and box["y"] + box["height"] > 0 and \
+                    box["x"] + box["width"] > 0 and el.is_visible():
+                return label
+        except Exception:  # noqa: BLE001
+            continue
+    return None
+
+
 def detect_captcha(page) -> str | None:
     for fr in _all_frames(page):
         r = _safe_eval(fr, JS_CAPTCHA)
         if r:
             return r
-    return None
+    return _challenge_frame(page)
 
 
 ENTRY_HEADING_RE = re.compile(
@@ -912,6 +1122,8 @@ def _score_container(c: dict, ctx: Ctx | None = None) -> float:
     if c.get("inFooter"):
         # For newsletter competitions the footer sign-up is often the entry itself.
         s -= 2 if (ctx and ctx.is_newsletter and newsletterish) else 6
+    if c.get("inPopup") and newsletterish and not (ctx and ctx.is_newsletter):
+        s -= 4  # a "Sign up for early access" pop-up (Turtle Mat's Klaviyo) isn't the competition
     if CONSENT_FORM_RE.search(c.get("meta", "") + " " + c.get("heading", "")) or CONSENT_TEXT_RE.match(
             c.get("text", "")[:200]):
         s -= 50  # cookie / privacy-preference dialogs are never the entry form
@@ -933,6 +1145,50 @@ def find_best_form(page, ctx: Ctx | None = None, gen: int = 0) -> tuple[object, 
             if best is None or sc > best[2]:
                 best = (fr, c, sc)
     return best
+
+
+def _newsletter_only(c: dict, ctx: Ctx | None) -> bool:
+    """A newsletter sign-up that doesn't say it's the competition entry (for a non-newsletter comp)."""
+    if ctx and ctx.is_newsletter:
+        return False
+    head = c.get("heading", "") + " " + c.get("text", "")[:400]
+    return bool(NEWSLETTER_RE.search(c.get("meta", "") + " " + head)) and not ENTRY_HEADING_RE.search(head) and not (
+        ctx and ctx.answers and any(re.search(r"answer|question|\?\s*\*?$", f.get("label", ""), re.I)
+                                    for f in c.get("fields", [])))
+
+
+WIDGET_FRAME_RE = re.compile(
+    r"^https?://(?:[a-z0-9-]+\.)*(gleam\.io|rafflecopter\.com|woobox\.com|viralsweep\.com|kingsumo\.com|sweepwidget\.com|"
+    r"upviral\.com|wishpond\.com|shortstack\.(?:com|page)|promosimple\.com|vyper\.io|easypromosapp\.com|"
+    r"giveawaytools\.com)/", re.I)
+JS_WIDGET_LINKS = r"""() => Array.from(document.querySelectorAll('iframe[src], a.e-widget[href], a[href*="gleam.io/"][class*=widget i]'))
+  .map(e => e.src || e.href || '').filter(Boolean).slice(0, 20)"""
+WIDGET_NAMES = {"gleam.io": "Gleam", "rafflecopter.com": "Rafflecopter", "woobox.com": "Woobox",
+                "viralsweep.com": "ViralSweep", "kingsumo.com": "KingSumo", "sweepwidget.com": "SweepWidget",
+                "upviral.com": "UpViral", "wishpond.com": "Wishpond", "shortstack.com": "ShortStack",
+                "shortstack.page": "ShortStack", "promosimple.com": "PromoSimple", "vyper.io": "Vyper",
+                "easypromosapp.com": "Easypromos", "giveawaytools.com": "Giveaway Tools"}
+JS_CLEAR_STORAGE = "() => { try { localStorage.clear(); sessionStorage.clear(); } catch (e) {} return true; }"
+
+
+def _sentence_at(text: str, start: int, end: int) -> str:
+    """The sentence (or line) around a match, for quoting in a result."""
+    a = max(text.rfind(".", 0, start), text.rfind("\n", 0, start)) + 1
+    ends = [i for i in (text.find(".", end), text.find("\n", end)) if i != -1]
+    b = min(ends) + 1 if ends else len(text)
+    return " ".join(text[a:b].split())[:160]
+
+
+def _widget_host(page) -> str | None:
+    """The giveaway widget (Gleam, Rafflecopter...) a page's entry lives in: you sign in on the widget to enter."""
+    urls = [fr.url for fr in page.frames if fr.url]
+    for fr in _all_frames(page):
+        urls += _safe_eval(fr, JS_WIDGET_LINKS, default=[]) or []
+    for u in urls:
+        m = WIDGET_FRAME_RE.match(u or "")
+        if m:
+            return m.group(1).lower()
+    return None
 
 
 def _refresh_container(frame, done_idx: set[str], prefix: str) -> dict | None:
@@ -1086,16 +1342,49 @@ def _required_fixes(container: dict) -> list[tuple[Field, Action]]:
     return fixes
 
 
+def _button_label(loc) -> str:
+    try:
+        return (loc.inner_text(timeout=1500) or loc.get_attribute("value", timeout=1500) or "").strip()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _await_enabled(page, loc) -> str | None:
+    """None once the marked submit button can be pressed. A button held back by a bot check that's still working
+    ("Solving captcha...") gets CAPTCHA_BUTTON_WAIT_S to come free, then it's a CAPTCHA for you; any other
+    disabled button gets a few seconds (it's usually waiting for a field compbot didn't recognise)."""
+    try:
+        if not loc.is_disabled(timeout=2000):
+            return None
+    except Exception:  # noqa: BLE001
+        return None
+    label = _button_label(loc)
+    if CAPTCHA_BUSY_RE.search(label):
+        deadline = time.time() + CAPTCHA_BUTTON_WAIT_S
+        while time.time() < deadline:
+            _pause(page, 1.0)
+            try:
+                if not loc.is_disabled(timeout=1500):
+                    return None
+            except Exception:  # noqa: BLE001
+                return None
+        return (f"captcha: the form's bot check never finished, so its button stayed held "
+                f"(\u201c{(_button_label(loc) or label)[:60]}\u201d)")
+    _pause(page, 2.5)
+    try:
+        if not loc.is_disabled(timeout=2000):
+            return None
+    except Exception:  # noqa: BLE001
+        return None
+    return "failed: the submit button stayed disabled (a required field probably wasn't recognised)"
+
+
 def _click_submit(page, frame) -> str:
     """Click the marked submit button; cope with pop-ups/sticky bars covering it. Returns how it was pressed."""
     loc = frame.locator('[data-cb-submit="1"]').first
-    try:
-        if loc.is_disabled(timeout=2000):
-            _pause(page, 2.5)
-            if loc.is_disabled(timeout=2000):
-                return "failed: the submit button stayed disabled (a required field probably wasn't recognised)"
-    except Exception:  # noqa: BLE001
-        pass
+    held = _await_enabled(page, loc)
+    if held:
+        return held
     try:
         loc.click(timeout=6000)
         return "click"
@@ -1105,6 +1394,7 @@ def _click_submit(page, frame) -> str:
         page.keyboard.press("Escape")
     except Exception:  # noqa: BLE001
         pass
+    dismiss_cookies(page)  # a cookie banner that arrived late (Great British Chefs)
     for fr in _all_frames(page):
         _safe_eval(fr, JS_CLOSE_POPUPS)
     _pause(page, 0.8)
@@ -1482,6 +1772,57 @@ def _wait_settle(page, ms: int = 8000) -> None:
         pass
 
 
+def _busy_label(frame) -> str | None:
+    """The pressed button's label while it still says it's working ("Sending...", "Entering..."), else None."""
+    try:
+        loc = frame.locator('[data-cb-submit="1"]').first
+        if loc.count() == 0 or not loc.is_visible(timeout=1000):
+            return None
+        label = _button_label(loc)
+        return label if label and BUSY_RE.search(label) else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+GENERIC_SUBMIT_ERROR_RE = re.compile(r"an error occurred (?:when|while) submitting|oops,? an error occurred|error trying "
+                                     r"to send your message|something went wrong", re.I)
+BOT_SERVER_RE = re.compile(r"access denied|attention required|just a moment|captcha|challenge|cloudflare|incapsula|"
+                           r"perimeterx|datadome|\bbots?\b", re.I)
+JS_BOT_SHIELD = (r"""() => !!document.querySelector('script[src*="_Incapsula_Resource"], script[src*="perimeterx" i], """
+                 r"""script[src*="datadome" i], script[src*="px-cdn" i]')""")
+
+
+def _bot_refusal(new_text: str, server: str, container: dict, frame) -> tuple[str, str] | None:
+    """(result, message) when the site's own bot check turned the entry down after it was sent - a CAPTCHA or a block
+    for you to enter by hand, not a failure to try again - else None."""
+    def quote(m: re.Match, text: str) -> str:
+        return " ".join(text[max(0, m.start() - 40): m.end() + 60].split())[:160]
+
+    both = new_text + "\n" + (server or "")
+    m = CAPTCHA_REFUSAL_RE.search(both)
+    if m:
+        return "captcha", f"The site's hidden CAPTCHA turned the entry down (\u201c{quote(m, both)}\u201d) - enter it yourself"
+    m = BOT_REFUSAL_RE.search(both)
+    if m:
+        return "blocked", f"The site's spam filter turned the entry down (\u201c{quote(m, both)}\u201d) - enter it yourself"
+    m = GENERIC_SUBMIT_ERROR_RE.search(new_text)
+    if m:
+        meta = (container.get("meta") or "").lower()
+        if "klaviyo" in meta or "klaviyo" in (server or "").lower():
+            who = "Klaviyo's sign-up form (it refuses automated browsers)"
+        elif "wpcf7" in meta:
+            who = "the site's spam filter (Contact Form 7)"
+        elif _safe_eval(frame, JS_BOT_SHIELD, default=False):
+            who = "the site's bot protection"
+        else:
+            who = None
+        if who:
+            return "blocked", f"{who[0].upper()}{who[1:]} turned the entry down (\u201c{quote(m, new_text)}\u201d) - enter it yourself"
+    if server and re.search(r"HTTP (?:401|403|429) from", server) and BOT_SERVER_RE.search(server):
+        return "blocked", f"The site's bot protection refused the entry ({server[:200]}) - enter it yourself"
+    return None
+
+
 def _server_errors(responses: list) -> str:
     """'HTTP 403 from a.klaviyo.com/client/subscriptions: {...}' for error replies seen after submitting."""
     from urllib.parse import urlparse
@@ -1597,6 +1938,9 @@ class Browser:
                 return res
             _wait_settle(page)
             details["cookies"] = dismiss_cookies(page)
+            gate = answer_age_gate(page, ctx)
+            if gate:
+                details["steps"].append(f"answered the age check ('{gate}')")
             live.status("Looking for the entry form")
             prime_iframes(page)
             res.final_url = page.url
@@ -1633,6 +1977,34 @@ class Browser:
                 best = best_form()
                 if best and best[2] >= 4:
                     details["steps"].append("form appeared after scrolling the page")
+            if best and best[2] >= 4 and _newsletter_only(best[1], ctx):
+                # The page's only form is a newsletter sign-up, and the article links to the real entry form
+                # ("Click HERE to enter", Sea Angler): follow the link rather than sign up to the newsletter.
+                hit = next(((fr, r) for fr in _all_frames(page) if (r := _safe_eval(fr, JS_REVEAL, [dry_run, True]))),
+                           None)
+                if hit:
+                    fr, r = hit
+                    orig_page, orig_url = page, page.url
+                    page, _ok = _click_follow(context, page, fr, '[data-cb-reveal="1"]', live, wait_s=2.5)
+                    _wait_settle(page, 8000)
+                    dismiss_cookies(page)
+                    prime_iframes(page)
+                    linked = best_form()
+                    if linked and linked[2] >= 4 and not _newsletter_only(linked[1], ctx):
+                        best = linked
+                        details["steps"].append(f"followed '{r['label']}' to the entry form (the page's own form was "
+                                                "a newsletter sign-up)")
+                    else:
+                        if page is not orig_page:
+                            page.close()
+                            page = orig_page
+                            live.attach(page)
+                        else:
+                            page.goto(orig_url, wait_until="domcontentloaded", timeout=45000)
+                            _wait_settle(page)
+                            dismiss_cookies(page)
+                            prime_iframes(page)
+                        best = best_form()
             quiz_ready = False
             if (not best or best[2] < 4) and play_quizzes:
                 quiz_ready = bool((_quiz_scan(page, dry_run=dry_run)[1] or {}).get("groups"))
@@ -1642,7 +2014,7 @@ class Browser:
                 for _attempt in range(3):
                     hit = None
                     for fr in _all_frames(page):
-                        r = _safe_eval(fr, JS_REVEAL, dry_run)
+                        r = _safe_eval(fr, JS_REVEAL, [dry_run, False])
                         if r:
                             hit = (fr, r)
                             break
@@ -1654,6 +2026,7 @@ class Browser:
                         details["steps"].append(f"ticked '{r['gate'][:80]}' to unlock '{r['label']}'" if ticked
                                                 else f"couldn't tick '{r['gate'][:80]}'")
                     details["steps"].append(f"clicked '{r['label']}'")
+                    before_click = page.url
                     page, _ok = _click_follow(context, page, fr, '[data-cb-reveal="1"]', live, wait_s=2.5)
                     _wait_settle(page, 6000)
                     dismiss_cookies(page)
@@ -1661,6 +2034,10 @@ class Browser:
                     if clause:
                         return tc_blocked()
                     best = best_form()
+                    if (not best or best[2] < 4) and page.url.split("#")[0] != before_click.split("#")[0]:
+                        _pause(page, 3)  # a page reached through the link can be slow to draw its form
+                        prime_iframes(page)
+                        best = best_form()
                     if best and best[2] >= 4:
                         break
                     if play_quizzes and _quiz_present(_quiz_scan(page, dry_run=dry_run)[1]):
@@ -1676,8 +2053,48 @@ class Browser:
                     if qbest:
                         best = qbest
                         details["steps"].append("the entry form appeared after the quiz")
+            if (not best or best[2] < 4) and quiz_summary is None and any(
+                    REJECTED_COOKIES_RE.search(str(c)) for c in details.get("cookies") or []):
+                # Some sites only load their competition embed for visitors who accept cookies. Start again with a
+                # clean slate (this browser is thrown away after this entry), accept, and look once more.
+                live.status("No entry form - trying again with cookies accepted")
+                accepted: list[str] = []
+                try:
+                    context.clear_cookies()
+                    for fr in _all_frames(page):
+                        _safe_eval(fr, JS_CLEAR_STORAGE)
+                    page.goto(url, wait_until="domcontentloaded", timeout=45000)
+                    _wait_settle(page)
+                    accepted = dismiss_cookies(page, accept=True)
+                except Exception as exc:  # noqa: BLE001
+                    log.debug("cookie-accept retry failed for %s: %s", url, exc)
+                if accepted:
+                    details["cookies"] = list(details.get("cookies") or []) + [f"accepted: {a}" for a in accepted]
+                    answer_age_gate(page, ctx)
+                    prime_iframes(page)
+                    best = best_form()
+                    if (not best or best[2] < 4) and reveal_consented_embed(page):
+                        best = best_form()
+                    if not best or best[2] < 4:
+                        scroll_through(page)
+                        best = best_form()
+                    if not best or best[2] < 4:
+                        hit = next(((fr, r) for fr in _all_frames(page)
+                                    if (r := _safe_eval(fr, JS_REVEAL, [dry_run, False]))), None)
+                        if hit:
+                            fr, r = hit
+                            details["steps"].append(f"clicked '{r['label']}'")
+                            page, _ok = _click_follow(context, page, fr, '[data-cb-reveal="1"]', live, wait_s=2.5)
+                            _wait_settle(page, 6000)
+                            dismiss_cookies(page, accept=True)
+                            prime_iframes(page)
+                            best = best_form()
+                    if best and best[2] >= 4:
+                        details["steps"].append("the entry form appeared once cookies were accepted")
             if not best or best[2] < 4:
                 text = _page_text(page)
+                widget = _widget_host(page)
+                login = LOGIN_WALL_RE.search(text)
                 if CLOSED_RE.search(text):
                     res.result, res.message = "closed", "Page says the competition has closed"
                 elif quiz_summary is not None and QUIZ_FAIL_RE.search(text):
@@ -1686,6 +2103,14 @@ class Browser:
                     res.message = f"Quiz score too low to unlock the entry ({quiz_summary}): \u201c{m.group(0)}\u201d"
                 elif quiz_summary is not None:
                     res.result, res.message = "failed", f"Played the quiz ({quiz_summary}) but no entry form appeared"
+                elif widget:
+                    res.result = "widget"
+                    res.message = (f"The entry is a {WIDGET_NAMES.get(widget, widget)} widget, which needs you to sign "
+                                   "in or complete its steps - enter it yourself")
+                elif login or (best and best[1].get("hasPassword")):
+                    said = _sentence_at(text, login.start(), login.end()) if login else "only a sign-in form on the page"
+                    res.result = "login"
+                    res.message = f"Only signed-in members can enter (\u201c{said}\u201d) - sign in and enter it yourself"
                 else:
                     res.result, res.message = "failed", "No entry form found on the page"
                 res.final_url = page.url
@@ -1790,13 +2215,38 @@ class Browser:
                     return res
 
                 res.screenshot_before = _shot(page, cfg.screenshot_dir / f"{shot_prefix}_s{step}_before.jpg")
+                # Pop-ups that arrived late (a cookie banner, "Are you over 18?") would sit on top of the button.
+                late = dismiss_cookies(page)
+                if late:
+                    details["cookies"] = list(details.get("cookies") or []) + late
+                gate = answer_age_gate(page, ctx)
+                if gate:
+                    details["steps"].append(f"step {step}: answered the age check ('{gate}')")
+                # Look for the button from a field compbot filled from your details: the entry form's own email box,
+                # not a header search box or a footer sign-up on a page with no <form>.
+                cur = {f["idx"] for f in container.get("fields", [])}
+                personal = [f.idx for f, a in plan_all if a.kind == "fill" and f.idx in cur and a.source in (
+                    "email", "first_name", "full_name", "last_name")]
+                filled = [f.idx for f, a in plan_all if a.kind != "skip" and f.idx in cur]
+                submit_idx = (personal or filled or [sample_idx])[0]
+                submit_label = _safe_eval(frame, JS_MARK_SUBMIT, submit_idx) if submit_idx else None
+                n_filled = sum(1 for _, a in plan_all if a.kind != "skip")
                 if dry_run:
-                    res.result = "dry_run_ok"
                     res.final_url = page.url
-                    res.message = f"Dry run: filled {sum(1 for _, a in plan_all if a.kind != 'skip')} fields; not submitted"
+                    held = _await_enabled(page, frame.locator('[data-cb-submit="1"]').first) if submit_label else None
+                    if not submit_label:
+                        res.result = "failed"
+                        res.message = f"Dry run: filled {n_filled} fields, but couldn't find the submit button"
+                    elif held and held.startswith("captcha"):
+                        res.result, res.message = "captcha", f"Dry run: {held[9:]} - enter manually"
+                    elif held:
+                        res.result, res.message = "failed", f"Dry run: filled {n_filled} fields, but {held[8:]}"
+                    else:
+                        res.result = "dry_run_ok"
+                        res.message = (f"Dry run: filled {n_filled} fields; would press \u201c{submit_label}\u201d "
+                                       "(not submitted)")
                     return res
 
-                submit_label = _safe_eval(frame, JS_MARK_SUBMIT, sample_idx) if sample_idx else None
                 if not submit_label:
                     res.result, res.message = "failed", "Couldn't find the submit button"
                     res.screenshot_before = _shot(page, cfg.screenshot_dir / f"{shot_prefix}_nosubmit.jpg")
@@ -1812,6 +2262,10 @@ class Browser:
                 sent_errors.clear()
                 watching[0] = True
                 how = _click_submit(page, frame)
+                if how.startswith("captcha"):
+                    res.result, res.message = "captcha", f"{how[9:10].upper()}{how[10:]} - enter it yourself"[:500]
+                    res.screenshot_before = _shot(page, cfg.screenshot_dir / f"{shot_prefix}_captcha.jpg")
+                    return res
                 if how.startswith("failed"):
                     res.result, res.message = "failed", f"Submit click failed: {how[7:]}"[:500]
                     return res
@@ -1828,10 +2282,22 @@ class Browser:
                     after = _page_text(page)
                     return "\n".join(ln for ln in after.splitlines() if ln not in before_text)
 
+                def answered(text: str) -> bool:
+                    return bool(SUCCESS_RE.search(text) or ALREADY_RE.search(text) or ERROR_RE.search(text))
+
                 new_text = read_outcome()
-                if not (SUCCESS_RE.search(new_text) or ALREADY_RE.search(new_text) or ERROR_RE.search(new_text)):
+                if not answered(new_text):
                     _pause(page, 3.5)  # many forms show their result a moment after the request finishes
                     new_text = read_outcome()
+                # Still "Sending..." / "Entering...": some sites take a while (TUI), or are fetching a CAPTCHA.
+                busy, waited = _busy_label(frame), 0
+                while busy and waited < BUSY_WAIT_S and not answered(new_text) and not detect_captcha(page):
+                    _pause(page, 2)
+                    waited += 2
+                    new_text = read_outcome()
+                    busy = _busy_label(frame)
+                if waited:
+                    details["steps"].append(f"step {step}: waited {waited}s while the button said it was busy")
                 res.final_url = page.url
                 res.screenshot_after = _shot(page, cfg.screenshot_dir / f"{shot_prefix}_s{step}_after.jpg")
 
@@ -1845,10 +2311,20 @@ class Browser:
                     m = SUCCESS_RE.search(new_text)
                     res.result, res.message = "entered", f"Confirmation seen: \u201c{m.group(0)[:120]}\u201d"
                     return res
-                err = ERROR_RE.search(new_text)
                 server = _server_errors(sent_errors)
                 if server:
                     details["server_errors"] = server
+                if server and ALREADY_RE.search(server):
+                    # Fife: the page shows nothing, but the server says "this email has already been used to enter".
+                    m = ALREADY_RE.search(server)
+                    res.result = "entered"
+                    res.message = f"Site says you've already entered (its server replied \u201c{m.group(0)}\u201d)"
+                    return res
+                refusal = _bot_refusal(new_text, server, container, frame)
+                if refusal:
+                    res.result, res.message = refusal
+                    return res
+                err = ERROR_RE.search(new_text)
                 nxt = best_form()
                 # A paged form (Next -> Next -> Submit) carries on in the same <form>, even when the next page is
                 # only tick boxes, which wouldn't look like an entry form on its own.
@@ -1940,6 +2416,17 @@ class Browser:
                     return res
                 if page.url.split("#")[0] != before_url.split("#")[0] or not same_form:
                     res.result, res.message = "unverified", "Submitted; page changed but no explicit confirmation text"
+                    return res
+                if busy and CAPTCHA_BUSY_RE.search(busy):
+                    res.result = "captcha"
+                    res.message = (f"The form's bot check never finished after submitting (the button still said "
+                                   f"\u201c{busy[:60]}\u201d) - enter it yourself")
+                    return res
+                if busy:
+                    res.result = "failed"
+                    res.message = (f"Submitted, but the site was still busy {waited + 5}s later (the button still said "
+                                   f"\u201c{busy[:60]}\u201d)" + (f" - the site's server replied {server}" if server
+                                                                  else ""))[:900]
                     return res
                 res.result, res.message = "failed", ("Submitted but nothing changed on the page" + (
                     f" - the site's server replied {server}" if server else ""))[:900]

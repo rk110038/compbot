@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Reader treat</title></head>
+<body>
+<h1>WIN! A Raven Botanicals Gift Set</h1>
+<h2>Enter</h2>
+<!-- Muddy Stilettos: the form stays put and a line appears under the button. -->
+<form id="f">
+  <label>Your name <input name="name" required></label>
+  <label>Your email address <input type="email" name="email" required></label>
+  <label><input type="checkbox" name="tc" required> I accept the Terms and Conditions</label>
+  <button type="submit">ENTER THE READER TREAT</button>
+  <p id="msg"></p>
+</form>
+<script>
+window.__sent = 0;
+document.getElementById('f').addEventListener('submit', e => {
+  e.preventDefault(); window.__sent++;
+  document.getElementById('msg').textContent = 'Huzzah, you have now entered!';
+});
+</script>
+</body></html>

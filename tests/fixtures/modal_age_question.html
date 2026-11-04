@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Win a drinks hamper</title>
+<style>.modal{position:fixed;inset:10% 20%;background:#fff;border:1px solid #333;padding:1rem;z-index:99}</style></head>
+<body>
+<h1>Win a drinks hamper</h1>
+<!-- The entry form itself is a pop-up that asks "Are you over 18?" as a question: its Enter button sends the entry. -->
+<div class="modal" role="dialog" aria-modal="true">
+  <h2>Enter the competition</h2>
+  <form id="f">
+    <label>Name <input name="name" required></label>
+    <label>Email <input type="email" name="email" required></label>
+    <fieldset><legend>Are you over 18?</legend>
+      <label><input type="radio" name="adult" value="yes" required> Yes</label>
+      <label><input type="radio" name="adult" value="no"> No</label></fieldset>
+    <button type="submit">Enter</button>
+  </form>
+</div>
+<script>
+window.__submitted = 0;
+document.getElementById('f').addEventListener('submit', e => { e.preventDefault(); window.__submitted++; document.body.innerHTML = '<p>Thanks for entering!</p>'; });
+</script>
+</body></html>

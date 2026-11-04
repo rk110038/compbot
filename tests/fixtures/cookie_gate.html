@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Win a rug</title></head>
+<body>
+<h1>Your chance to win £250 of vouchers</h1>
+<div id="cookie-banner" class="cookie-banner" style="position:fixed;bottom:0;left:0;right:0;background:#eee;padding:1rem">
+  We use cookies. <button id="rej">Reject all</button> <button id="acc">Accept all</button></div>
+<div id="slot"></div>
+<script>
+// Like a shop whose competition embed only loads for visitors who accept cookies.
+const consent = localStorage.getItem('consent');
+if (consent) document.getElementById('cookie-banner').remove();
+if (consent === 'all') {
+  document.getElementById('slot').innerHTML = `<h2>Enter the competition</h2><form id="f">
+    <label>Name <input name="name" required></label><label>Email <input type="email" name="email" required></label>
+    <button type="submit">Enter</button></form>`;
+  document.getElementById('f').addEventListener('submit', e => { e.preventDefault(); document.body.innerHTML = '<p>Thanks for entering!</p>'; });
+}
+document.getElementById('rej') && (document.getElementById('rej').onclick = () => { localStorage.setItem('consent', 'none'); location.reload(); });
+document.getElementById('acc') && (document.getElementById('acc').onclick = () => { localStorage.setItem('consent', 'all'); location.reload(); });
+</script>
+</body></html>

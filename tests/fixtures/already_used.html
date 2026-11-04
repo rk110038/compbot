@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Win a break in Fife</title></head>
+<body>
+<h1>Win a break in Fife</h1>
+<h2>Enter the competition</h2>
+<!-- Welcome to Fife: the page shows nothing; only the server's reply says this email has already entered. -->
+<form id="f">
+  <label>Full name <input name="name" required></label>
+  <label>Email <input type="email" name="email" required></label>
+  <button type="submit">SUBMIT</button>
+</form>
+<script>
+document.getElementById('f').addEventListener('submit', async e => {
+  e.preventDefault();
+  await fetch('/api/reply?code=409&msg=' + encodeURIComponent('This email has already been used to enter this competition.'), {method: 'POST', body: '{}'});
+});
+</script>
+</body></html>

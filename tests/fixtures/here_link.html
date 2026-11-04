@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Win a pendant</title></head>
+<body>
+<main><article>
+<h1>Win: A gem-studded silver pendant worth £200!</h1>
+<p>We've teamed up with a British jewellery brand to give away a bestselling pendant this month.</p>
+<!-- Velvet / Sea Angler: the entry form is on another page, linked from the word "HERE". -->
+<p>The winner will receive the necklace in sterling silver. For your chance to win, click <a href="here_target.html">HERE</a>
+ and complete the simple online form using keyword 'UNIVERSE'. Entries must be made before midnight. One winner to be
+ selected. Read the <a href="comp-rules.html">terms here</a>.</p>
+</article>
+<aside>
+<h3>Sign up to receive our FREE e-newsletter</h3>
+<form id="news">
+  <label>First Name <input name="fn"></label>
+  <label>Surname <input name="sn"></label>
+  <label>Email Address <input type="email" name="em"></label>
+  <button type="submit">Submit</button>
+</form>
+</aside></main>
+<script>
+document.getElementById('news').addEventListener('submit', e => { e.preventDefault(); location.href = 'newsletter_done.html'; });
+</script>
+</body></html>

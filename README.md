@@ -12,7 +12,7 @@ A self-hosted competition assistant for TrueNAS SCALE (or any Docker host). Ever
 
 ## What it deliberately won't do
 
-* **Solve CAPTCHAs or dodge bot detection.** If a form has reCAPTCHA, hCaptcha or Turnstile, or the site blocks automation, the comp goes to your **manual queue** with a screenshot.
+* **Solve CAPTCHAs or dodge bot detection.** If a form has reCAPTCHA, hCaptcha or Turnstile, or the site blocks automation, the comp goes to your **manual queue** with a screenshot. That includes the checks that only speak up after you press submit: a hidden reCAPTCHA saying "Unable to verify", a button stuck on "Solving captcha…", Klaviyo sign-up forms answering "An error occurred when submitting", and simple sums such as "9 + 3 equals" (a CAPTCHA by another name). These go to you on the first try instead of being retried.
 * **Ignore the rules.** Many UK T&Cs say *"entries made using a script, macro or automated means will be void"*. compbot reads the page and its T&Cs and, by default, sends those comps to the manual queue with the exact clause quoted. An automated entry there could cost you the prize.
 * **Use your social media accounts.** Instagram/Facebook/X comps are skipped, or queued for you if you prefer.
 * **Spend money.** Purchase-required comps are skipped.
@@ -92,6 +92,15 @@ Default schedule (Europe/London): discover 07:00, enter 07:30, inbox 08:00 and 2
 The 🌓 button at the top right switches the GUI between **Auto** (follows your device's light/dark setting), **Light** and **Dark**. The choice is remembered in that browser.
 
 Quizzes that unlock the entry form (answer tiles or buttons, "Reveal question", "I've read the rules" boxes, "Enter the prize draw" links) are played automatically: the listing's answer first (the MSE post, or another site's suggested answer), then the AI, then a guess, and the next option after a "wrong, try again". Switch this off in Settings → Play quizzes.
+
+How compbot finds and sends the form, besides filling it in:
+
+* **Links to the form.** It follows "Click HERE to enter", "TAP TO ENTER" and "Click here to enter the competition" links. If the page's only form is a newsletter sign-up, it follows the article's entry link instead of signing you up.
+* **Cookies.** It refuses cookies. If no entry form appears, it tries once more with cookies accepted, in a browser that's thrown away afterwards: some sites only load their competition form for visitors who accept.
+* **"Are you over 18?" pop-ups** are answered Yes, unless the date of birth in your profile says otherwise.
+* **Fewer missed confirmations.** It reads more confirmations (for example "Huzzah, you have now entered!", "Your form has been successfully received", "Your response has been recorded") and a server's "this email has already been used to enter", so a comp that went in isn't entered again. A button saying "Sending…" gets up to 20 seconds more.
+* **Pages it can't enter go to you on the first try:** pages only signed-in members can enter (**Needs you to sign in**) and Gleam-style widgets (**Social media, Gleam…**).
+* **Dry runs say which button they'd press**, or that there isn't one.
 
 Statuses: `queued` (will be auto-entered) → `entered` (or `manual`, `skipped`, `expired`). A comp whose first try fails stays `queued` for one more try on the next run (the dashboard's **Queued** card and the run summary say how many are waiting to retry); a multi-site comp entered on only some sites stays `queued` for the rest. Each entry run first moves out anything it could never enter: closed comps expire, and comps with no entry link, a method compbot can't enter, or email entries switched off go to the manual queue with the reason. Anything not yet entered expires once its closing date passes (checked at 03:00, after each discovery run and at the start of each entry run); a manual-queue comp with no closing date in its title expires 30 days after it was found. Outcomes: `pending` → `possible_win` → `won` / `lost`. Entered comps are marked **lost** automatically 60 days after closing if no win email arrived (most promoters only contact winners).
 
@@ -225,6 +234,7 @@ app/
 ## Troubleshooting
 
 * **Lots of `blocked` / `captcha` results.** That's the sites saying no to bots. They're in the manual queue.
+* **`login` / `widget` results.** The entry is only for signed-in members of that site, or lives in a Gleam-style widget. They're in the manual queue under **Needs you to sign in** and **Social media, Gleam…**.
 * **`needs_input`.** A required field compbot couldn't map (often a tie-breaker or an unknown answer). Add the answer on the competition page and click **Re-queue**, or enter it yourself.
 * **Inbox shows nothing.** Check the Gmail app password and that `GMAIL_ADDRESS` matches the account. Look in **Log** for IMAP errors.
 * **Chromium crashes.** Make sure `shm_size: 1gb` is in the YAML and the app has at least 1–2 GB RAM.

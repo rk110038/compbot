@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Win a year of beer</title>
+<style>.age-gate{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center}
+.age-gate .box{background:#fff;padding:2rem}</style></head>
+<body>
+<h1>Win a year's worth of Rev James</h1>
+<h2>Enter the competition</h2>
+<form id="f">
+  <label>First Name * <input name="fn" required></label>
+  <label>Last Name * <input name="ln" required></label>
+  <label>Email * <input type="email" name="email" required></label>
+  <label><input type="checkbox" name="age" required> I confirm I am 18 years of age or older *</label>
+  <label><input type="checkbox" name="tc" required> I have read and agree to the competition terms and conditions *</label>
+  <button type="submit">ENTER</button>
+  <p id="msg"></p>
+</form>
+<script>
+// Brains Brewery: "Are you over 18?" arrives a moment after the page, on top of everything.
+window.ageOk = false;
+setTimeout(() => {
+  document.body.insertAdjacentHTML('beforeend', '<div class="age-gate" role="dialog"><div class="box"><h3>ARE YOU OVER 18?</h3><p>By clicking Yes you are verifying that you are old enough to consume alcohol</p><button id="yes">YES</button> <button id="no">NO</button></div></div>');
+  document.getElementById('yes').onclick = () => { window.ageOk = true; document.querySelector('.age-gate').remove(); };
+}, 300);
+document.getElementById('f').addEventListener('submit', e => {
+  e.preventDefault();
+  document.getElementById('msg').textContent = window.ageOk ? 'Thank you for entering!' : 'Please confirm your age first';
+});
+</script>
+</body></html>

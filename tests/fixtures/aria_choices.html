@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Prize draw</title>
+<style>[role=checkbox],[role=radio]{display:inline-block;width:18px;height:18px;border:1px solid #333;margin:4px;cursor:pointer}
+[aria-checked=true]{background:#333}</style></head>
+<body>
+<h1>Prize Draw of the Month</h1>
+<h2>Enter the prize draw</h2>
+<!-- Google Forms: tick boxes and radio buttons are <div role=checkbox/radio>, and the Submit button is a <div>. -->
+<form id="f">
+  <div role="list">
+    <div role="listitem"><div role="heading">Name *</div><input name="name" aria-label="Name" required></div>
+    <div role="listitem"><div role="heading">Email Address *</div><input type="email" name="email" aria-label="Email Address" required></div>
+    <div role="listitem" id="q1">
+      <div role="heading">Would you like to receive prize draw information, special offers &amp; news via email? <span aria-label="Required question">*</span></div>
+      <div role="list">
+        <div role="listitem"><div role="checkbox" aria-label="Yes" aria-checked="false" data-v="yes"></div> Yes</div>
+        <div role="listitem"><div role="checkbox" aria-label="No" aria-checked="false" data-v="no"></div> No</div>
+      </div>
+    </div>
+  </div>
+  <div role="button" id="go" tabindex="0">Submit</div> <div role="button" tabindex="0">Clear form</div>
+  <p id="msg"></p>
+</form>
+<script>
+document.querySelectorAll('[role=checkbox]').forEach(c => c.addEventListener('click', () => {
+  c.setAttribute('aria-checked', c.getAttribute('aria-checked') === 'true' ? 'false' : 'true');
+}));
+document.getElementById('go').addEventListener('click', () => {
+  const picked = [...document.querySelectorAll('#q1 [aria-checked=true]')].map(c => c.dataset.v);
+  const f = document.getElementById('f');
+  if (!f.querySelector('[name=name]').value || !f.querySelector('[name=email]').value || !picked.length) { document.getElementById('msg').textContent = 'This is a required question'; return; }
+  document.body.innerHTML = picked.join() === 'no' ? '<p>Your response has been recorded.</p>' : '<p>WRONG: marketing was ticked</p>';
+});
+</script>
+</body></html>

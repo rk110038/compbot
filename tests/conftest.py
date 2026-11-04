@@ -27,9 +27,28 @@ PROFILE = {
 
 @pytest.fixture(scope="session")
 def fixture_server():
+    import json
+    from urllib.parse import parse_qs, urlparse
+
     class Quiet(http.server.SimpleHTTPRequestHandler):
         def log_message(self, *args):
             pass
+
+        def do_POST(self):
+            # /api/reply?code=409&msg=... answers like a site's own API would (an error code and a JSON message);
+            # anything else gets 501, as before.
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            u = urlparse(self.path)
+            if u.path != "/api/reply":
+                self.send_error(501, "Unsupported method ('POST')")
+                return
+            q = parse_qs(u.query)
+            body = json.dumps({"error": "Something went wrong", "msg": q.get("msg", [""])[0]}).encode()
+            self.send_response(int(q.get("code", ["500"])[0]))
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
 
     handler = functools.partial(Quiet, directory=str(ROOT / "tests" / "fixtures"))
     httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)

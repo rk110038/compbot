@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Enter our competitions</title></head>
+<body>
+<h1>Enter our competitions</h1>
+<h2>Competition entry form</h2>
+<form id="f">
+  <label>Keyword <input name="keyword" required></label>
+  <label>First name <input name="fn" required></label>
+  <label>Last name <input name="ln" required></label>
+  <label>Email <input type="email" name="email" required></label>
+  <label><input type="checkbox" name="tc" required> I agree to the terms and conditions</label>
+  <button type="submit">Enter</button>
+</form>
+<script>
+document.getElementById('f').addEventListener('submit', e => {
+  e.preventDefault();
+  document.body.innerHTML = e.target.keyword.value.toUpperCase() === 'UNIVERSE' ? '<h2>Thanks for entering!</h2>' : '<p>Wrong keyword</p>';
+});
+</script>
+</body></html>

@@ -197,3 +197,27 @@ def test_country_box_is_not_a_quiz_question(profile):
     # CinemaBlend: "Country" starts with "count" and was filled with the quiz answer.
     a = map_field(Field("1", "input", "text", name="country", label="Country"), ctx(profile, answers=["Festive Road"]))
     assert a.kind == "fill" and a.value == "United Kingdom"
+
+
+def test_sums_are_a_captcha_even_when_the_comp_has_an_answer():
+    # Active Traveller: "9 + 3 equals" went to the AI (which said 11) because the comp's question had an answer.
+    from app.entry.forms import Ctx, Field, map_field
+    ctx = Ctx(profile={"first_name": "Rob"}, answers=["Croatia"])
+    a = map_field(Field(idx="1", tag="input", label="9 + 3 equals *", required=True), ctx)
+    assert a.kind == "unknown" and a.note.startswith("captcha"), a
+    a = map_field(Field(idx="2", tag="input", label="Keyword", required=True), Ctx(profile={}, answers=["UNIVERSE"]))
+    assert (a.kind, a.value) == ("fill", "UNIVERSE"), a
+
+def test_region_lists_use_your_region_or_country():
+    # Vegan Food & Living's "Region" is United Kingdom / Europe / USA...; other forms list regions of England.
+    from app.entry.forms import Ctx, Field, map_field
+    ctx = Ctx(profile={"county": "Berks", "country": "United Kingdom"})
+    countries = [{"value": v, "text": v} for v in ["", "United Kingdom", "Europe", "USA/Canada", "Other"]]
+    countries[0]["text"] = "Please select"
+    a = map_field(Field(idx="r", tag="select", label="Region", options=countries, required=True), ctx)
+    assert (a.kind, a.value) == ("select", "United Kingdom"), a
+    regions = [{"value": v, "text": v} for v in ["London", "South East", "South West", "Scotland"]]
+    a = map_field(Field(idx="r2", tag="select", label="Your region *", options=regions, required=True), ctx)
+    assert (a.kind, a.value) == ("select", "South East"), a
+    a = map_field(Field(idx="c", tag="select", label="County", options=regions, required=True), ctx)
+    assert a.kind == "unknown"  # a "County" list without your county is still a question for you

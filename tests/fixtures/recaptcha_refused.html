@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Win a food lovers break</title></head>
+<body>
+<h1>Win a food lover's break</h1>
+<h2>Enter the competition</h2>
+<!-- Visit Northumberland: an invisible reCAPTCHA scores the visit; the server turns the entry down. -->
+<form id="f">
+  <label>First name <input name="fn" required></label>
+  <label>Email <input type="email" name="email" required></label>
+  <button type="submit">SUBMIT</button>
+</form>
+<script>
+document.getElementById('f').addEventListener('submit', async e => {
+  e.preventDefault();
+  await fetch('/api/reply?code=500&msg=' + encodeURIComponent('Unable to verify reCaptcha'), {method: 'POST', body: '{}'});
+});
+</script>
+</body></html>

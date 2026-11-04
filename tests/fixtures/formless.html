@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Win a festive collection</title></head>
+<body>
+<header><input type="search" name="search" placeholder="Search" aria-label="Search"><button>Search</button><button>Subscribe</button></header>
+<main>
+<h1>WIN a beautiful festive collection worth £261</h1>
+<!-- Great British Chefs: no <form> anywhere; the entry and the footer sign-up are just fields on the page. -->
+<div class="entry">
+  <p>How to enter</p>
+  <label>Please enter your email address: <input type="email" id="em" aria-label="Please enter your email address"></label>
+  <label>First name* <input id="fn" aria-label="First name"></label>
+  <label><input type="checkbox" id="tc"> I agree with these competition Terms and Conditions</label>
+  <div class="my-4"><button class="btn" id="go">SUBMIT ENTRY</button></div>
+</div>
+</main>
+<footer>
+  <p>Subscribe to the Newsletter</p>
+  <input type="email" id="news" aria-label="Newsletter email" placeholder="Newsletter email">
+  <button id="sub">SUBSCRIBE</button>
+</footer>
+<script>
+document.getElementById('sub').onclick = () => { document.body.innerHTML = '<p>WRONG: newsletter</p>'; };
+document.getElementById('go').onclick = () => {
+  const ok = document.getElementById('em').value && document.getElementById('fn').value && document.getElementById('tc').checked && !document.getElementById('news').value;
+  document.body.innerHTML = ok ? '<h2>Thank you for entering!</h2>' : '<p>Please complete the form</p>';
+};
+</script>
+</body></html>
