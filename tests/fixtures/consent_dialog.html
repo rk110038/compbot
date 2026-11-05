@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Consent</title></head>
+<body>
+<!-- A consent manager's dialog in its own frame (Sourcepoint): no plain "Reject" button on its first layer. -->
+<div id="sp_message">
+  <p>We and our partners use cookies to personalise content and ads.</p>
+  <button id="pay">Reject &amp; Pay</button>
+  <button id="ok">Accept All &amp; Continue</button>
+</div>
+<script>document.getElementById('ok').addEventListener('click', () => parent.postMessage({consent: 'all'}, '*'));</script>
+</body></html>

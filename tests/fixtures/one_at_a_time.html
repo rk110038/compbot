@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>The Ivy Chester</title>
+<style>body{font-family:sans-serif;max-width:700px;margin:2rem auto} label{display:block;margin-top:.5rem}</style></head>
+<body>
+<!-- Great British Life's Typeform: one question at a time. Picking an answer brings up the next question by itself
+     (no button to press), so compbot found no submit button after the first question. -->
+<fieldset id="q1">
+  <legend>On which street is The Ivy Chester Brasserie located?*</legend>
+  <label><input type="radio" name="street" value="Eastgate Street"> Eastgate Street</label>
+  <label><input type="radio" name="street" value="Foregate Street"> Foregate Street</label>
+  <label><input type="radio" name="street" value="Watergate Street"> Watergate Street</label>
+</fieldset>
+<div id="q2" style="display:none">
+  <label>Name* <input name="name"></label>
+  <label>Email* <input type="email" name="email"></label>
+  <button type="button" id="go">Submit</button>
+</div>
+<script>
+let pick = '';
+document.querySelectorAll('input[name=street]').forEach(r => r.addEventListener('change', () => {
+  pick = r.value;
+  setTimeout(() => { document.getElementById('q1').style.display = 'none'; document.getElementById('q2').style.display = 'block'; }, 400);
+}));
+document.getElementById('go').addEventListener('click', () => {
+  const n = document.querySelector('input[name=name]').value, e = document.querySelector('input[name=email]').value;
+  if (!n || !e || !pick) return;
+  document.body.innerHTML = pick === 'Foregate Street' ? '<h2>Thanks for entering!</h2>' : '<h2>Sorry, wrong answer</h2>';
+});
+</script>
+</body></html>

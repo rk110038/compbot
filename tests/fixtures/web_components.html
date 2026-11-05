@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Win tickets</title>
+<style>body{font-family:sans-serif;max-width:700px;margin:2rem auto} ro-input, ro-checkbox{display:block;margin-top:.5rem}</style></head>
+<body>
+<!-- Roborock: the email box and the tick boxes are web components (inputs inside shadow roots), each tick box redraws
+     itself when clicked, and its words (with links) are inside the box. compbot found no submit button and, ticking
+     the terms box with a real click, landed on the Privacy Policy link. -->
+<h1>Win 2 Tickets to Real Madrid vs Barcelona</h1>
+<form id="f" action="#">
+  <ro-input name="emailAddress" placeholder="Email address" required></ro-input>
+  <button type="submit">Join Now</button>
+  <ro-checkbox name="agreeSubscribers" data-text="I agree to receive the latest product updates, promotions and event information."></ro-checkbox>
+  <ro-checkbox name="termsConsent" required data-text="I agree to the &lt;a href='privacy.html'&gt;Privacy Policy&lt;/a&gt; and &lt;a href='terms.html'&gt;Terms and Conditions&lt;/a&gt;."></ro-checkbox>
+  <ro-checkbox name="dataTransferMarketingConsent" data-text="I consent to the transfer of my personal data to the club for the sending of commercial communications about its sponsors."></ro-checkbox>
+  <p id="msg"></p>
+</form>
+<script>
+customElements.define('ro-input', class extends HTMLElement {
+  connectedCallback() {
+    const s = this.attachShadow({mode: 'open'});
+    s.innerHTML = `<label class="label" for="i"></label><input id="i" type="email" required name="${this.getAttribute('name')}" placeholder="${this.getAttribute('placeholder')}">`;
+  }
+  get value() { return this.shadowRoot.querySelector('input').value; }
+});
+customElements.define('ro-checkbox', class extends HTMLElement {
+  connectedCallback() { this.on = false; this.attachShadow({mode: 'open'}); this.draw(); }
+  draw() {
+    this.shadowRoot.innerHTML = `<div class="list" role="group"><div class="row" role="checkbox" data-value="yes" aria-checked="${this.on}" tabindex="0">
+      <span class="checkbox-visual" style="display:inline-block;width:12px;height:12px;border:1px solid #333;background:${this.on ? '#333' : '#fff'}"></span> <span class="label-text"><p>${this.getAttribute('data-text')}</p></span></div></div>`;
+    const row = this.shadowRoot.querySelector('.row');
+    row.addEventListener('click', e => { if (e.target.closest('a')) return; this.on = !this.on; this.draw(); });
+  }
+});
+document.getElementById('f').addEventListener('submit', e => {
+  e.preventDefault();
+  const email = document.querySelector('ro-input').value;
+  const terms = document.querySelector('ro-checkbox[name=termsConsent]').on;
+  const third = document.querySelector('ro-checkbox[name=dataTransferMarketingConsent]').on;
+  if (!email || !terms) { document.getElementById('msg').textContent = 'Please agree to the terms'; return; }
+  document.body.innerHTML = '<h2>Thank you for entering' + (third ? ' (and for sharing your data)' : '') + '</h2>';
+});
+</script>
+</body></html>

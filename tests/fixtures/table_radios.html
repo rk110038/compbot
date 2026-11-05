@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Win an audio drama box set</title>
+<style>body{font-family:sans-serif;max-width:700px;margin:2rem auto} label{display:block;margin-top:.5rem}</style></head>
+<body>
+<!-- Doctor Who Magazine (mrmForm): each option's <label> sits in the table cell beside its radio, and the question is
+     the label above the options' table. compbot took "A) Ashley Stafford" for the question and never answered it. -->
+<h1>Win New Pathways</h1>
+<form id="f" class="mrmform">
+  <div class="mrmField RadioClass">
+    <label>What character did Natalie Gumede play in Last Christmas?</label>
+    <table><tbody><tr>
+      <td><table><tbody><tr><td><input type="radio" name="mrm_q" value="A) Ashley Stafford"></td><td><label>A) Ashley Stafford</label></td></tr></tbody></table></td>
+      <td><table><tbody><tr><td><input type="radio" name="mrm_q" value="B) Ashley Carter"></td><td><label>B) Ashley Carter</label></td></tr></tbody></table></td>
+      <td><table><tbody><tr><td><input type="radio" name="mrm_q" value="C) Laura Ashley"></td><td><label>C) Laura Ashley</label></td></tr></tbody></table></td>
+    </tr></tbody></table>
+  </div>
+  <label>First Name* <input name="fn"></label>
+  <label>Surname* <input name="sn"></label>
+  <label>Email Address* <input name="em"></label>
+  <div class="mrmButton" onclick="go()">SUBMIT</div>
+  <p id="msg"></p>
+</form>
+<script>
+function go() {
+  const f = document.getElementById('f');
+  const q = f.querySelector('input[name=mrm_q]:checked');
+  if (!q || !f.fn.value || !f.sn.value || !f.em.value) { document.getElementById('msg').textContent = '* Required Please fix errors before proceeding'; return; }
+  document.body.innerHTML = q.value === 'B) Ashley Carter' ? '<h2>Thank you for entering</h2>' : '<h2>Sorry, that answer is wrong</h2>';
+}
+</script>
+</body></html>

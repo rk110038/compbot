@@ -120,6 +120,8 @@ def test_manual_reasons_and_selective_retry():
         "tc": _manual("m-tc", [U[0]], attempt=("tc_blocked", "T&Cs ban automated entries")),
         "login": _manual("m-login", ["https://comp.smoothradio.com/x/1"], method="account"),
         "social": _manual("m-social", [], method="social"),
+        "wronglink": _manual("m-wrong", ["https://www.futureplc.com/competition-rules/"],
+                             attempt=("wrongpage", "The link goes to the competition's rules, not the entry form")),
     }
     with session_scope() as s:
         groups, by_id = jobs.manual_breakdown(s)
@@ -127,6 +129,7 @@ def test_manual_reasons_and_selective_retry():
     assert by_id[ids["question"]] == "question" and by_id[ids["noanswer"]] == "question"
     assert by_id[ids["failed"]] == "failed" and by_id[ids["blocked"]] == "blocked" and by_id[ids["tc"]] == "tc"
     assert by_id[ids["login"]] == "login" and by_id[ids["social"]] == "social"
+    assert by_id[ids["wronglink"]] == "wronglink" and not jobs.RETRY_CATEGORIES["wronglink"]["retry"]
 
     msg = jobs.requeue_categories(["captcha", "blocked", "login"])  # login can't be retried
     assert "Re-queued" in msg

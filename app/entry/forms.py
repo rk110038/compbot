@@ -34,6 +34,8 @@ class Field:
     context: str = ""
     maxlength: int | None = None
     checked: bool = False
+    picker: bool = False     # a read-only date box filled through its calendar widget
+    link_inside: bool = False  # a drawn tick box with links inside it (ticked with a script click, see _apply)
 
     @property
     def desc(self) -> str:
@@ -87,9 +89,10 @@ AUTOCOMPLETE_MAP = {
     "country-name": "country", "sex": "gender",
 }
 
+HONEYPOT_RE = re.compile(r"honey ?pot|leave (this |it )?(field )?(blank|empty)|(do not|don ?t) (fill|complete|enter|change)")
 SKIP_RE = re.compile(
     r"company|business|organi[sz]ation|job title|user ?name|password|coupon|promo ?code|voucher code|discount code|"
-    r"card number|cvv|captcha|\bsearch\b|\bwebsite\b|\burl\b|honey ?pot|leave (this )?(blank|empty)|referr?al code")
+    r"card number|cvv|captcha|\bsearch\b|\bwebsite\b|\burl\b|referr?al code|" + HONEYPOT_RE.pattern)
 
 KEY_PATTERNS: list[tuple[str, re.Pattern]] = [(k, re.compile(p)) for k, p in [
     ("email_confirm", r"(confirm|repeat|re ?type|re ?enter|verify).{0,15}e ?mail|e ?mail.{0,15}(confirm|again|repeat|verif)"),
@@ -135,13 +138,34 @@ MARKETING_RE = re.compile(
     r"newsletter|marketing|offers|promotions?\b|\bnews\b|updates|hear (about|from|more)|keep (me )?(up to date|in "
     r"touch|informed|posted)|contact me|e ?mail me|send me|sign me up|subscribe|third ?part|partners|carefully "
     r"selected|by (e ?mail|sms|text|post|phone)|opt ?in|exclusive|discounts|latest|future communications?|"
-    r"communications? from|via (e ?mail|sms|text|post|phone)|contact you (about|with|by|via)")
+    r"communications? from|via (e ?mail|sms|text|post|phone)|contact you (about|with|by|via)|"
+    # "Receive emails from Silver Origins?" (Cornwall Living), "I'd also like to receive all emails from Yeo Valley"
+    r"receive\b.{0,25}\b(e ?mails?|newsletters?|texts?|sms|messages|communications?|information|info)\b|e ?mails? from|"
+    # Roborock: "I consent to the transfer of my personal data to Real Madrid C.F. for ... commercial communications"
+    r"commercial (communications?|messages|information|purposes)|(transfer|pass|passing|share|sharing|disclos\w*) "
+    r"(of |on )?(my |your )?(personal )?(data|details|information) (to|with)\b|\bsponsors?\b")
 # What makes a box genuinely about entering (not just "I agree ..." in front of a marketing consent).
 TERMS_CORE_RE = re.compile(
     r"terms|t ?& ?c|t s ?& ?c|\btcs\b|conditions|\brules\b|over (the age of )?1[68]|aged? 1[68]|1[68] ?(\+|or over|years)|"
     r"eligible|uk resident|resident (of|in)|i am over")
-OPTOUT_RE = re.compile(r"(do not|don ?t|not) (wish|want|like) to|opt ?out|unsubscribe|if you (do not|don ?t)|prefer not")
-THIRD_PARTY_RE = re.compile(r"third ?part|partners|carefully selected|other (companies|brands)|associated brands|sister")
+# A box you tick to *stop* marketing. Boilerplate such as "you can unsubscribe / opt out at any time" on an opt-in box
+# doesn't make it one (Yeo Valley: compbot ticked "I'd also like to receive all emails" because of it).
+OPTOUT_RE = re.compile(
+    r"(?:do not|don[' \u2019]?t|not) (?:wish|want|like) to (?:receive|be (?:contacted|sent|kept|added|signed)|hear|get|"
+    r"join|sign up|subscribe)|if you (?:do not|don[' \u2019]?t|would not|wouldn[' \u2019]?t) (?:want|wish|like)|"
+    r"(?:^|\b(?:please|i want to|i wish to|tick to|check to|click to) )opt (?:me )?out\b|\bopt (?:me )?out (?:of|from)\b|"
+    r"prefer not to (?:receive|be contacted|hear|get)|(?:tick|check) (?:this|the|here)\b.{0,25}\b(?:not|don[' \u2019]?t)"
+    r" (?:wish|want|like)")
+THIRD_PARTY_RE = re.compile(r"third ?part|partners|carefully selected|other (companies|brands)|associated brands|sister|"
+                            r"\bsponsors?\b|(transfer|pass|passing|share|sharing|disclos\w*) (of |on )?(my |your )?"
+                            r"(personal )?(data|details|information) (to|with)\b")
+# A box that opens by asking whether you'd like marketing is an opt-in, whatever boilerplate follows (Purina's ends
+# "You confirm that you are over 18 years old", which on its own reads like an eligibility box).
+OPTIN_LEAD_RE = re.compile(
+    r"^(?:yes,? )?(?:please,? )?(?:(?:click|tick|check|select)(?: (?:here|this box|the box|this))? (?:if|to confirm "
+    r"(?:that )?) )?(?:you|i)(?: would|'d|\u2019d| wish| want)?(?: like)? (?:to )?(?:receive|hear|be (?:kept|contacted|"
+    r"sent|added)|get|join|sign up|subscribe|opt in)\b|^(?:yes,? )?please,? (?:keep me|send me|sign me up|add me|"
+    r"contact me|e ?mail me)\b|^keep me (?:posted|updated|informed|in the loop)\b|^sign me up\b")
 HEAR_RE = re.compile(r"how did you (hear|find|see)|where did you (hear|see|find)|how you heard|source|referr")
 HEAR_PREFS = ["moneysavingexpert", "money saving expert", "mse", "forum", "online", "internet", "website", "web",
               "search", "other", "social", "email", "newsletter"]
@@ -170,13 +194,76 @@ SPLIT_NAME = {"first": "first_name", "forename": "first_name", "given": "first_n
 OTHER_PERSON_RE = re.compile(
     r"\b(partner|friend|guest|child|children|kid|son|daughter|baby|pet|dog|cat|nominee|nominat\w*|recipient|their|"
     r"companion|plus one|loved one|teacher|colleague|mum|dad|parent)s?\b")
-# Simple sums used as anti-spam checks are a CAPTCHA by another name, so they're left for a human.
-MATH_CHECK_RE = re.compile(r"\d+\s*(?:\+|plus|-|minus|x|×|\*|times)\s*\d+|what is (?:\d+|one|two|three|four|five)\b")
+# Simple sums used as anti-spam checks are a CAPTCHA by another name, so they're left for a human (never answered by
+# compbot or its AI). Read from the label as written: normalise() turns "-" into a space, and sites use en dashes
+# ("9 – 5 equals", Outdoors Magic) and minus signs as well as hyphens.
+_NUM = (r"(?:\d{1,3}|zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|"
+        r"sixteen|seventeen|eighteen|nineteen|twenty)")
+_MATH_OP = r"(?:\+|x|\u00d7|\*|\u00f7|plus|add(?:ed to)?|times|multiplied by|divided by|minus|take away|subtract)"
+_DASH = r"(?:-|\u2010|\u2011|\u2012|\u2013|\u2014|\u2212)"
+MATH_CHECK_RE = re.compile(
+    rf"(?<![\w.]){_NUM}\s*{_MATH_OP}\s*{_NUM}(?![\w.])|what(?:'s|\u2019s| is) {_NUM}\b|\bsum of {_NUM}\b", re.I)
+# A dash between numbers is also how ranges are written ("Age (18 - 99)"), so it's a sum only when one is asked for.
+MATH_DASH_RE = re.compile(rf"(?<![\w.]){_NUM}\s*{_DASH}\s*{_NUM}(?![\w.])", re.I)
+MATH_CUE_RE = re.compile(r"=|\bequals?\b|\bwhat(?:'s|\u2019s| is)\b|\?|\bsolve\b|\bsum\b|\banswer\b|\bcalculat", re.I)
+# Codes copied from a picture and similar "prove you're human" boxes (The Times: "The security code does not match").
+CODE_CHECK_RE = re.compile(
+    r"security code|verification code|captcha|enter the (?:code|characters|letters|text|word)s? (?:shown|above|below|"
+    r"you see|in the (?:image|picture|box))|type the (?:code|characters|letters|text)|anti ?-?spam|spam (?:check|"
+    r"protection|question)|human verification|are you (?:a )?human|prove you(?:'re| are) (?:human|not a robot)", re.I)
 GENERIC_AUTOCOMPLETE = {"full_name", "address1"}
+
+
+def _raw_label(f: Field) -> str:
+    return re.sub(r"\s+", " ", " ".join(p for p in (f.label, f.placeholder, f.aria) if p)).strip().lower()
+
+
+def is_math_check(f: Field, ctx: Ctx | None = None) -> bool:
+    raw = _raw_label(f)
+    if not raw or (ctx and ctx.answers and len(raw.split()) > 10):
+        return False  # a long quiz question that happens to contain numbers
+    return bool(MATH_CHECK_RE.search(raw) or (MATH_DASH_RE.search(raw) and MATH_CUE_RE.search(raw)))
+
+
+def is_code_check(f: Field) -> bool:
+    return bool(CODE_CHECK_RE.search(_raw_label(f)))
+
+
+# Date boxes: "DD/MM/YYYY", "MM/DD" (Klaviyo's birthday), "YYYY-MM-DD" in the placeholder or label.
+DATE_PATTERN_RE = re.compile(r"\b(dd|mm|yyyy|yy)\s*([/\-. ])\s*(dd|mm|yyyy|yy)(?:\s*\2\s*(dd|mm|yyyy|yy))?\b", re.I)
+DATE_TOKENS = {"dd": "%d", "mm": "%m", "yyyy": "%Y", "yy": "%y"}
+# One box of a date split into three ("DD" [ ] "MM" [ ] "YYYY" [ ] under "Date of birth").
+DOB_PARTS = {"dd": "dob_day", "day": "dob_day", "mm": "dob_month", "month": "dob_month", "yyyy": "dob_year",
+             "yy": "dob_year", "year": "dob_year"}
+BIRTH_RE = re.compile(r"birth|\bdob\b|\bbday\b|\bborn\b|d\.?o\.?b")
+
+
+def date_format(hint: str) -> str | None:
+    """The strftime format a date box asks for, from its placeholder or label ("MM/DD" -> "%m/%d"), else None."""
+    m = DATE_PATTERN_RE.search(hint or "")
+    if not m:
+        return None
+    tokens = [t.lower() for t in (m.group(1), m.group(3), m.group(4)) if t]
+    if len({t[0] for t in tokens}) != len(tokens):
+        return None  # "dd dd" etc.
+    return m.group(2).join(DATE_TOKENS[t] for t in tokens)
+
+
+def _date_hint(f: Field) -> str:
+    return " ".join(p for p in (f.placeholder, f.label, f.aria) if p)
 
 
 def _label_text(f: Field) -> str:
     return normalise(" ".join(p for p in [f.label, f.placeholder, f.aria] if p))
+
+
+def _visible_profile_key(f: Field) -> str | None:
+    """The profile detail named by what the field shows you (its label or placeholder), if any."""
+    vis = normalise(" ".join(p for p in (f.label, f.placeholder) if p))
+    core = re.sub(r"\s+", " ", re.sub(r"[*?:()]+|\brequired\b", " ", vis)).strip()
+    if not core or OTHER_PERSON_RE.search(core):
+        return None
+    return SPLIT_NAME.get(core) or _key_from_text(core)
 
 
 def _key_from_text(d: str) -> str | None:
@@ -195,6 +282,13 @@ def detect_profile_key(f: Field) -> str | None:
     if core in SPLIT_NAME:
         return SPLIT_NAME[core]
     d = f.desc
+    birthish = bool(BIRTH_RE.search(d) or BIRTH_RE.search(normalise(f.context[:300])))
+    ph = re.sub(r"\s+", " ", re.sub(r"[*?:()]+", " ", normalise(f.placeholder))).strip()
+    part = DOB_PARTS.get(ph) or DOB_PARTS.get(core)
+    if part and birthish and f.type not in ("email", "tel"):
+        return part  # one box of a date of birth split into three (Cornwall Living)
+    if f.type != "date" and birthish and date_format(_date_hint(f)):
+        return "dob"  # a whole date in the format its placeholder shows ("MM/DD" birthday, 58 & Co)
     if f.type == "email":
         return "email_confirm" if KEY_PATTERNS[0][1].search(d) else "email"
     if f.type == "tel":
@@ -277,20 +371,20 @@ def profile_value(key: str, p: dict, f: Field | None = None) -> str:
     if key == "dob":
         if not dob:
             return ""
-        hint = (f.placeholder + " " + f.label).lower() if f else ""
-        if f and f.type == "date" or "yyyy-mm-dd" in hint:
+        if f and f.type == "date":
             return dob.isoformat()
-        if "mm/dd" in hint:
-            return dob.strftime("%m/%d/%Y")
-        if "dd-mm" in hint:
-            return dob.strftime("%d-%m-%Y")
-        return dob.strftime("%d/%m/%Y")
-    if key == "dob_day":
-        return str(dob.day) if dob else ""
-    if key == "dob_month":
-        return str(dob.month) if dob else ""
-    if key == "dob_year":
-        return str(dob.year) if dob else ""
+        return dob.strftime((date_format(_date_hint(f)) if f else None) or "%d/%m/%Y")
+    if key in ("dob_day", "dob_month", "dob_year"):
+        if not dob:
+            return ""
+        hint = _date_hint(f).lower() if f else ""
+        if key == "dob_day":
+            return f"{dob.day:02d}" if re.search(r"\bdd\b", hint) else str(dob.day)
+        if key == "dob_month":
+            return f"{dob.month:02d}" if re.search(r"\bmm\b", hint) else str(dob.month)
+        if re.search(r"\byy\b", hint) and not re.search(r"\byyyy\b", hint):
+            return f"{dob.year % 100:02d}"
+        return str(dob.year)
     if key == "age":
         if not dob:
             return ""
@@ -403,6 +497,9 @@ def map_checkbox(f: Field, ctx: Ctx) -> Action:
     is_terms, is_mkt, optout = bool(TERMS_RE.search(d)), bool(MARKETING_RE.search(d)), bool(OPTOUT_RE.search(d))
     if is_mkt and is_terms and not TERMS_CORE_RE.search(d):
         is_terms = False  # "I agree that my details may be used for future communication by email" is marketing
+    elif is_mkt and is_terms and OPTIN_LEAD_RE.search(label) and not TERMS_CORE_RE.search(
+            normalise(re.split(r"(?<=[.!?])\s+", f.label.strip(), maxsplit=1)[0])):
+        is_terms = False  # Purina: "Click if you would like to receive offers... You confirm that you are over 18."
     if optout:
         return Action("uncheck" if ctx.want_marketing else "check", source="rule", note="marketing opt-out box")
     if is_mkt and not is_terms:
@@ -428,6 +525,17 @@ def map_choice(f: Field, ctx: Ctx) -> Action:
         if TERMS_RE.search(about) and not (MARKETING_RE.search(about) and not TERMS_RE.search(normalise(f.label))):
             return Action(kind, real[0].get("idx") or real[0].get("value"), source="rule", note="terms / consent")
     key = detect_profile_key(f)
+    if key == "age" or AGE_GROUP_RE.search(label_d):
+        # "Age: 18-24 / 25-34 / ..." is answered from your date of birth, never guessed (the AI picked 18-24, 58 & Co).
+        bands = [(o, age_band(o.get("text", ""))) for o in real]
+        if any(b for _, b in bands):
+            age = profile_age(ctx.profile)
+            if age is None:
+                return Action("unknown", note="profile has no date of birth (for the age group)")
+            o = next((o for o, b in bands if b and b[0] <= age <= b[1]), None)
+            if o:
+                return Action(kind, o.get("idx") or o.get("value"), source="age", note="age group from your date of birth")
+            return Action("unknown" if f.required else "skip", note="no age group for your age")
     if key in {"title", "country", "county", "gender", "dob_day", "dob_month", "dob_year"} or (
             key in {"town"} and f.options):
         o = choose_option(f.options, option_candidates(key, ctx.profile))
@@ -487,9 +595,6 @@ def map_text(f: Field, ctx: Ctx) -> Action:
         return Action("unknown" if f.required and f.type == "file" else "skip", note=f"{f.type} field")
     key = None
     label = _label_text(f)
-    if MATH_CHECK_RE.search(label) and (not ctx.answers or len(label.split()) <= 6):
-        # "9 + 3 equals" is a CAPTCHA by another name, even on a comp whose question has a known answer.
-        return Action("unknown", note="captcha: maths anti-spam check")
     if OTHER_PERSON_RE.search(label) and re.search(r"name|e ?mail|phone|number|address", label):
         return Action("unknown" if f.required else "skip", note="asks for someone else's details")
     ac = (f.autocomplete or "").strip().lower().split()
@@ -502,7 +607,13 @@ def map_text(f: Field, ctx: Ctx) -> Action:
             return Action("fill", ans, source="answer")
         return Action("unknown" if f.required else "skip", note="question with no known answer")
     elif SKIP_RE.search(d):
-        return Action("skip", note="not needed")
+        # A stray aria-label or title ("Enter search query" on every one of Purina's boxes) doesn't outweigh a visible
+        # "First name" label - unless the field's own label, placeholder or name says to skip it too, or it's a trap
+        # for bots ("leave this blank").
+        inner = normalise(" ".join(p for p in (f.label, f.placeholder, f.name, f.id) if p))
+        key = None if SKIP_RE.search(inner) or HONEYPOT_RE.search(d) else _visible_profile_key(f)
+        if not key:
+            return Action("skip", note="not needed")
     else:
         key = detect_profile_key(f)
     if key:
@@ -524,9 +635,42 @@ def map_text(f: Field, ctx: Ctx) -> Action:
 def map_field(f: Field, ctx: Ctx) -> Action:
     if f.tag == "input" and f.type == "checkbox":
         return map_checkbox(f, ctx)
+    if is_math_check(f, ctx):
+        # "9 + 3 equals" is a CAPTCHA by another name, as a box or a list of answers.
+        return Action("unknown", note="captcha: maths anti-spam check")
+    if f.tag in ("input", "textarea") and is_code_check(f):
+        return Action("unknown", note="captcha: a security code to copy")
     if f.tag in ("select", "radio"):
         return map_choice(f, ctx)
     return map_text(f, ctx)
+
+
+AGE_GROUP_RE = re.compile(r"^age\b|\bage ?(group|range|bracket|band)s?\b|how old")
+
+
+def profile_age(p: dict) -> int | None:
+    dob = _parse_dob(p)
+    if not dob:
+        return None
+    t = date.today()
+    return t.year - dob.year - ((t.month, t.day) < (dob.month, dob.day))
+
+
+def age_band(text: str) -> tuple[int, int] | None:
+    """'18-24' / '25 to 34' / '65+' / '55 and over' / 'Under 18' -> (lowest, highest) age, else None."""
+    t = (text or "").lower()
+    m = re.search(r"(\d{1,3})\s*(?:-|\u2010|\u2011|\u2012|\u2013|\u2014|\u2212|to)\s*(\d{1,3})", t)
+    if m:
+        return int(m.group(1)), int(m.group(2))
+    m = re.search(r"(\d{1,3})\s*\+|(\d{1,3})\s*(?:years?|yrs?)?\s*(?:and|or|&)\s*(?:over|above|older|up)|"
+                  r"(?:over|above|older than)\s*(\d{1,3})", t)
+    if m:
+        return int(next(g for g in m.groups() if g)), 200
+    m = re.search(r"(?:under|below|less than|younger than)\s*(\d{1,3})", t)
+    if m:
+        return 0, int(m.group(1)) - 1
+    m = re.fullmatch(r"\s*(\d{1,3})\s*", t)
+    return (int(m.group(1)), int(m.group(1))) if m else None
 
 
 def plan_form(fields: list[Field], ctx: Ctx) -> list[tuple[Field, Action]]:

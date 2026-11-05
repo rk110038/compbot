@@ -520,3 +520,96 @@ def test_off_screen_carousel_slides_stay_hidden(browser):
         assert vis == [True, False, True], vis
     finally:
         page.close()
+def test_newsletter_already_on_the_page_is_not_step_two(browser, fixture_server, profile):
+    # Ecohome: after the entry was sent, the sidebar's newsletter sign-up was filled in and sent as "step 2" (and its
+    # "already subscribed" reply was then read as the entry being confirmed).
+    res = browser.enter(f"{fixture_server}/nl_sidebar.html", Ctx(profile=profile), _settings(entry_mode="auto"), "nl1", {})
+    assert res.result == "unverified", (res.result, res.message, res.details["steps"])
+    assert "step 2: skipped a form that was already on the page" in res.details["steps"]
+    assert not any("SIGN UP" in s for s in res.details["steps"])
+    assert not any(f["label"].startswith("Your") for f in res.details["fields"])
+
+
+def test_newsletter_pop_up_after_the_entry_is_not_step_two(browser, fixture_server, profile):
+    # Dengie: a newsletter pop-up that came up once the entry was sent was signed up to as "step 2".
+    res = browser.enter(f"{fixture_server}/nl_popup.html", Ctx(profile=profile), _settings(entry_mode="auto"), "nl2", {})
+    assert res.result == "unverified", (res.result, res.message, res.details["steps"])
+    assert "step 2: skipped a newsletter sign-up" in res.details["steps"]
+    assert not any("Sign up" in s for s in res.details["steps"])
+
+
+def test_form_asking_for_a_password_needs_an_account(browser, fixture_server, profile):
+    # Yeo Valley's Yeokens: step 2 asks you to choose a password.
+    res = browser.enter(f"{fixture_server}/account_step.html", Ctx(profile=profile), _settings(entry_mode="auto"), "ac1", {})
+    assert res.result == "login" and "password" in res.message and "step 2" in res.message, res.message
+
+
+def test_security_code_refusal_is_a_captcha(browser, fixture_server, profile):
+    # The Times (Formstack): "ERROR: The security code does not match." is its hidden reCAPTCHA saying no.
+    res = browser.enter(f"{fixture_server}/security_code.html", Ctx(profile=profile), _settings(entry_mode="auto"), "sc1", {})
+    assert res.result == "captcha" and "security code does not match" in res.message, res.message
+
+
+def test_winners_page_link_goes_to_you(browser, fixture_server, profile):
+    # SheerLuxe: the listing linked to /competition-winners; reported as "No entry form found" and retried.
+    res = browser.enter(f"{fixture_server}/competition-winners.html", Ctx(profile=profile), _settings(entry_mode="auto"),
+                        "wp1", {})
+    assert res.result == "wrongpage" and "winners page" in res.message, res.message
+
+
+def test_quiz_options_labelled_beside_their_radios(browser, fixture_server, profile):
+    # Doctor Who Magazine: the question was taken from the first option ("A) Ashley Stafford") and never answered.
+    ctx = Ctx(profile=profile, answers=["Ashley Carter"])
+    res = browser.enter(f"{fixture_server}/table_radios.html", ctx, _settings(entry_mode="auto"), "tr1", {})
+    assert res.result == "entered", (res.message, res.details["fields"])
+    q = next(f for f in res.details["fields"] if f["source"] == "answer")
+    assert q["label"].startswith("What character did Natalie Gumede play"), q
+
+
+def test_date_of_birth_set_through_its_date_picker(browser, fixture_server, profile):
+    # Brains: a read-only flatpickr box was skipped, so the site said "Date of birth is required".
+    res = browser.enter(f"{fixture_server}/date_picker.html", Ctx(profile=profile), _settings(entry_mode="auto"), "dp1", {})
+    assert res.result == "entered", (res.message, res.details["fields"])
+    assert any(f["source"] == "dob" and f["ok"] for f in res.details["fields"])
+
+
+def test_spin_the_wheel_is_the_entry_button(browser, fixture_server, profile):
+    # Free Spin Daily: no submit button - you click the wheel.
+    res = browser.enter(f"{fixture_server}/spin_wheel.html", Ctx(profile=profile), _settings(entry_mode="dry_run"), "sw1", {})
+    assert res.result == "dry_run_ok" and "the prize wheel" in res.message, res.message
+    res = browser.enter(f"{fixture_server}/spin_wheel.html", Ctx(profile=profile), _settings(entry_mode="auto"), "sw2", {})
+    assert res.result == "entered" and "won five entries" in res.message, (res.message, res.details["steps"])
+
+
+def test_web_component_fields_and_redrawn_tick_boxes(browser, fixture_server, profile):
+    # Roborock: email box and tick boxes inside shadow roots; the terms box redraws itself and has links inside it.
+    res = browser.enter(f"{fixture_server}/web_components.html", Ctx(profile=profile), _settings(entry_mode="auto"),
+                        "wc1", {})
+    assert res.result == "entered" and "sharing your data" not in res.message, (res.message, res.details)
+    acts = {f["label"][:20]: f["action"] for f in res.details["fields"]}
+    assert acts["I agree to the Priva"] == "check" and acts["I consent to the tra"] == "uncheck", acts
+
+
+def test_pop_up_frame_over_the_button_is_moved_aside(browser, fixture_server, profile):
+    # Warren James: a full-screen sign-up <iframe> covered "enter now", whose own click handler sends the entry.
+    res = browser.enter(f"{fixture_server}/iframe_overlay.html", Ctx(profile=profile), _settings(entry_mode="auto"),
+                        "io1", {})
+    assert res.result == "entered", (res.result, res.message, res.details["steps"])
+
+
+def test_site_consent_comes_before_the_embeds_own_button(browser, fixture_server, profile):
+    # Gardener's World: pressing the Riddle embed's "Accept and continue" while the site's consent dialog was open
+    # lost the consent, so the entry form never loaded ("No entry form found").
+    res = browser.enter(f"{fixture_server}/embed_placeholder.html", Ctx(profile=profile), _settings(entry_mode="dry_run"),
+                        "ep1", {})
+    assert res.result == "dry_run_ok", (res.result, res.message, res.details)
+    assert res.details["cookies"] == ["Accept All & Continue"], res.details["cookies"]
+
+
+def test_next_question_that_comes_up_by_itself(browser, fixture_server, profile):
+    # Great British Life's Typeform: picking the answer brings up the next question; there's no button until the end.
+    ctx = Ctx(profile=profile, answers=["Foregate Street"])
+    res = browser.enter(f"{fixture_server}/one_at_a_time.html", ctx, _settings(entry_mode="auto"), "oa1", {})
+    assert res.result == "entered", (res.message, res.details["steps"])
+    assert "step 1: the next question came up by itself" in res.details["steps"], res.details["steps"]
+    assert [f["source"] for f in res.details["fields"]] == ["answer", "full_name", "email"], res.details["fields"]

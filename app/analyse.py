@@ -70,7 +70,12 @@ WIDGET_DOMAINS = {
 APP_DOMAINS = {"apple.com", "google.com"}
 IMAGE_EXT = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".pdf")
 COMP_URL_HINT = re.compile(r"win|comp|competition|giveaway|prize|enter|draw|promo|sweep|contest|quiz|form", re.I)
-NON_ENTRY_URL_HINT = re.compile(r"terms|conditions|privacy|\bt-?and-?c|tandc|\bt-?cs?\b|/rules\b|policy|cookie", re.I)
+NON_ENTRY_URL_HINT = re.compile(
+    r"terms|conditions|privacy|\bt-?and-?c|tandc|\bt-?cs?\b|/rules\b|policy|cookie|"
+    # Future plc's /competition-rules/, SheerLuxe's /competition-winners: about a competition, not its entry form.
+    r"(?:competition|comp|contest|giveaway|promotion|promo|prize[-_]?draw|official|entry|game)[-_]rules\b|"
+    r"(?:^|/)(?:(?:competition|comp|prize|previous|past|our|recent|latest|giveaway)[-_])?winners?(?:[-_](?:list|page))?/?$",
+    re.I)
 IMAGE_HOSTS = {"ibb.co", "imgur.com", "postimg.cc", "postimages.org", "prnt.sc", "gyazo.com", "imgbb.com",
                "tinypic.com", "photobucket.com", "flickr.com"}
 # The shared magazine competition platform behind most "(MD)" threads (comps.<magazine>/competition/<slug>/<n>.php)
@@ -80,7 +85,9 @@ BOT_BLOCKED_URL_RE = re.compile(r"^https?://(?:comps?|competitions)\.[^/]+/compe
 ACCOUNT_URL_RE = re.compile(
     r"https?://(?:[a-z0-9-]+\.)*(?:globalplayer\.com|smoothradio\.com|capitalfm\.com|capitalxtra\.com|heart\.co\.uk|"
     r"classicfm\.com|radiox\.co\.uk|lbc\.co\.uk|goldradiouk\.com)/|britishairways\.com/content/the-british-airways-club|"
-    r"//profile\.[^/]+/|marksandspencer\.com/mysparks|itv\.com/win/|/my-?account/|/account/(?:prize|rewards|login)",
+    r"//profile\.[^/]+/|marksandspencer\.com/mysparks|itv\.com/win/|/my-?account/|/account/(?:prize|rewards|login)|"
+    # A sign-in page (auth.pumpkinspicecafegame.com/login): the entry is behind an account.
+    r"^https?://(?:auth|login|signin|sso|accounts?)\.[^/]+/|^https?://[^/?#]+(?:/[^?#]*)?/(?:log-?in|sign-?in)(?:[/?#.]|$)",
     re.I)
 
 

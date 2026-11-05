@@ -13,10 +13,12 @@ import re
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
 
 from .. import llm, websearch
+from ..analyse import ACCOUNT_URL_RE
 from ..config import get_config
 from ..netguard import guarded_client, is_public_url
 from .forms import (
@@ -29,6 +31,7 @@ from .forms import (
     choose_option,
     find_automation_clause,
     is_placeholder_option,
+    looks_like_question,
     normalise,
     plan_form,
 )
@@ -118,7 +121,7 @@ JS_EXTRACT = "(prefix) => {\n" + JS_HELPERS + r"""
     if (!t && el.parentElement) { const pt = txt(el.parentElement); if (pt.length < 150) t = pt; }
     return t.slice(0, 300);
   };
-  const ctxText = (el) => { let n = el.parentElement; for (let i = 0; i < 4 && n; i++) { const t = txt(n); if (t.length > 40) return t.slice(0, 400); n = n.parentElement; } return ''; };
+  const ctxText = (el) => { const up = n => n.parentElement || (n.getRootNode && n.getRootNode().host) || null; let n = up(el); for (let i = 0; i < 4 && n; i++) { const t = txt(n); if (t.length > 40) return t.slice(0, 400); n = up(n); } return ''; };
   const isReq = (el, label) => el.required || el.getAttribute('aria-required') === 'true' || /\*\s*$|\(required\)/i.test(label || '');
   const CHROME = 'header, nav, footer, [role=banner], [role=navigation], [role=contentinfo], [role=search], #footer, .footer, [id*=site-footer i], [class*=site-footer i], [class*=page-footer i], [id*=page-footer i]';
   const choiceVis = (el) => vis(el) || (el.labels && Array.from(el.labels).some(vis)) || vis(el.closest('label')) || vis(el.parentElement);
@@ -137,7 +140,11 @@ JS_EXTRACT = "(prefix) => {\n" + JS_HELPERS + r"""
       if (root === document.body && __cbClosest(el, CHROME)) continue;
       const type = (el.tagName === 'INPUT' ? (el.getAttribute('type') || 'text') : el.tagName).toLowerCase();
       if (['hidden', 'submit', 'button', 'image', 'reset'].includes(type)) continue;
-      if (el.disabled || el.readOnly) continue;
+      // A date picker's box is read-only: you pick from its calendar (Brains' flatpickr date of birth). compbot sets
+      // the date through the picker itself.
+      const fpk = el._flatpickr || (el.previousElementSibling && el.previousElementSibling._flatpickr) || null;
+      const picker = el.readOnly && type === 'text' && !el.disabled && !!(fpk || /flatpickr|datepicker|date-picker|hasDatepicker|pikaday/i.test(typeof el.className === 'string' ? el.className : ''));
+      if (el.disabled || (el.readOnly && !picker)) continue;
       const choice = type === 'radio' || type === 'checkbox';
       if (choice ? !choiceVis(el) : !vis(el)) continue;
       let idx = el.getAttribute('data-cb-idx');
@@ -151,12 +158,15 @@ JS_EXTRACT = "(prefix) => {\n" + JS_HELPERS + r"""
           if (rg) { gl = rg.getAttribute('aria-label') || ''; const lb = rg.getAttribute('aria-labelledby'); if (!gl && lb) gl = lb.split(/\s+/).map(id => txt(__cbById(rg, id))).join(' ').trim(); }
           if (!gl) {
             // The smallest container holding just this group: use its own question label, not an option label.
-            const isOptionLabel = l => l.querySelector('input') || (l.htmlFor && (__cbById(l, l.htmlFor) || {}).type === 'radio') || (l.closest('label') && l.closest('label').querySelector('input[type=radio]'));
+            // Doctor Who Magazine puts each option's <label> (no "for") in the table cell beside its radio, and the
+            // question just above the options' table.
+            const isOptionLabel = l => l.querySelector('input') || (l.htmlFor && (__cbById(l, l.htmlFor) || {}).type === 'radio') || (l.closest('label') && l.closest('label').querySelector('input[type=radio]')) || (() => { const row = l.closest('tr, li') || l.parentElement; return !!(row && row.querySelectorAll('input[type=radio]').length === 1); })();
             let n = el.parentElement;
-            for (let i = 0; i < 6 && n; i++) {
+            for (let i = 0; i < 9 && n; i++) {
               const rs = Array.from(n.querySelectorAll('input[type=radio]'));
               if (rs.length > 1 && rs.every(r => r.name === el.name)) {
-                const lab = Array.from(n.querySelectorAll('legend, label, [class*=label i]')).find(l => !isOptionLabel(l) && !l.querySelector('input[type=radio]') && txt(l));
+                const optTexts = new Set(rs.map(r => String(r.value || '').replace(/\s+/g, ' ').trim().toLowerCase()).filter(Boolean));
+                const lab = Array.from(n.querySelectorAll('legend, label, [class*=label i]')).find(l => !isOptionLabel(l) && !l.querySelector('input[type=radio]') && txt(l) && !optTexts.has(txt(l).toLowerCase()));
                 if (lab) { gl = txt(lab); break; }
                 let prev = n.previousElementSibling;
                 if (prev && txt(prev) && txt(prev).length < 300 && !prev.querySelector('input,select,textarea')) { gl = txt(prev); break; }
@@ -193,10 +203,10 @@ JS_EXTRACT = "(prefix) => {\n" + JS_HELPERS + r"""
         if (el.checked) groups[key].checked = true;
         continue;
       }
-      const f = {idx, tag: el.tagName.toLowerCase(), type, name: el.name || '', id: el.id || '', label,
+      const f = {idx, tag: el.tagName.toLowerCase(), type: fpk && picker ? 'date' : type, name: el.name || '', id: el.id || '', label,
         placeholder: el.getAttribute('placeholder') || '', autocomplete: el.getAttribute('autocomplete') || '',
         aria: el.getAttribute('aria-label') || '', required: isReq(el, label), options: [], context: ctxText(el),
-        maxlength: el.maxLength > 0 ? el.maxLength : null, checked: !!el.checked};
+        maxlength: el.maxLength > 0 ? el.maxLength : null, checked: !!el.checked, picker};
       if (type === 'checkbox' && el.name) {
         // A group of checkboxes ("What are you interested in? [ ] MTB [ ] Moto"): use the group's own question.
         const same = Array.from(el.getRootNode().querySelectorAll('input[type=checkbox]')).filter(c => c.name === el.name);
@@ -231,7 +241,17 @@ JS_EXTRACT = "(prefix) => {\n" + JS_HELPERS + r"""
       if (!ariaGroups.has(box)) ariaGroups.set(box, []);
       ariaGroups.get(box).push(el);
     }
-    const markIdx = o => { let i = o.getAttribute('data-cb-idx'); if (!i) { i = prefix + (counter++); o.setAttribute('data-cb-idx', i); } return i; };
+    const markIdx = o => {
+      // A web component may redraw its box when clicked (Roborock's <ro-checkbox>), losing the mark: the component
+      // keeps it (data-cb-hidx), so the redrawn box gets the same one back.
+      const h = o.getRootNode && o.getRootNode().host;
+      const single = !!(h && h.shadowRoot && h.shadowRoot.querySelectorAll('[role=radio], [role=checkbox]').length === 1);
+      let i = o.getAttribute('data-cb-idx') || (single && h.getAttribute('data-cb-hidx')) || '';
+      if (!i) i = prefix + (counter++);
+      o.setAttribute('data-cb-idx', i);
+      if (single) h.setAttribute('data-cb-hidx', i);
+      return i;
+    };
     for (const [box, els] of ariaGroups) {
       const item = box.closest('[role=listitem]') || box.parentElement;
       let q = '';
@@ -240,15 +260,17 @@ JS_EXTRACT = "(prefix) => {\n" + JS_HELPERS + r"""
       if (!q) q = (box.getAttribute('aria-label') || '').trim();
       if (!q && item) { const h = item.querySelector('[role=heading], legend, h1, h2, h3, h4, h5'); if (h) q = txt(h); }
       if (!q) { const prev = box.previousElementSibling; if (prev && txt(prev).length < 300) q = txt(prev); }
-      const req = /\*\s*$/.test(q) || box.getAttribute('aria-required') === 'true' || !!(item && item.querySelector('[aria-label*="required" i]'));
-      const optText = o => (o.getAttribute('aria-label') || o.getAttribute('data-value') || txt(o) || '').trim();
+      const req = /\*\s*$/.test(q) || box.getAttribute('aria-required') === 'true' || !!(item && item.querySelector('[aria-label*="required" i]')) || (() => { const h = box.getRootNode && box.getRootNode().host; return !!(h && (h.hasAttribute('required') || h.getAttribute('aria-required') === 'true')); })();
+      // aria-label, else the value when it says something (Google Forms), else the words shown: Roborock's tick boxes
+      // carry data-value="yes" and show "I agree to the Privacy Policy and Terms and Conditions."
+      const optText = o => { const a = (o.getAttribute('aria-label') || '').trim(); if (a) return a; const dv = (o.getAttribute('data-value') || '').trim(); if (dv && !/^(yes|no|true|false|on|off|y|n|1|0)$/i.test(dv)) return dv; return (txt(o) || dv).trim(); };
       const isOn = o => o.getAttribute('aria-checked') === 'true';
       if (els.length === 1 && els[0].getAttribute('role') === 'checkbox') {
         const o = els[0], ot = optText(o);
         fields.push({idx: markIdx(o), tag: 'input', type: 'checkbox', name: '', id: o.id || '',
           label: (ot + (q && !ot.includes(q) ? ' - ' + q : '')).slice(0, 300), placeholder: '', autocomplete: '',
           aria: o.getAttribute('aria-label') || '', required: req, options: [], context: q.slice(0, 300), maxlength: null,
-          checked: isOn(o)});
+          checked: isOn(o), linkInside: !!o.querySelector('a[href], a')});
         continue;
       }
       const g = {idx: markIdx(els[0]), tag: 'radio', type: 'radio', name: '', id: box.id || '', label: q.slice(0, 300),
@@ -297,16 +319,20 @@ JS_MARK_SUBMIT = "(idx) => {\n" + JS_HELPERS + r"""
   const vis = __cbVis, txt = __cbTxt;
   __cbAll(document, '[data-cb-submit]').forEach(e => e.removeAttribute('data-cb-submit'));
   const el = __cbOne(`[data-cb-idx="${idx}"]`);
+  // The field just filled has gone (a one-question-at-a-time form moved on by itself, Typeform): the button now on
+  // screen belongs to the next question, so don't take it for this one's. compbot looks for the new question instead.
+  const shown = e => vis(e) || (e.labels && Array.from(e.labels).some(vis)) || vis(e.closest('label')) || vis(e.parentElement);
+  if (el && !shown(el)) return null;
   const good = /^(enter|submit|send|sign ?up|subscribe|register|join|go|count me in|take part|enter now|enter competition|enter the (competition|draw|prize draw)|submit entry|enter draw|i'?m in|done|continue|next|confirm|win|enter to win|let'?s go|play|ok)\b/i;
   const bad = /cancel|reset|back|close|log ?in|sign ?in|search|menu|cookie|accept all|reject|share|facebook|twitter|instagram|print|basket|cart/i;
   // Link-style buttons count too, e.g. Wayin/Cheetah forms' <a class="xCTA xButton">Submit</a> (Future plc comps), and
   // script-driven <div>s, e.g. Doctor Who Magazine's <div class="mrmButton" onclick=...>SUBMIT</div>.
   const SEL = 'button, input[type=submit], input[type=image], input[type=button], [role=button], a.button, a.btn, a[class*=button i], a[class*=btn i], a[class*=cta i], div[onclick], span[onclick], div[class*=button i], div[class*=btn i], div[class*=submit i], span[class*=button i]';
-  const form = el ? (el.form || el.closest('form')) : null;
+  const form = el ? (el.form || __cbClosest(el, 'form')) : null;
   // Another form's button: one whose own form has fields of its own and not ours (the footer newsletter, say).
   const otherForm = b => {
-    const f = b.form || b.closest('form');
-    if (!f || !el || f === form || f.contains(el)) return false;
+    const f = b.form || __cbClosest(b, 'form');
+    if (!f || !el || f === form || __cbContains(f, el)) return false;
     return Array.from(f.querySelectorAll('input:not([type=hidden]), textarea, select')).some(vis);
   };
   const after = b => !!(el && (el.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING));
@@ -327,10 +353,12 @@ JS_MARK_SUBMIT = "(idx) => {\n" + JS_HELPERS + r"""
     return s;
   };
   // The field's own form first, then wider and wider boxes around the field until a likely submit button turns up
-  // (Great British Chefs has no <form>; Riddle puts "Submit and continue" in a <form> of its own).
+  // (Great British Chefs has no <form>; Riddle puts "Submit and continue" in a <form> of its own). A field drawn
+  // inside a web component (Roborock's email box) climbs out of its shadow root to the form around it.
+  const up = n => n.parentElement || (n.getRootNode && n.getRootNode().host) || null;
   const roots = [];
   if (form) roots.push(form);
-  for (let n = el && el.parentElement, i = 0; n && i < 12; n = n.parentElement, i++) if (!roots.includes(n)) roots.push(n);
+  for (let n = el && up(el), i = 0; n && i < 12; n = up(n), i++) if (!roots.includes(n)) roots.push(n);
   if (!roots.length) roots.push(document.body);
   let best = null, bestScore = -99;
   for (const root of roots) {
@@ -339,18 +367,40 @@ JS_MARK_SUBMIT = "(idx) => {\n" + JS_HELPERS + r"""
     if (rb && (rs >= 5 || (root === form && rs >= 0))) { best = rb; bestScore = rs; break; }
     if (rs > bestScore) { best = rb; bestScore = rs; }
   }
-  if (!best || bestScore < (best && form && form.contains(best) ? 0 : 2)) return null;
+  if (!best || bestScore < (best && form && __cbContains(form, best) ? 0 : 2)) {
+    // A spin-to-win wheel is the entry's own button: Free Spin Daily's form has no submit button, you click its wheel
+    // (an <svg>) once your email is in. Only a big drawing that's meant to be clicked (it shows a hand pointer), inside
+    // the entry form or in a box that says it's a wheel.
+    const big = w => { const r = w.getBoundingClientRect(); return vis(w) && r.width >= 120 && r.height >= 120; };
+    const wheelish = w => !!__cbClosest(w, '[id*=wheel i], [class*=wheel i], [id*=spin i], [class*=spin i]');
+    const pointer = w => [w].concat(Array.from(w.querySelectorAll('*')).slice(0, 400)).some(e => getComputedStyle(e).cursor === 'pointer');
+    const pool = form ? __cbAll(form, 'svg, canvas') : roots.slice(0, 6).flatMap(r => __cbAll(r, 'svg, canvas'));
+    const wheel = pool.find(w => big(w) && !(w.parentElement && w.parentElement.closest('svg')) && pointer(w) && (form || wheelish(w)));
+    if (!wheel) return null;
+    wheel.setAttribute('data-cb-submit', '1');
+    return 'the prize wheel';
+  }
   best.setAttribute('data-cb-submit', '1');
   return (txt(best) || best.value || 'submit').slice(0, 60);
 }
 """
 
 JS_SET_CHECKED = "([idx, want]) => {\n" + JS_HELPERS + r"""
-  const el = __cbOne(`[data-cb-idx="${idx}"]`);
+  let el = __cbOne(`[data-cb-idx="${idx}"]`);
+  if (!el) {
+    // Redrawn after a click (Roborock's tick boxes): find the box again through the web component holding it.
+    const h = __cbOne(`[data-cb-hidx="${idx}"]`);
+    el = h && h.shadowRoot && h.shadowRoot.querySelector('[role=checkbox], [role=radio]');
+    if (el) el.setAttribute('data-cb-idx', idx);
+  }
   if (!el) return false;
   if (el.tagName !== 'INPUT' && el.hasAttribute('role')) {  // ARIA tick box / radio (Google Forms): click until it agrees
-    if ((el.getAttribute('aria-checked') === 'true') !== want) el.click();
-    return (el.getAttribute('aria-checked') === 'true') === want;
+    // Read it afresh each time: a web component may redraw the box when it's clicked.
+    const cur = () => { const h = __cbOne(`[data-cb-hidx="${idx}"]`); return (h && h.shadowRoot && h.shadowRoot.querySelector('[role=checkbox], [role=radio]')) || el; };
+    if ((cur().getAttribute('aria-checked') === 'true') !== want) cur().click();
+    const now = cur();
+    now.setAttribute('data-cb-idx', idx);
+    return (now.getAttribute('aria-checked') === 'true') === want;
   }
   if (el.checked !== want) { const l = el.labels && el.labels[0]; (l || el).click(); }
   if (el.checked !== want && el.type === 'checkbox') { el.click(); }
@@ -392,7 +442,17 @@ JS_COOKIES = "(acceptMode) => {\n" + JS_HELPERS + r"""
   const framey = window !== window.top && /sp_message|consent|cookie|privacy-mgmt|cmp/i.test(location.href);
   // Never press a button belonging to a real form (one with text/email fields): that could submit an entry.
   const inEntryForm = b => { const f = b.closest('form'); return !!(f && f.querySelector('input[type=text],input[type=email],input:not([type]),textarea')); };
-  const btns = Array.from(document.querySelectorAll('button, [role=button], a, input[type=button]')).filter(b => vis(b) && !inEntryForm(b));
+  // Nor an embed's own "Want to see this content? [Accept and continue]" placeholder (reveal_consented_embed's job):
+  // pressed while the site's consent dialog is still open, it loses the consent and Gardener's World's Riddle entry
+  // form never loads.
+  const embedPh = /want to see this content|this content is (blocked|hidden|not available)|to (view|see|load|display) this content/i;
+  const inEmbedPlaceholder = b => {
+    if (framey) return false;
+    if (b.closest('[class*=placeholder i]')) return true;
+    for (let n = b.parentElement, i = 0; n && i < 4; n = n.parentElement, i++) { const t = __cbTxt(n); if (t.length < 700 && embedPh.test(t)) return true; }
+    return false;
+  };
+  const btns = Array.from(document.querySelectorAll('button, [role=button], a, input[type=button]')).filter(b => vis(b) && !inEntryForm(b) && !inEmbedPlaceholder(b));
   for (const re of (acceptMode ? [accept] : [reject, accept])) {
     for (const b of btns) {
       const t = (b.innerText || b.value || '').replace(/\s+/g, ' ').trim();
@@ -762,14 +822,40 @@ JS_CLOSE_POPUPS = "() => {\n" + JS_HELPERS + r"""
 """
 
 # Last resort when a covering element swallows real clicks: activate the button directly (as its own script would).
+# A script click, not form.requestSubmit(): Warren James checks and sends its entry from the button's own click handler,
+# and a bare form submission skipped it (the page came back with "Please enter your email address...").
 JS_CLICK_MARKED = "() => {\n" + JS_HELPERS + r"""
   const b = __cbOne('[data-cb-submit="1"]');
   if (!b) return false;
+  try { b.click(); return true; } catch (e) {}
   if (b.form && (b.type || '').toLowerCase() === 'submit' && b.form.requestSubmit) {
     try { b.form.requestSubmit(b); return true; } catch (e) {}
   }
-  b.click();
-  return true;
+  return false;
+}
+"""
+
+# A marketing pop-up drawn in its own full-screen <iframe> (Warren James' Attentive "Sign up via text") covers the
+# submit button, with its close button out of reach inside the frame: hide that layer, as closing it would. Only a
+# layer fixed over the page that holds nothing compbot filled in - never the entry form's own dialog.
+JS_UNCOVER = "() => {\n" + JS_HELPERS + r"""
+  const b = __cbOne('[data-cb-submit="1"]');
+  if (!b) return 0;
+  let n = 0;
+  for (let i = 0; i < 3; i++) {
+    b.scrollIntoView({block: 'center'});
+    const r = b.getBoundingClientRect();
+    const top = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+    if (!top || top === b || b.contains(top) || top.contains(b)) break;
+    let layer = null;
+    for (let p = top; p && p !== document.body && p !== document.documentElement; p = p.parentElement) {
+      if (getComputedStyle(p).position === 'fixed') layer = p;
+    }
+    if (!layer || layer.contains(b) || layer.querySelector('[data-cb-idx]')) break;
+    layer.style.setProperty('display', 'none', 'important');
+    n++;
+  }
+  return n;
 }
 """
 
@@ -801,7 +887,9 @@ SUCCESS_RE = re.compile(
     r"you(?:'ve| have) (?:now |successfully |been ){1,3}entered|(?:your|the) (?:form|entry|submission|response|answers?|"
     r"details) (?:has |have |was |were |is )?(?:been )?(?:successfully )?(?:received|recorded|submitted|sent)|"
     # Referral widgets (Viral Loops, Gleam...) swap the form for "share your link for more entries" once you're in.
-    r"share (?:your|this) (?:unique |personal |referral )*link|(?:earn|get|unlock) (?:more|extra|bonus) entries",
+    r"share (?:your|this) (?:unique |personal |referral )*link|(?:earn|get|unlock) (?:more|extra|bonus) entries|"
+    # Free Spin Daily's wheel, once spun: "You have won 10 entries".
+    r"you(?:'ve| have) won (?:an?|one|two|three|four|five|ten|\d+) (?:extra |bonus )?entr(?:y|ies)\b",
     re.I | re.M)
 ALREADY_RE = re.compile(
     r"already (?:been )?entered|already (?:subscribed|registered|signed up|a subscriber)|only (?:one|1) entry|you "
@@ -818,6 +906,13 @@ CLOSED_RE = re.compile(
     r"(?:competition|promotion|prize draw|giveaway|this comp\w*) (?:is |has )?(?:now )?(?:closed|ended|finished)|"
     r"no longer (?:accepting|open|available)|entries (?:are|have) (?:now )?closed|has now closed|this competition "
     r"has expired", re.I)
+# The link is a page about the competition (its rules, past winners) rather than its entry form: SheerLuxe's
+# /competition-winners, Future plc's /competition-rules/. Only said when there's no form on the page.
+WRONG_PAGE_PATH_RE = re.compile(
+    r"(?:^|/)(?:(?:competition|comp|contest|giveaway|promotion|promo|prize[-_]?draw|official|entry|game|website|site|"
+    r"full|our|past|previous|recent|latest)[-_])?(?P<what>rules|terms(?:[-_](?:and|&|of)[-_](?:conditions|use|service))?|"
+    r"t-?and-?cs?|tandcs?|privacy(?:[-_](?:policy|notice))?|cookies?[-_](?:policy|notice)|winners?(?:[-_]list)?)"
+    r"(?:\.[a-z]{2,5})?/?$", re.I)
 # The entry form is only for signed-in members (Living North, The Lady, Delia): nothing to fill in until you sign in.
 LOGIN_WALL_RE = re.compile(
     r"you (?:need|have|must) (?:to )?(?:be )?(?:log(?:ged)? ?in|sign(?:ed)? ?in)|"
@@ -828,7 +923,10 @@ LOGIN_WALL_RE = re.compile(
 CAPTCHA_REFUSAL_RE = re.compile(
     r"unable to verify (?:the )?re-?captcha|re-?captcha v?\d? ?(?:test|check|verification) failed|verify that you are "
     r"not a robot|failed to validate (?:the )?captcha|not a valid captcha|captcha (?:verification|validation|check) "
-    r"failed|could not verify your entry|invalid captcha", re.I)
+    r"failed|could not verify your entry|invalid captcha|"
+    # Formstack (The Times): "ERROR: The security code does not match." is its hidden reCAPTCHA saying no.
+    r"security code (?:does not|doesn't|did not|didn't) match|(?:incorrect|invalid|wrong) (?:security|verification) "
+    r"code", re.I)
 BOT_REFUSAL_RE = re.compile(r"seem(?:s)? like spam|flagged as spam|marked as spam|spam (?:filter|protection|check)", re.I)
 # A pressed button still saying it's working ("Sending...", "Entering..."): give the site longer.
 BUSY_RE = re.compile(r"^(?:sending|submitting|entering|loading|processing|please wait|working|saving|solving captcha|"
@@ -1169,6 +1267,19 @@ WIDGET_NAMES = {"gleam.io": "Gleam", "rafflecopter.com": "Rafflecopter", "woobox
                 "shortstack.page": "ShortStack", "promosimple.com": "PromoSimple", "vyper.io": "Vyper",
                 "easypromosapp.com": "Easypromos", "giveawaytools.com": "Giveaway Tools"}
 JS_CLEAR_STORAGE = "() => { try { localStorage.clear(); sessionStorage.clear(); } catch (e) {} return true; }"
+# Every field compbot has read on the page so far (they carry data-cb-idx), to tell forms already there before a
+# click from ones the click brought up.
+JS_SEEN_IDX = "() => {\n" + JS_HELPERS + r"""
+  return __cbAll(document, '[data-cb-idx]').map(e => e.getAttribute('data-cb-idx'));
+}
+"""
+# Whether a field compbot filled is still on screen (a one-question-at-a-time form moves on by itself).
+JS_FIELD_SHOWN = "(idx) => {\n" + JS_HELPERS + r"""
+  const vis = __cbVis, e = __cbOne(`[data-cb-idx="${idx}"]`);
+  if (!e) return false;
+  return vis(e) || (e.labels && Array.from(e.labels).some(vis)) || vis(e.closest('label')) || vis(e.parentElement);
+}
+"""
 
 
 def _sentence_at(text: str, start: int, end: int) -> str:
@@ -1199,6 +1310,37 @@ def _refresh_container(frame, done_idx: set[str], prefix: str) -> dict | None:
         if ids & done_idx:
             return c
     return None
+
+
+def _appeared_by_itself(page, frame, ctx: Ctx | None, done_idx: set[str], seen_before: set[str], container: dict,
+                        gen: list[int]) -> dict | None:
+    """One question at a time (Typeform, Great British Life): picking an answer brings up the next question by
+    itself, and there's no button to press until the end. The form whose fields have come up since filling began,
+    if any - never one that was already on the page, the same form redrawn, nor a newsletter or other pop-up."""
+    sig = _form_sig(container)
+    for _ in range(3):
+        _pause(page, 1.2)
+        gen[0] += 1
+        found = []
+        for c in _safe_eval(frame, JS_EXTRACT, f"g{gen[0]}n_", default=[]) or []:
+            new = [f for f in c.get("fields", []) if f["idx"] not in done_idx and f["idx"] not in seen_before]
+            # Never a pop-up that came up meanwhile (a "10% off" sign-up): the next question replaces the last one.
+            if (not new or c.get("inPopup") or _score_container(c, ctx) <= -20 or _newsletter_only(c, ctx)
+                    or _same_form(_form_sig(c), sig)):
+                continue
+            found.append(c)
+        if found:
+            return max(found, key=lambda c: _score_container(c, ctx))
+    return None
+
+
+def _no_submit(n_filled: int, url: str, page_url: str) -> str:
+    """Why nothing was sent when no submit button turned up (lower case, to follow 'Dry run: ')."""
+    if n_filled:
+        return f"filled {n_filled} fields, but couldn't find the submit button"
+    moved = urlparse(page_url).path.rstrip("/") != urlparse(url).path.rstrip("/")
+    return ("no entry form found - the only form on the page has nothing to fill in" +
+            (f" (the link now opens {page_url[:150]}, so the competition may have ended)" if moved else ""))
 
 
 def _own_next_page(frame, container: dict, done_idx: set[str], prefix: str) -> dict | None:
@@ -1309,7 +1451,8 @@ def _ai_fill(page, frame, plan, settings: dict, comp_context: dict, details: dic
 
 REQUIRED_ERR_RE = re.compile(
     r"(?:field|this|option|selection) is required|required field|please (?:select|choose|tick|check|complete|fill)|"
-    r"must (?:select|choose|tick|agree|accept|be checked)|select at least one|at least one (?:option|box)", re.I)
+    r"must (?:select|choose|tick|agree|accept|be checked)|select at least one|at least one (?:option|box)|"
+    r"please (?:fix|correct) (?:the )?(?:following )?errors", re.I)
 
 
 def _required_fixes(container: dict) -> list[tuple[Field, Action]]:
@@ -1333,6 +1476,8 @@ def _required_fixes(container: dict) -> list[tuple[Field, Action]]:
         fixes.append((pick, Action("check", source="rule", note=note)))
     for f in fields:
         if f.tag == "radio" and not f.checked:
+            if looks_like_question(f):
+                continue  # a quiz question: picking the first answer would only be a guess
             o = next((o for o in f.options if not is_placeholder_option(o)), None)
             if o:
                 fixes.append((f, Action("radio", o.get("idx") or o.get("value"), source="rule", note=note)))
@@ -1398,9 +1543,10 @@ def _click_submit(page, frame) -> str:
     for fr in _all_frames(page):
         _safe_eval(fr, JS_CLOSE_POPUPS)
     _pause(page, 0.8)
+    hidden = _safe_eval(frame, JS_UNCOVER, default=0)
     try:
         loc.click(timeout=4000)
-        return "clicked after closing a pop-up"
+        return "clicked after closing a pop-up" + (" (hid a pop-up layer over the button)" if hidden else "")
     except Exception:  # noqa: BLE001
         pass
     if _safe_eval(frame, JS_CLICK_MARKED, default=False):
@@ -1714,13 +1860,38 @@ def _to_fields(container: dict) -> list[Field]:
             label=f.get("label", ""), placeholder=f.get("placeholder", ""), autocomplete=f.get("autocomplete", ""),
             aria=f.get("aria", ""), required=bool(f.get("required")), options=f.get("options") or [],
             context=f.get("context", ""), maxlength=f.get("maxlength"), checked=bool(f.get("checked")),
+            picker=bool(f.get("picker")), link_inside=bool(f.get("linkInside")),
         ))
     return out
+
+
+# A read-only date box with a calendar widget: set the date the way the widget would (flatpickr's own setDate, which
+# takes the ISO date compbot gives it), else write the value with the events the page's script listens for.
+JS_SET_PICKER = "([idx, value]) => {\n" + JS_HELPERS + r"""
+  const el = __cbOne(`[data-cb-idx="${idx}"]`);
+  if (!el) return false;
+  const fp = el._flatpickr || (el.previousElementSibling && el.previousElementSibling._flatpickr);
+  if (fp) {
+    fp.setDate(value, true, 'Y-m-d');
+    if (fp.close) fp.close();
+    return !!(fp.selectedDates && fp.selectedDates.length);
+  }
+  const ro = el.readOnly;
+  el.readOnly = false;
+  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, value);
+  el.dispatchEvent(new Event('input', {bubbles: true}));
+  el.dispatchEvent(new Event('change', {bubbles: true}));
+  el.readOnly = ro;
+  return el.value === value;
+}
+"""
 
 
 def _apply(frame, f: Field, a: Action) -> bool:
     loc = frame.locator(f'[data-cb-idx="{f.idx}"]').first
     try:
+        if a.kind == "fill" and f.picker:
+            return bool(_safe_eval(frame, JS_SET_PICKER, [f.idx, a.value or ""], default=False))
         if a.kind == "fill":
             try:
                 loc.fill(a.value or "", timeout=6000)
@@ -1742,6 +1913,10 @@ def _apply(frame, f: Field, a: Action) -> bool:
             want = a.kind == "check"
             if f.checked == want:
                 return True
+            if f.link_inside:
+                # A drawn tick box (role=checkbox) with its words, links and all, inside the box: a real click on its
+                # middle can land on "Privacy Policy" and leave the page (Roborock). Tick the box itself.
+                return bool(_safe_eval(frame, JS_SET_CHECKED, [f.idx, want], default=False))
             try:
                 loc.set_checked(want, timeout=4000)
                 return True
@@ -1825,8 +2000,6 @@ def _bot_refusal(new_text: str, server: str, container: dict, frame) -> tuple[st
 
 def _server_errors(responses: list) -> str:
     """'HTTP 403 from a.klaviyo.com/client/subscriptions: {...}' for error replies seen after submitting."""
-    from urllib.parse import urlparse
-
     out = []
     for r in responses[-3:]:
         try:
@@ -2107,10 +2280,20 @@ class Browser:
                     res.result = "widget"
                     res.message = (f"The entry is a {WIDGET_NAMES.get(widget, widget)} widget, which needs you to sign "
                                    "in or complete its steps - enter it yourself")
-                elif login or (best and best[1].get("hasPassword")):
-                    said = _sentence_at(text, login.start(), login.end()) if login else "only a sign-in form on the page"
+                elif login or (best and best[1].get("hasPassword")) or ACCOUNT_URL_RE.search(page.url):
+                    said = (_sentence_at(text, login.start(), login.end()) if login else
+                            "only a sign-in form on the page" if best and best[1].get("hasPassword") else
+                            "the link goes to a sign-in page")
                     res.result = "login"
                     res.message = f"Only signed-in members can enter (\u201c{said}\u201d) - sign in and enter it yourself"
+                elif WRONG_PAGE_PATH_RE.search(urlparse(page.url).path) or WRONG_PAGE_PATH_RE.search(urlparse(url).path):
+                    m = WRONG_PAGE_PATH_RE.search(urlparse(page.url).path) or WRONG_PAGE_PATH_RE.search(urlparse(url).path)
+                    w = m.group("what").lower()
+                    what = ("the winners page" if w.startswith("winner") else
+                            "the site's privacy or cookie policy" if w.startswith(("privacy", "cookie")) else
+                            "the competition's rules")
+                    res.result = "wrongpage"
+                    res.message = f"The link goes to {what}, not the entry form - find the entry form and enter it yourself"
                 else:
                     res.result, res.message = "failed", "No entry form found on the page"
                 res.final_url = page.url
@@ -2133,12 +2316,21 @@ class Browser:
             retried_required = False
             for step in range(1, MAX_FORM_PAGES + 1):
                 frame, container, score = best
+                seen_before = set(_safe_eval(frame, JS_SEEN_IDX, default=[]) or [])
                 plan_all: list = []
                 # Fill in rounds: many forms only reveal later fields (or the submit button) once earlier ones are set.
                 for _round in range(4):
                     fields = [f for f in _to_fields(container) if f.idx not in done_idx]
                     if not fields:
                         break
+                    if any(f.type == "password" and "optional" not in f.desc for f in fields):
+                        # Yeo Valley's Yeokens: step 3 asks you to choose a password. That's an account, not an entry.
+                        res.result = "login"
+                        res.message = ("The entry needs an account: the form" + (f" (step {step})" if step > 1 else "")
+                                       + " asks for a password - sign up or sign in and enter it yourself")
+                        res.final_url = page.url
+                        res.screenshot_before = _shot(page, cfg.screenshot_dir / f"{shot_prefix}_account.jpg")
+                        return res
                     plan = plan_form(fields, ctx)
                     if llm.enabled(settings) and (settings.get("ai_answers", True) or settings.get("ai_tiebreakers")):
                         if any(a.note in AI_QUESTION_NOTES or a.note == "question with no known answer"
@@ -2231,12 +2423,18 @@ class Browser:
                 submit_idx = (personal or filled or [sample_idx])[0]
                 submit_label = _safe_eval(frame, JS_MARK_SUBMIT, submit_idx) if submit_idx else None
                 n_filled = sum(1 for _, a in plan_all if a.kind != "skip")
+                if not submit_label and n_filled and not _safe_eval(frame, JS_FIELD_SHOWN, submit_idx, default=True):
+                    more = _appeared_by_itself(page, frame, ctx, done_idx, seen_before, container, gen)
+                    if more:
+                        details["steps"].append(f"step {step}: the next question came up by itself")
+                        best = (frame, more, _score_container(more, ctx))
+                        continue
                 if dry_run:
                     res.final_url = page.url
                     held = _await_enabled(page, frame.locator('[data-cb-submit="1"]').first) if submit_label else None
                     if not submit_label:
                         res.result = "failed"
-                        res.message = f"Dry run: filled {n_filled} fields, but couldn't find the submit button"
+                        res.message = "Dry run: " + _no_submit(n_filled, url, page.url)
                     elif held and held.startswith("captcha"):
                         res.result, res.message = "captcha", f"Dry run: {held[9:]} - enter manually"
                     elif held:
@@ -2248,7 +2446,10 @@ class Browser:
                     return res
 
                 if not submit_label:
-                    res.result, res.message = "failed", "Couldn't find the submit button"
+                    msg = _no_submit(n_filled, url, page.url)
+                    res.result = "failed"
+                    res.message = "Couldn't find the submit button" if n_filled else msg[0].upper() + msg[1:]
+                    res.final_url = page.url
                     res.screenshot_before = _shot(page, cfg.screenshot_dir / f"{shot_prefix}_nosubmit.jpg")
                     return res
                 clause = clause_check()  # last look at the T&Cs before anything is sent
@@ -2256,6 +2457,7 @@ class Browser:
                     return tc_blocked()
                 before_text = set(_page_text(page).splitlines())
                 before_url = page.url
+                seen_idx = {i for fr in _all_frames(page) for i in (_safe_eval(fr, JS_SEEN_IDX, default=[]) or [])}
                 submitted_sigs.append(_form_sig(container))
                 details["steps"].append(f"step {step}: clicked '{submit_label}'")
                 n_pages = len(context.pages)
@@ -2342,7 +2544,17 @@ class Browser:
                 # The fields just sent have gone and new ones are showing: that's the next page, not this one with
                 # errors, so instructions on it ("please complete the tick boxes", "* are required") aren't errors.
                 moved_on = not same_form and not (err and HARD_ERROR_RE.search(new_text))
-                if new_fields and (nxt[2] >= 4 or paged) and (moved_on or (fresh and not err)):
+                next_page = bool(new_fields) and (nxt[2] >= 4 or paged) and (moved_on or (fresh and not err))
+                if next_page and not paged:
+                    # A sidebar or footer sign-up that was on the page before the click, or a newsletter pop-up that
+                    # came up after it, isn't the entry's next page (Ecohome, Dengie): don't sign up to it as step 2.
+                    if all(f["idx"] in seen_idx for f in new_fields):
+                        details["steps"].append(f"step {step + 1}: skipped a form that was already on the page")
+                        next_page = False
+                    elif _newsletter_only(nxt[1], ctx):
+                        details["steps"].append(f"step {step + 1}: skipped a newsletter sign-up")
+                        next_page = False
+                if next_page:
                     clause = clause_check()
                     if clause:
                         res.result = "tc_blocked"
@@ -2431,7 +2643,8 @@ class Browser:
                 res.result, res.message = "failed", ("Submitted but nothing changed on the page" + (
                     f" - the site's server replied {server}" if server else ""))[:900]
                 return res
-            res.result, res.message = "unverified", f"Gave up after {MAX_FORM_PAGES} form pages"
+            res.result = "failed" if dry_run else "unverified"
+            res.message = f"Gave up after {MAX_FORM_PAGES} form pages"
             return res
         except Exception as exc:  # noqa: BLE001
             log.exception("entry error for %s", url)

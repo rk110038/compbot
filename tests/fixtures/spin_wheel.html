@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Win a £25 voucher</title>
+<style>body{font-family:sans-serif;max-width:700px;margin:2rem auto} label{display:block;margin-top:.5rem}</style></head>
+<body>
+<!-- Free Spin Daily: no submit button - once your email is in and the terms ticked, you click the wheel (an <svg>). -->
+<h1>The wheel</h1>
+<form id="win-prize-form" class="win-prize-form" method="POST" onsubmit="return false;">
+  <h3>Your Details</h3>
+  <input type="email" id="nfpdp_entry_email" name="nfpdp_entry_email" required placeholder="Email Address">
+  <label for="_t1"><input type="checkbox" value="1" name="terms" id="_t1" required> I agree to the Terms &amp; Conditions and the Privacy Policy</label>
+  <label for="_m1"><input type="checkbox" value="1" id="_m1" name="marketing"> Opt-in to receive daily email reminders</label>
+  <div id="chart">
+    <svg width="320" height="320"><g id="wheel" transform="translate(160,160)">
+      <circle r="150" fill="#7ebec5"></circle><circle r="40" fill="#1e88e5" style="cursor:pointer"></circle>
+    </g></svg>
+  </div>
+  <div id="entrieswon"><h1></h1></div>
+</form>
+<script>
+window.__spins = 0;
+document.getElementById('wheel').addEventListener('click', () => {
+  const email = document.getElementById('nfpdp_entry_email').value.trim();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !document.getElementById('_t1').checked) return;
+  window.__spins++;
+  setTimeout(() => { document.querySelector('#entrieswon h1').textContent = 'You have won five entries'; }, 400);
+});
+</script>
+</body></html>

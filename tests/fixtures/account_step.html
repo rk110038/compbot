@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Play to stay raffle</title>
+<style>body{font-family:sans-serif;max-width:700px;margin:2rem auto} label{display:block;margin-top:.5rem}</style></head>
+<body>
+<!-- Yeo Valley's Yeokens: after your details, the next step asks you to choose a password (an account sign-up). -->
+<h1>Win a two-night stay</h1>
+<h2>Enter the competition</h2>
+<form id="comp">
+  <div id="p1">
+    <label>Email address <input type="email" name="email" required></label>
+    <label>First name <input name="fn" required></label>
+    <button type="submit">Continue</button>
+  </div>
+</form>
+<script>
+let page = 1;
+document.getElementById('comp').addEventListener('submit', e => {
+  e.preventDefault();
+  if (page === 1) {
+    document.getElementById('p1').style.display = 'none';
+    e.target.insertAdjacentHTML('beforeend', '<div id="p2"><label>Choose a password <input type="password" name="pw"></label>'
+      + '<label><input type="checkbox" name="tc"> I agree to the Terms and Conditions</label><button type="submit">Sign up</button></div>');
+    page = 2;
+    return;
+  }
+  document.title = 'ACCOUNT MADE';
+});
+</script>
+</body></html>

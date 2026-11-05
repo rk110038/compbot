@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Win a year's worth of beer</title>
+<style>body{font-family:sans-serif;max-width:700px;margin:2rem auto} label{display:block;margin-top:.5rem}</style></head>
+<body>
+<!-- Brains Brewery (Powerful Form Builder): the date of birth box is read-only, set through its flatpickr calendar.
+     compbot skipped read-only boxes, so the site said "Date of birth is required". A stand-in for flatpickr's
+     instance is enough: compbot calls setDate() on it. -->
+<h1>Win a year's worth of Rev James</h1>
+<form id="f">
+  <label for="fn">First Name *</label><input id="fn" name="text-1" aria-required="true">
+  <label for="em">Email *</label><input id="em" name="email-1" aria-required="true">
+  <label for="dob">Date of Birth *</label>
+  <input type="text" id="dob" name="datetime-1" class="line_rounded-input flatpickr-input" readonly="readonly" aria-required="true" data-format="date">
+  <label><input type="checkbox" name="age" required> I confirm I am 18 years of age or older *</label>
+  <button type="submit">ENTER THE COMPETITION</button>
+  <p id="msg"></p>
+</form>
+<script>
+const dob = document.getElementById('dob');
+dob._flatpickr = {
+  selectedDates: [], config: {dateFormat: 'Y-m-d'},
+  setDate(v, fire) { this.selectedDates = [new Date(v)]; dob.value = v; if (fire) dob.dispatchEvent(new Event('change', {bubbles: true})); },
+  close() {}
+};
+document.getElementById('f').addEventListener('submit', e => {
+  e.preventDefault();
+  if (dob.value !== '1980-03-05') { document.getElementById('msg').textContent = 'There is 1 problem with your submission: Date of birth is required'; return; }
+  document.body.innerHTML = '<h2>Thank you for entering</h2>';
+});
+</script>
+</body></html>

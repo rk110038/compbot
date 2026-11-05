@@ -221,3 +221,108 @@ def test_region_lists_use_your_region_or_country():
     assert (a.kind, a.value) == ("select", "South East"), a
     a = map_field(Field(idx="c", tag="select", label="County", options=regions, required=True), ctx)
     assert a.kind == "unknown"  # a "County" list without your county is still a question for you
+
+# --------------------------------------------------------------------------- 5 Nov overnight run
+
+
+def _f(label, tag="input", type_="text", options=(), required=True, placeholder="", context=""):
+    from app.entry.forms import Field
+    opts = [{"value": o, "text": o, "idx": f"o{i}"} for i, o in enumerate(options)]
+    return Field(idx="x", tag=tag, type=type_, label=label, placeholder=placeholder, required=required, options=opts,
+                 context=context)
+
+
+def test_every_kind_of_sum_is_a_captcha():
+    # Outdoors Magic: "9 – 5 equals" (en dash) went to the AI, which filled it in.
+    from app.entry.forms import Ctx, map_field
+    ctx = Ctx(profile={"first_name": "Rob"})
+    for label in ["9 \u2013 5 equals *", "9 - 5 =", "What is 9 \u2212 5?", "3 + 4", "Seven plus two equals",
+                  "What is three times two?", "Please solve: 6 \u00f7 2"]:
+        assert map_field(_f(label), ctx).note.startswith("captcha"), label
+    assert map_field(_f("What is 3 + 4?", tag="radio", options=["6", "7", "8"]), ctx).note.startswith("captcha")
+    for label in ["Age (18 - 99)", "Phone number", "Postcode"]:  # ranges and ordinary boxes aren't sums
+        assert not map_field(_f(label, required=False), ctx).note.startswith("captcha"), label
+    assert map_field(_f("18-24", type_="checkbox"), ctx).note != "captcha: maths anti-spam check"
+    assert map_field(_f("Security Code *"), ctx).note.startswith("captcha")  # The Times
+
+
+def test_marketing_questions_are_answered_no():
+    # Cornwall Living: the AI answered "Receive emails from Silver Origins?" with YES PLEASE!
+    from app.entry.forms import Ctx, map_field
+    ctx = Ctx(profile={})
+    f = _f("Receive emails from Silver Origins? *", tag="radio", options=["YES PLEASE!", "NO THANKS"])
+    a = map_field(f, ctx)
+    assert (a.kind, a.value, a.note) == ("radio", "o1", "yes/no"), a
+    # Yeo Valley: "you can unsubscribe at any time" made an opt-in box look like an opt-out box, so it was ticked.
+    box = _f("I'd also like to receive all emails from Yeo Valley. You can unsubscribe at any time.", type_="checkbox",
+             required=False)
+    assert map_field(box, ctx).kind == "uncheck"
+    for label in ["Tick this box if you do not wish to receive marketing", "Opt out of marketing emails",
+                  "Please tick here if you'd prefer not to be contacted", "If you don't want to hear from us, tick here"]:
+        assert map_field(_f(label, type_="checkbox", required=False), ctx).kind == "check", label
+
+
+def test_age_groups_come_from_your_date_of_birth():
+    # 58 & Co: the AI picked 18-24 for "Age *".
+    from datetime import date
+
+    from app.entry.forms import Ctx, map_field
+    today = date.today()
+    ctx = Ctx(profile={"dob": date(today.year - 38, 1, 1).isoformat()})
+    groups = ["Under 18", "18\u201424", "25-34", "35 to 44", "45-54", "55+"]
+    a = map_field(_f("Age *", tag="radio", options=groups), ctx)
+    assert (a.kind, a.value, a.source) == ("radio", "o3", "age"), a
+    a = map_field(_f("Age group", tag="select", options=["", *groups]), ctx)
+    assert a.value == "o4", a
+    old = Ctx(profile={"dob": date(today.year - 70, 1, 1).isoformat()})
+    assert map_field(_f("Age *", tag="radio", options=groups), old).value == "o5"
+    assert map_field(_f("Age *", tag="radio", options=groups), Ctx(profile={})).kind == "unknown"
+
+
+def test_birthday_and_split_date_of_birth_boxes():
+    # 58 & Co: "Birthday *" (MM/DD) got the month only; Cornwall Living: DD / MM / YYYY boxes went to the AI.
+    from app.entry.forms import Ctx, map_field
+    ctx = Ctx(profile={"dob": "1980-03-05"})
+    assert map_field(_f("Birthday *", placeholder="MM/DD"), ctx).value == "03/05"
+    assert map_field(_f("Date of birth", placeholder="DD/MM/YYYY"), ctx).value == "05/03/1980"
+    assert map_field(_f("Date of birth (YYYY-MM-DD)"), ctx).value == "1980-03-05"
+    ctx_dob = "DATE OF BIRTH * DD MM YYYY"
+    assert map_field(_f("DD", context=ctx_dob), ctx).value == "05"
+    assert map_field(_f("DATE OF BIRTH *", placeholder="MM", context=ctx_dob), ctx).value == "03"
+    assert map_field(_f("YYYY", context=ctx_dob), ctx).value == "1980"
+    assert map_field(_f("Day", context="Which day would you like to visit?", required=False), ctx).kind != "fill"
+
+def test_visible_label_beats_a_stray_search_aria_label(profile):
+    # Purina puts aria-label="Enter search query" on every box: its First name / Last name boxes were left empty.
+    c = ctx(profile)
+    aria = "Enter search query"
+    assert map_field(Field("1", "input", "text", name="first_name", label="First name", aria=aria, required=True), c).value == "Test"
+    assert map_field(Field("2", "input", "text", name="last_name", label="Last name", aria=aria, required=True), c).value == "Person"
+    # ...but a real search box, and a hidden-from-people trap, stay empty.
+    assert map_field(Field("3", "input", "text", name="q", placeholder="Search", aria="Search"), c).kind == "skip"
+    assert map_field(Field("4", "input", "text", name="hp_name", label="Name", aria="Leave this field blank"), c).kind == "skip"
+
+
+def test_opt_in_with_over_18_boilerplate_stays_unticked(profile):
+    # Purina: "Click if you would like to receive offers... You confirm that you are over 18 years old." was ticked as
+    # an eligibility box.
+    c = ctx(profile)
+    opt = ("Click if you would like to receive offers, news, competitions and information about Purina UK&I, its "
+           "brands and its products. You can withdraw your consent at any time here. You confirm that you are over 18 "
+           "years old. If you are already opted-in you will continue to receive future communications.")
+    assert map_field(Field("1", "input", "checkbox", label=opt), c).kind == "uncheck"
+    terms = ("I'm 18 or over and have read and understood the Terms and Conditions of the promotion. I understand that "
+             "Nestle will not use my personal information for any purpose other than to contact me if I win.")
+    assert map_field(Field("2", "input", "checkbox", label=terms, required=True), c).kind == "check"
+
+
+def test_data_shared_with_a_sponsor_is_third_party_marketing(profile):
+    # Roborock: "I consent to the transfer of my personal data to Real Madrid C.F. ... commercial communications".
+    c = ctx(profile)
+    lab = ("I consent to the transfer of my personal data to Real Madrid C.F. for the sending of information and "
+           "commercial communications, including by electronic means and prior profiling, of products, services and "
+           "activities of Real Madrid and its sponsors and collaborators.")
+    a = map_field(Field("1", "input", "checkbox", label=lab), c)
+    assert (a.kind, a.note) == ("uncheck", "third-party marketing"), a
+    assert map_field(Field("2", "input", "checkbox", label="I agree to the Privacy Policy and Terms and Conditions."),
+                     c).kind == "check"

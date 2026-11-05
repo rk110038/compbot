@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Where was I?</title>
+<style>body{font-family:sans-serif;max-width:700px;margin:2rem auto} label{display:block;margin-top:.5rem}</style></head>
+<body>
+<!-- The Times (Formstack): its hidden reCAPTCHA turns the entry down as "The security code does not match". -->
+<h1>Win a gourmet break in London</h1>
+<h2>Enter the competition</h2>
+<form id="f">
+  <label>First Name <input name="fn"></label>
+  <label>Email* <input type="email" name="em" required></label>
+  <label><input type="checkbox" name="tc" required> I agree to the terms and conditions listed above</label>
+  <button type="submit">Submit</button>
+  <p id="msg"></p>
+</form>
+<script>
+document.getElementById('f').addEventListener('submit', e => {
+  e.preventDefault();
+  document.getElementById('msg').textContent = 'ERROR: The security code does not match. (Error ID: 908719ddca6b5f98)';
+});
+</script>
+</body></html>

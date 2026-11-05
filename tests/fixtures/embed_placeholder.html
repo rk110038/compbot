@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Win a HOTBIN composting bundle</title>
+<style>body{font-family:sans-serif;max-width:700px;margin:2rem auto} label{display:block;margin-top:.5rem}</style></head>
+<body>
+<!-- Gardener's World: the entry form is a Riddle embed behind "Want to see this content? [Accept and continue]", and
+     the site's own consent dialog sits in an iframe. Pressing the embed's button while the site's dialog was still open
+     lost the consent, so the form never loaded. Accepting the site's dialog loads it. -->
+<h1>Win a HOTBIN composting bundle</h1>
+<div class="consent-placeholder consent-placeholder--custom-consent">
+  <h4 class="consent-placeholder__heading">Want to see this content?</h4>
+  <p>This page contains content provided by Riddle. We ask for your permission before anything is loaded, as Riddle may use cookies and other technologies.</p>
+  <button type="button" class="consent-placeholder__button">Accept and continue</button>
+</div>
+<div id="embed"></div>
+<iframe id="cmp" src="consent_dialog.html" title="Consent" style="position:fixed;bottom:0;left:0;width:100%;height:160px;border:0;background:#fff"></iframe>
+<script>
+let consent = null, broken = false;
+function load() {
+  if (broken) return;
+  document.querySelector('.consent-placeholder').remove();
+  document.getElementById('embed').innerHTML = '<h2>Enter the competition</h2><form id="f"><label>Full name * <input name="name" required></label>'
+    + '<label>Email * <input type="email" name="email" required></label><button type="submit">Submit</button></form>';
+}
+document.querySelector('.consent-placeholder__button').addEventListener('click', () => { if (!consent) { broken = true; return; } load(); });
+window.addEventListener('message', e => {
+  if (!e.data || !e.data.consent) return;
+  consent = e.data.consent;
+  document.getElementById('cmp').remove();
+  if (consent === 'all') load();
+});
+</script>
+</body></html>

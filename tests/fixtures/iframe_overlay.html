@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Win a ring</title>
+<style>body{font-family:sans-serif;max-width:700px;margin:2rem auto} label{display:block;margin-top:.5rem}</style></head>
+<body>
+<!-- Warren James: a full-screen sign-up pop-up in its own <iframe> covers the button, and the entry is sent by the
+     button's click handler (a bare form submission is refused by the server, as the fixture server's 501 here). -->
+<h1>Win a 1.00ct lab-grown diamond ring</h1>
+<h3>ENTER NOW!</h3>
+<form id="f" method="post" action="/api/reply?code=400&amp;msg=Please%20enter%20your%20email%20address%20to%20continue">
+  <label>First name <input name="firstnameCompetition"></label>
+  <label>Last name <input name="lastnameCompetition"></label>
+  <label>Your email <input type="email" name="emailAddressCompetition"></label>
+  <button class="btn btn-dark-grey" id="go">enter now</button>
+  <p id="msg"></p>
+</form>
+<script>
+document.getElementById('go').addEventListener('click', e => {
+  e.preventDefault();
+  const f = document.getElementById('f');
+  if (!f.firstnameCompetition.value || !f.emailAddressCompetition.value) { document.getElementById('msg').textContent = 'Please enter your email address to continue'; return; }
+  document.body.innerHTML = '<h2>Thank you for entering, good luck!</h2>';
+});
+setTimeout(() => {
+  const fr = document.createElement('iframe');
+  fr.title = 'Sign Up via Text for Offers';
+  fr.srcdoc = '<p style="font:20px sans-serif;margin:30vh auto;width:300px;background:#fff">Get 15% off - sign up for texts</p>';
+  fr.style.cssText = 'width:100%;height:100%;position:fixed;inset:0;border:0;background:rgba(0,0,0,.3)';
+  document.body.appendChild(fr);
+}, 300);
+</script>
+</body></html>

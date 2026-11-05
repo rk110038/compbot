@@ -70,7 +70,7 @@ tr:hover td { background: rgba(127, 127, 127, .04); }
 td.title { max-width: 520px; }
 .badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; background: var(--grey-bg); color: var(--muted); }
 .b-queued, .b-new, .b-web_form, .b-dry_run_ok, .b-dry_run { background: var(--blue-bg); color: var(--blue); }
-.b-manual, .b-needs_input, .b-captcha, .b-tc_blocked, .b-blocked, .b-login, .b-widget { background: var(--amber-bg); color: var(--amber); }
+.b-manual, .b-needs_input, .b-captcha, .b-tc_blocked, .b-blocked, .b-login, .b-widget, .b-wrongpage { background: var(--amber-bg); color: var(--amber); }
 .b-entered, .b-ok, .b-success { background: var(--green-bg); color: var(--green); }
 .b-unverified { background: var(--green-bg); color: var(--green); opacity: .8; }
 .b-failed, .b-error, .b-scam_suspect { background: var(--red-bg); color: var(--red); }

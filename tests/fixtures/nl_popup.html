@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Win feed vouchers</title>
+<style>body{font-family:sans-serif;max-width:700px;margin:2rem auto} label{display:block;margin-top:.5rem}
+#pop{display:none;position:fixed;inset:10% 20%;background:#fff;border:2px solid #333;padding:1rem}</style></head>
+<body>
+<!-- Dengie: once the entry was sent, a newsletter sign-up came up and was filled in as "step 2". -->
+<h1>Win a £50 voucher plus £50 of feed vouchers</h1>
+<h2>Enter the competition</h2>
+<form id="comp">
+  <label>First Name:* <input name="fn" required></label>
+  <label>Last Name:* <input name="ln" required></label>
+  <label>Email Address* <input type="email" name="em" required></label>
+  <button type="submit">Enter</button>
+</form>
+<div id="pop" role="dialog">
+  <h3>Sign up to our newsletter</h3>
+  <form id="news">
+    <label>First name (Required) <input name="nfn" required></label>
+    <label>Last name (Required) <input name="nln" required></label>
+    <label>Email (Required) <input type="email" name="nem" required></label>
+    <button type="submit">Sign up</button>
+  </form>
+</div>
+<script>
+document.getElementById('news').addEventListener('submit', e => { e.preventDefault(); document.title = 'WRONG FORM'; });
+document.getElementById('comp').addEventListener('submit', e => {
+  e.preventDefault();
+  e.target.style.display = 'none';
+  document.getElementById('pop').style.display = 'block';
+});
+</script>
+</body></html>

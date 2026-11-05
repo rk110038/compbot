@@ -427,8 +427,9 @@ def _expire(s) -> int:
 # --------------------------------------------------------------------------- entries
 
 ENTERED_RESULTS = {"entered", "unverified"}
-# "login": only signed-in members can enter; "widget": the entry is a Gleam-style widget. Both need you.
-MANUAL_RESULTS = {"captcha", "blocked", "tc_blocked", "needs_input", "login", "widget"}
+# "login": only signed-in members can enter; "widget": the entry is a Gleam-style widget; "wrongpage": the link goes
+# to the competition's rules, winners or sign-in page, not its entry form. All need you.
+MANUAL_RESULTS = {"captcha", "blocked", "tc_blocked", "needs_input", "login", "widget", "wrongpage"}
 
 
 def run_entries(comp_ids: list[int] | None = None, force: bool = False) -> str:
@@ -513,7 +514,7 @@ def _urls_to_try(comp: Competition, blocked: set[str] | None = None) -> list[str
 BLOCK_MEMORY_DAYS = 21
 # Results that prove the site let compbot's browser load the page (whatever happened next).
 PAGE_LOADED_RESULTS = ["entered", "unverified", "dry_run_ok", "failed", "needs_input", "tc_blocked", "closed", "login",
-                       "widget"]
+                       "widget", "wrongpage"]
 
 
 def blocked_domains(s) -> set[str]:
@@ -1012,11 +1013,14 @@ RETRY_CATEGORIES: dict[str, dict] = {
     "nolink": {"label": "No entry link", "retry": False,
                "help": "The site that listed it doesn't give its entry links to bots. Use Open link, or paste the entry "
                        "link on the competition's page and re-queue it."},
+    "wronglink": {"label": "Link isn't the entry form", "retry": False,
+                  "help": "The listing linked to the competition's rules, winners or sign-in page. Use Open link to find "
+                          "the entry form, or paste its link on the competition's page and re-queue it."},
     "social": {"label": "Social media, Gleam, app, vote or magazine", "retry": False,
                "help": "Not something compbot can enter automatically."},
 }
 CATEGORY_ORDER = ["question", "failed", "error", "needs_input", "phone", "captcha", "blocked", "tc", "other",
-                  "nolink", "login", "social"]
+                  "nolink", "wronglink", "login", "social"]
 QUESTION_NOTES_RE = ("question with no known answer", "required choice with no known answer", "AI wasn't sure",
                      "AI couldn't", "second check")
 
@@ -1049,6 +1053,8 @@ def manual_category(c: Competition, last: EntryAttempt | None) -> str:
         return "login"
     if last.result == "widget":
         return "social"
+    if last.result == "wrongpage":
+        return "wronglink"
     if last.result == "tc_blocked":
         return "tc"
     if last.result == "needs_input":

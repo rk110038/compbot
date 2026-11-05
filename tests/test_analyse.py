@@ -120,3 +120,22 @@ def test_unsafe_prefix_stripped():
     a = analyse("E: 20/11 Win a book", '<p><a href="unsafe:https://www.example-books.co.uk/win-a-book">enter</a></p>',
                 DEFAULT_SETTINGS, TODAY)
     assert a.entry_urls == ["https://www.example-books.co.uk/win-a-book"]
+
+
+def test_rules_winners_and_sign_in_links_are_not_entry_pages():
+    # 5 Nov: Future plc's /competition-rules/ and SheerLuxe's /competition-winners were tried as entry pages; a game's
+    # auth.<site>/login page goes to you as needing an account.
+    from app.analyse import ACCOUNT_URL_RE, NON_ENTRY_URL_HINT
+
+    for path in ("/competition-rules/", "/competition-winners", "/competitions/winners/", "/terms-and-conditions.html"):
+        assert NON_ENTRY_URL_HINT.search(path), path
+    for path in ("/win/win-a-set-of-this-years-books-are-my-bag-readers-awards-winners", "/win-a-cookie-hamper-x",
+                 "/win-tickets-to-house-rules-live", "/yeokens/play-to-stay-raffle"):
+        assert not NON_ENTRY_URL_HINT.search(path.replace("cookie", "biscuit")), path
+    a = analyse("E: 27/11 Win a stay", "<p>https://www.futureplc.com/competition-rules/</p>"
+                "<p>https://www.example-hotel.co.uk/win-a-stay</p>", DEFAULT_SETTINGS, TODAY)
+    assert a.entry_urls == ["https://www.example-hotel.co.uk/win-a-stay"]
+    for u in ("https://auth.pumpkinspicecafegame.com/login", "https://example.com/login", "https://example.com/signin?next=1"):
+        assert ACCOUNT_URL_RE.search(u), u
+    for u in ("https://example.com/win/login-to-enter-x", "https://www.authentic-foods.co.uk/win"):
+        assert not ACCOUNT_URL_RE.search(u), u
