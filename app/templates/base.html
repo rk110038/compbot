@@ -31,7 +31,7 @@
     <a href="/" class="{{ 'active' if path == '/' }}">Dashboard</a>
     <a href="/competitions" class="{{ 'active' if path.startswith('/competitions') }}">Competitions</a>
     <a href="/manual" class="{{ 'active' if path == '/manual' }}">Manual queue{% if nav_manual %}<span class="count">{{ nav_manual }}</span>{% endif %}</a>
-    <a href="/inbox" class="{{ 'active' if path == '/inbox' }}">Inbox</a>
+    <a href="/inbox" class="{{ 'active' if path.startswith('/inbox') }}">Inbox</a>
     <a href="/wins" class="{{ 'active' if path == '/wins' }}">Wins{% if nav_wins %}<span class="count gold">{{ nav_wins }}</span>{% endif %}</a>
     <a href="/live" class="{{ 'active' if path == '/live' }}">Live{% if 'enter' in running %}<span class="live-dot" title="An entry run is in progress"></span>{% endif %}</a>
     <a href="/log" class="{{ 'active' if path == '/log' }}">Log</a>

@@ -84,8 +84,8 @@ Default schedule (Europe/London): discover 07:00, enter 07:30, inbox 08:00 and 2
 | **Dashboard** | Totals (entered, won, lost, win rate), entries per day, jobs with **Run now**, comps closing soon, recent activity |
 | **Competitions** | Every competition found, filterable by status, method, outcome and the site it was found on, with CSV export. Each comp has a detail page with the original post, the sites it was found on, every attempt with screenshots, related emails and buttons to enter, dry-run, mark won/lost, skip, edit the answer or link |
 | **Manual queue** | Comps that need you. Click-to-copy answers and personal details, **Open ↗**, then **I've entered it**. Marking manual entries matters, because it lets the inbox checker match a win email to them |
-| **Inbox** | Classified emails (possible win, loss, confirm, entry acknowledgement, scam suspect, promo). Confirm or reject wins and link emails to competitions |
-| **Wins** | Confirmed and possible wins with total stated prize value |
+| **Inbox** | Classified emails (possible win, loss, confirm, entry acknowledgement, scam suspect, promo). Each shows who sent it, the sentence that made compbot file it there (highlighted), why in plain words, and which competition it matched and why (it came from the competition's site, or mentions the prize). Click the subject for the whole email, or **Open in Gmail ↗** for the original. Confirm or reject wins and link emails to competitions. compbot's own alerts are never listed |
+| **Wins** | Confirmed and possible wins with total stated prize value. Each possible win lists the emails behind it |
 | **Live** | Watch the browser compbot is driving as it happens: a live picture of the page plus the current competition, step and result. Watch-only, and streamed from memory, so there are no disk writes. Switch it off in Settings → Live view |
 | **Log** | Everything compbot and you did, plus job run history |
 
@@ -133,8 +133,8 @@ Secrets and infrastructure go in environment variables (in the YAML). Everything
 | `WEB_USER` / `WEB_PASSWORD` | `admin` / — | HTTP Basic auth for the GUI. **Set a password.** |
 | `GMAIL_ADDRESS` / `GMAIL_APP_PASSWORD` | — | Competition Gmail. Used for IMAP (reading) and SMTP (email entries, notifications) |
 | `IMAP_FOLDERS` | `INBOX,[Gmail]/Spam` | Winner emails often land in Spam |
-| `NOTIFY_EMAIL` | — | Where to send "possible win" alerts |
-| `NTFY_URL` | — | e.g. `https://ntfy.sh/<secret-topic>` for phone push alerts |
+| `NOTIFY_EMAIL` | — | Where to send "possible win" alerts. Each alert says who sent the email, its subject and when, the sentence that says you've won, and the competition it looks like and why, with links to open the email in Gmail and in compbot (at the address you last opened compbot at). It can be the competition Gmail itself: alerts are tagged so the inbox check never reads them back in as new mail |
+| `NTFY_URL` | — | e.g. `https://ntfy.sh/<secret-topic>` for phone push alerts. Tapping one opens the email in compbot |
 | `DISCOVER_CRON`, `ENTER_CRON`, `INBOX_CRON`, `MAINTENANCE_CRON` | see above | Standard 5-field cron |
 | `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY` | — | Only to use a different OpenAI-compatible endpoint instead of the bundled Ollama |
 | `OLLAMA_URL` | set by `docker-compose.yml` | Where the bundled Ollama runs (`http://ollama:11434`) |

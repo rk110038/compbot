@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header, make_header
 from email.utils import parseaddr, parsedate_to_datetime
+from urllib.parse import quote
 
 from bs4 import BeautifulSoup
 
@@ -57,6 +58,27 @@ CONFIRM_LINK_RE = re.compile(
 STOP = {"win", "winner", "worth", "prize", "with", "from", "your", "the", "and", "for", "plus", "of", "a", "an", "to",
         "in", "on", "at", "or", "x", "uk", "gift", "card", "voucher", "vouchers", "tickets", "ticket", "night", "two",
         "one", "three", "copy", "bundle", "set", "pair", "free", "year", "years", "new", "our"}
+# compbot's own alerts carry this header. Earlier ones are known by a "[compbot]" subject sent from your own address.
+# Neither is ever read back in as incoming mail: an alert quotes the win email, so it looked like a win (or, with its
+# "never give bank details" line, a scam) itself, and could set off an alert about the alert.
+OWN_HEADER = "X-Compbot"
+OWN_SUBJECT_RE = re.compile(r"^\s*\[compbot\]", re.I)
+
+
+def is_own_alert(from_addr: str, subject: str, tagged: bool = False, own_addr: str | None = None) -> bool:
+    if tagged:
+        return True
+    own = (own_addr or "").strip().lower()
+    return bool(own and (from_addr or "").strip().lower() == own and OWN_SUBJECT_RE.match(subject or ""))
+
+
+def _own_alert_headers(head, own_addr: str | None) -> bool:
+    """is_own_alert from a message's headers alone (before its body is downloaded). Never stops the fetch."""
+    try:
+        return is_own_alert(parseaddr(str(_dh(head.get("From"))))[1], str(_dh(head.get("Subject"))).strip(),
+                            bool(head.get(OWN_HEADER)), own_addr)
+    except Exception:  # noqa: BLE001
+        return False
 
 
 @dataclass
@@ -70,6 +92,7 @@ class ParsedMail:
     received_at: datetime | None
     text: str
     links: list[tuple[str, str]] = field(default_factory=list)
+    own: bool = False  # one of compbot's own alerts
 
 
 @dataclass
@@ -90,9 +113,10 @@ def _dh(value: str | None) -> str:
         return value
 
 
-def parse_message(raw: bytes, folder: str) -> ParsedMail:
+def parse_message(raw: bytes, folder: str, own_addr: str | None = None) -> ParsedMail:
     msg = email.message_from_bytes(raw)
     name, addr = parseaddr(_dh(msg.get("From")))
+    subject = _dh(msg.get("Subject")).strip()
     try:
         received = parsedate_to_datetime(msg.get("Date")).astimezone(timezone.utc).replace(tzinfo=None)
     except Exception:  # noqa: BLE001
@@ -126,13 +150,22 @@ def parse_message(raw: bytes, folder: str) -> ParsedMail:
     return ParsedMail(
         message_id=(msg.get("Message-ID") or f"<no-id-{hashlib.sha256(raw).hexdigest()[:32]}>").strip(),
         folder=folder, from_addr=addr.lower(), from_name=name, from_domain=registrable_domain(addr),
-        subject=_dh(msg.get("Subject")).strip(), received_at=received,
+        subject=subject, received_at=received,
         text=re.sub(r"\s+", " ", text).strip(), links=links,
+        own=is_own_alert(addr, subject, bool(msg.get(OWN_HEADER)), own_addr),
     )
 
 
 def _prize_tokens(text: str) -> set[str]:
     return {w for w in re.findall(r"[a-z0-9£']{3,}", (text or "").lower()) if w not in STOP}
+
+
+def _comp_domains(c) -> set[str]:
+    domains = {registrable_domain(u) for u in (c.entry_urls or [])} | {c.promoter_domain or ""}
+    if c.email_to:
+        domains.add(registrable_domain(c.email_to))
+    domains.discard("")
+    return domains
 
 
 def match_competition(m: ParsedMail, comps: list) -> tuple[object | None, float]:
@@ -142,11 +175,7 @@ def match_competition(m: ParsedMail, comps: list) -> tuple[object | None, float]
     best, best_score = None, 0.0
     for c in comps:
         score = 0.0
-        domains = {registrable_domain(u) for u in (c.entry_urls or [])} | {c.promoter_domain or ""}
-        if c.email_to:
-            domains.add(registrable_domain(c.email_to))
-        domains.discard("")
-        if m.from_domain and m.from_domain in domains:
+        if m.from_domain and m.from_domain in _comp_domains(c):
             score += 3
         overlap = _prize_tokens(c.prize or c.title) & hay_tokens
         score += min(len(overlap) * 0.6, 3)
@@ -155,12 +184,35 @@ def match_competition(m: ParsedMail, comps: list) -> tuple[object | None, float]
     return (best, best_score) if best_score >= 2.4 else (None, best_score)
 
 
+def _found(res: list[re.Pattern], *texts: str) -> list[str]:
+    """The words each pattern matched, as the email writes them (not the pattern), without repeats."""
+    out: list[str] = []
+    for r in res:
+        for t in texts:
+            hit = r.search(t or "")
+            if hit:
+                p = re.sub(r"\s+", " ", hit.group(0)).strip()
+                if p and p.lower() not in {o.lower() for o in out}:
+                    out.append(p)
+                break
+    return out
+
+
 def classify(m: ParsedMail, comps: list) -> Classification:
     subject, body = m.subject, m.text[:6000]
     signals: list[str] = []
 
     def hits(res, text):
-        return [r.pattern for r in res if r.search(text)]
+        # One per pattern that matched (the score counts patterns), recorded as the words the email used.
+        return [h.group(0) for r in res if (h := r.search(text))]
+
+    def said(kind: str, found: list[str], n: int) -> list[str]:
+        out: list[str] = []
+        for p in found:
+            p = re.sub(r"\s+", " ", p).strip()
+            if p.lower() not in {o.lower() for o in out}:
+                out.append(p)
+        return [f"{kind}:{p}" for p in out[:n]]
 
     win_s, win_b = hits(WIN_RES, subject), hits(WIN_RES, body)
     promo = hits(PROMO_RES, subject + " " + body[:1500])
@@ -174,8 +226,8 @@ def classify(m: ParsedMail, comps: list) -> Classification:
     if comp:
         win_score += 2
         signals.append(f"matches comp #{comp.id} (score {match_score:.1f})")
-    signals += [f"win:{p}" for p in win_s + win_b][:6] + [f"promo:{p}" for p in promo][:3]
-    signals += [f"loss:{p}" for p in loss][:3] + [f"scam:{p}" for p in scam][:3]
+    signals += said("win", win_s + win_b, 6) + said("promo", promo, 3)
+    signals += said("loss", loss, 3) + said("scam", scam, 3)
 
     confirm_link = None
     if conf:
@@ -202,6 +254,126 @@ def classify(m: ParsedMail, comps: list) -> Classification:
     else:
         cat = "other"
     return Classification(cat, round(win_score, 2), signals, comp.id if comp else None, confirm_link)
+
+
+# --------------------------------------------------------------------------- explaining an email
+
+@dataclass
+class Explanation:
+    """Why an email was filed where it was, in the email's own words (for the Inbox and the win alert)."""
+    why: list[str] = field(default_factory=list)    # "it says “Congratulations”, “you've won”"
+    match: list[str] = field(default_factory=list)  # why it looks like the competition it's linked to
+    quote_before: str = ""                          # the sentence that says it, split around the words found
+    quote_hit: str = ""
+    quote_after: str = ""
+
+    @property
+    def quote(self) -> str:
+        return f"{self.quote_before}{self.quote_hit}{self.quote_after}"
+
+
+_BOUNDARY_RE = re.compile(r"(?<=[.!?])\s+|\s+\|\s+")
+
+
+def _quoted(phrases: list[str], n: int = 4) -> str:
+    return ", ".join(f"\u201c{p}\u201d" for p in phrases[:n])
+
+
+def _sentence(text: str, phrases: list[str], width: int = 260) -> tuple[str, str, str]:
+    """(before, words, after): the sentence of the email that says it, trimmed to about `width` characters."""
+    low = text.lower()
+    for p in phrases:
+        i = low.find(p.lower())
+        if i < 0:
+            continue
+        j = i + len(p)
+        start = 0
+        for b in _BOUNDARY_RE.finditer(text, 0, i):
+            start = b.end()
+        b = _BOUNDARY_RE.search(text, j)
+        end = b.start() if b else len(text)
+        if b and end - start < 60:  # "Hi Rob, congratulations!" says little on its own: take the next sentence too
+            b2 = _BOUNDARY_RE.search(text, b.end())
+            end = b2.start() if b2 else len(text)
+        before, after = text[start:i], text[j:end]
+        half = width // 2
+        if len(before) > half:
+            before = "\u2026" + before[-half:].split(" ", 1)[-1]
+        if len(after) > half:
+            after = after[:half].rsplit(" ", 1)[0] + "\u2026"
+        return before, text[i:j], after
+    return "", "", ""
+
+
+def explain(subject: str, text: str, from_domain: str, comp=None, category: str = "",
+            signals: list | None = None) -> Explanation:
+    """What the email says that made compbot file it as `category`, and why it looks like `comp`."""
+    subject, text = subject or "", text or ""
+    wins, losses = _found(WIN_RES, subject, text), _found(LOSS_RES, subject, text)
+    scams, promos = _found(SCAM_RES, subject, text), _found(PROMO_RES, subject, text[:1500])
+    confirms, acks = _found(CONFIRM_RES, subject, text), _found(ACK_RES, subject, text)
+    ex = Explanation()
+    if category == "loss":
+        if losses:
+            ex.why.append(f"it says {_quoted(losses)}")
+        quote_from = losses
+    elif category == "confirm":
+        if confirms:
+            ex.why.append(f"it asks you to confirm ({_quoted(confirms)})")
+        quote_from = confirms
+    elif category == "entry_ack":
+        if acks:
+            ex.why.append(f"it thanks you for entering ({_quoted(acks)})")
+        quote_from = acks
+    elif category == "promo":
+        if promos:
+            ex.why.append(f"it reads like marketing ({_quoted(promos)})")
+        quote_from = []
+    else:
+        if scams and category == "scam_suspect":
+            ex.why.append(f"it mentions {_quoted(scams)}, which are scam warning signs")
+        if wins:
+            ex.why.append(f"it says {_quoted(wins)}")
+        if scams and category != "scam_suspect":
+            ex.why.append(f"but it also mentions {_quoted(scams)}, which are scam warning signs")
+        if promos and category == "possible_win":
+            ex.why.append(f"it also reads a bit like marketing ({_quoted(promos, 2)})")
+        quote_from = scams + wins if category == "scam_suspect" else wins + scams + losses
+    for sig in signals or []:
+        if isinstance(sig, str) and sig.startswith("llm:"):
+            reason = re.search(r"\((.*)\)\s*$", sig)
+            ex.why.append(f"the AI check says: {reason.group(1)}" if reason and reason.group(1).strip()
+                          else f"the AI check filed it as {sig[4:].split(' ')[0].replace('_', ' ')}")
+    ex.quote_before, ex.quote_hit, ex.quote_after = _sentence(text, quote_from)
+    if comp is not None:
+        if from_domain and from_domain in _comp_domains(comp):
+            ex.match.append(f"it's from the competition's site ({from_domain})")
+        hay = set(re.findall(r"[a-z0-9£']{3,}", (subject + " " + text[:4000]).lower()))
+        words = [w for w in dict.fromkeys(re.findall(r"[a-z0-9£']{3,}", (comp.prize or comp.title or "").lower()))
+                 if w not in STOP and w in hay]
+        if words:
+            ex.match.append(f"both mention {_quoted(words, 5)}")
+    return ex
+
+
+def gmail_link(message_id: str, account: str | None = None) -> str | None:
+    """Opens this very email in Gmail (a search for its Message-ID), in the competition Gmail account."""
+    mid = (message_id or "").strip().strip("<>").strip()
+    if not mid or mid.startswith("no-id-"):
+        return None
+    who = f"?authuser={quote(account.strip())}" if account and account.strip() else ""
+    return f"https://mail.google.com/mail/{who}#search/rfc822msgid%3A{quote(mid, safe='')}"
+
+
+def folder_label(folder: str) -> str:
+    """'[Google Mail]/Spam' -> 'Spam', 'INBOX' -> 'Inbox'."""
+    f = (folder or "").strip()
+    low = f.lower()
+    if "spam" in low or "junk" in low:
+        return "Spam"
+    if low == "inbox":
+        return "Inbox"
+    return f.rsplit("/", 1)[-1] or f
 
 
 # --------------------------------------------------------------------------- IMAP
@@ -241,8 +413,10 @@ def resolve_folders(list_lines: list, folders: list[str]) -> list[str]:
 
 
 def fetch_messages(host: str, user: str, password: str, folders: list[str], since: datetime,
-                   known_ids: set[str], max_total: int = 500) -> tuple[list[ParsedMail], bool]:
-    """Fetch unseen messages oldest-first. Returns (messages, truncated) - truncated means more are waiting."""
+                   known_ids: set[str], max_total: int = 500,
+                   own_addr: str | None = None) -> tuple[list[ParsedMail], bool]:
+    """Fetch unseen messages oldest-first. Returns (messages, truncated) - truncated means more are waiting.
+    compbot's own alerts (see is_own_alert) are left where they are, unread."""
     out: list[ParsedMail] = []
     truncated = False
     imap = imaplib.IMAP4_SSL(host)
@@ -267,7 +441,9 @@ def fetch_messages(host: str, user: str, password: str, folders: list[str], sinc
             # Headers first (cheap) so bodies are only downloaded for Message-IDs we haven't stored yet.
             new_uids = []
             for chunk in [uids[i:i + 200] for i in range(0, len(uids), 200)]:
-                typ, resp = imap.uid("fetch", b",".join(chunk), "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)] RFC822.SIZE)")
+                typ, resp = imap.uid("fetch", b",".join(chunk),
+                                     f"(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID FROM SUBJECT {OWN_HEADER.upper()})] "
+                                     "RFC822.SIZE)")
                 if typ != "OK":
                     continue
                 for item in resp:
@@ -276,7 +452,10 @@ def fetch_messages(host: str, user: str, password: str, folders: list[str], sinc
                     meta, hdr = item
                     uid_m = re.search(rb"UID (\d+)", meta)
                     size_m = re.search(rb"RFC822\.SIZE (\d+)", meta)
-                    mid = email.message_from_bytes(hdr).get("Message-ID", "").strip()
+                    head = email.message_from_bytes(hdr)
+                    mid = (head.get("Message-ID") or "").strip()
+                    if _own_alert_headers(head, own_addr):
+                        continue
                     if uid_m and (not mid or mid not in known_ids) and (not size_m or int(size_m.group(1)) < 3_000_000):
                         new_uids.append(uid_m.group(1))
             new_uids.sort(key=int)
@@ -287,7 +466,7 @@ def fetch_messages(host: str, user: str, password: str, folders: list[str], sinc
                 typ, resp = imap.uid("fetch", uid, "(BODY.PEEK[])")
                 if typ == "OK" and resp and isinstance(resp[0], tuple):
                     try:
-                        out.append(parse_message(resp[0][1], folder))
+                        out.append(parse_message(resp[0][1], folder, own_addr))
                     except Exception as exc:  # noqa: BLE001
                         log.warning("parse failed: %s", exc)
     finally:

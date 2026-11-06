@@ -109,7 +109,7 @@
     {% if emails %}
     <div class="card">
       <h2>Related emails</h2>
-      {% for e in emails %}<div class="event"><span class="ts">{{ e.received_at | local }}</span>{{ badge(e.category) }}<span>{{ e.subject }}<br><span class="small muted">{{ e.from_addr }}</span></span></div>{% endfor %}
+      {% for e in emails %}<div class="event"><span class="ts">{{ e.received_at | local }}</span>{{ badge(e.category) }}<span><a href="/inbox/{{ e.id }}">{{ e.subject or '(no subject)' }}</a><br><span class="small muted">{{ e.from_addr }}</span></span></div>{% endfor %}
     </div>{% endif %}
     {% if events %}
     <div class="card">

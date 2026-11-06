@@ -109,6 +109,10 @@ textarea { width: 100%; min-height: 70px; }
 .kv dt { color: var(--muted); }
 .kv dd { margin: 0; word-break: break-word; }
 .post { white-space: pre-wrap; background: var(--grey-bg); border-radius: 8px; padding: 10px; max-height: 320px; overflow: auto; font-size: 13px; }
+.post.tall { max-height: 640px; }
+.quote { border-left: 3px solid var(--gold); background: var(--grey-bg); border-radius: 0 6px 6px 0; padding: 4px 10px; margin: 6px 0; max-width: 640px; }
+.quote mark, .post mark { background: var(--gold-bg); color: inherit; padding: 0; border-radius: 2px; }
+.warn-text { color: var(--amber); }
 .shots { display: flex; gap: 10px; flex-wrap: wrap; }
 .shots a img { width: 220px; border: 1px solid var(--line); border-radius: 6px; display: block; }
 .attempt { border-top: 1px solid var(--line); padding: 10px 0; }

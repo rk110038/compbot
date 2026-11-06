@@ -23,7 +23,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.exc import OperationalError
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from . import __version__, jobs
+from . import __version__, inbox, jobs
 from .config import DEFAULT_PROFILE, DEFAULT_SETTINGS, get_config
 from .db import (
     DISK_BUSY_MESSAGE,
@@ -39,12 +39,14 @@ from .db import (
     entries_today,
     get_profile,
     get_settings,
+    get_state,
     init_db,
     is_busy_error,
     log_event,
     save_profile,
     save_settings,
     session_scope,
+    set_state,
     utcnow,
 )
 
@@ -65,6 +67,10 @@ async def lifespan(_app: FastAPI):
         for jr in s.scalars(select(JobRun).where(JobRun.status == "running")).all():
             jr.status, jr.finished_at, jr.summary = "error", utcnow(), "Interrupted (app restarted)"
         log_event(s, "system", f"compbot {__version__} started")
+    try:
+        jobs.forget_own_alerts()  # tidy the Inbox straight away, not at the next Gmail check
+    except Exception as exc:  # noqa: BLE001
+        log.warning("couldn't remove compbot's own alerts from the Inbox: %s", exc)
     if cfg.scheduler_enabled:
         from apscheduler.schedulers.background import BackgroundScheduler
         from apscheduler.triggers.cron import CronTrigger
@@ -132,9 +138,11 @@ def _days_left(d) -> str:
 templates.env.filters["local"] = _local
 templates.env.filters["ago"] = _ago
 templates.env.filters["days_left"] = _days_left
+templates.env.filters["folder_label"] = inbox.folder_label
 templates.env.globals["version"] = __version__
 templates.env.globals["static_v"] = STATIC_V
 templates.env.globals["cfg"] = cfg
+templates.env.globals["gmail_link"] = lambda e: inbox.gmail_link(e.message_id, cfg.gmail_address)
 
 
 def _qs(request: Request, **changes) -> str:
@@ -145,14 +153,22 @@ def _qs(request: Request, **changes) -> str:
 
 templates.env.globals["qs"] = _qs
 
+# The address you open compbot at (http://<truenas-ip>:8085), remembered so alerts can link straight to an email's page.
+_gui_url: dict = {"v": None}
+
 
 def render(request: Request, name: str, **ctx) -> HTMLResponse:
     ctx.setdefault("flash", request.query_params.get("msg"))
     ctx.setdefault("flash_warn", request.query_params.get("warn") == "1")
+    base = str(request.base_url).rstrip("/")
     with session_scope() as s:
         ctx.setdefault("settings", get_settings(s))
         ctx["nav_manual"] = s.scalar(select(func.count(Competition.id)).where(Competition.status == "manual")) or 0
         ctx["nav_wins"] = s.scalar(select(func.count(Competition.id)).where(Competition.outcome == "possible_win")) or 0
+        if base != _gui_url["v"]:
+            if get_state(s, "gui_url") != base:
+                set_state(s, "gui_url", base)
+            _gui_url["v"] = base
     ctx["running"] = {n: jobs.progress(n) or "running" for n in ("discover", "enter", "inbox", "maintenance")
                       if jobs.is_running(n)}
     ctx["stopping"] = {n for n in ctx["running"] if jobs.stop_requested(n)}
@@ -530,8 +546,27 @@ def inbox_view(request: Request, category: str = "possible_win", page: int = 1):
         for r in rows:
             if r.competition_id and r.competition_id not in comps:
                 comps[r.competition_id] = s.get(Competition, r.competition_id)
+        why = {r.id: _explain(r, comps.get(r.competition_id)) for r in rows}
     return render(request, "inbox.html", rows=rows, category=category, counts=counts, cats=EMAIL_CATS,
-                  comps=comps, recent=recent, page=page, pages=max(1, (total + 49) // 50), total=total)
+                  comps=comps, recent=recent, why=why, page=page, pages=max(1, (total + 49) // 50), total=total)
+
+
+def _explain(e: Email, comp: Competition | None) -> inbox.Explanation:
+    return inbox.explain(e.subject, e.snippet, e.from_domain, comp, e.category, e.signals)
+
+
+@app.get("/inbox/{eid}", response_class=HTMLResponse)
+def email_view(request: Request, eid: int):
+    """One email: who sent it, what it says, why compbot filed it where it did, and the competition it looks like."""
+    with session_scope() as s:
+        e = s.get(Email, eid)
+        if not e:
+            raise HTTPException(404)
+        comp = s.get(Competition, e.competition_id) if e.competition_id else None
+        recent = s.scalars(select(Competition).where(or_(Competition.status == "entered", Competition.entry_count > 0))
+                           .order_by(Competition.entered_at.desc()).limit(300)).all()
+    return render(request, "email.html", e=e, c=comp, x=_explain(e, comp), recent=recent,
+                  kept=jobs.EMAIL_TEXT_KEPT)
 
 
 @app.post("/inbox/{eid}/action")
@@ -577,7 +612,14 @@ def wins(request: Request):
         won = s.scalars(select(Competition).where(Competition.outcome == "won").order_by(Competition.won_at.desc())).all()
         possible = s.scalars(select(Competition).where(Competition.outcome == "possible_win")).all()
         total = sum(c.prize_value or 0 for c in won)
-    return render(request, "wins.html", won=won, possible=possible, total=total)
+        # The emails behind each possible win, newest first, so you can see what was said without hunting for it.
+        win_emails: dict[int, list[Email]] = {}
+        if possible:
+            for e in s.scalars(select(Email).where(Email.competition_id.in_([c.id for c in possible]),
+                                                   Email.category == "possible_win")
+                               .order_by(Email.received_at.desc().nulls_last(), Email.id.desc())).all():
+                win_emails.setdefault(e.competition_id, []).append(e)
+    return render(request, "wins.html", won=won, possible=possible, total=total, win_emails=win_emails)
 
 
 @app.get("/log", response_class=HTMLResponse)

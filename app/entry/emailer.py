@@ -10,12 +10,13 @@ from email.utils import formataddr, make_msgid
 
 import httpx
 
+from .. import inbox
 from ..config import get_config
 
 log = logging.getLogger("compbot.mail")
 
 
-def send_mail(to: str, subject: str, body: str) -> str:
+def send_mail(to: str, subject: str, body: str, headers: dict | None = None) -> str:
     cfg = get_config()
     if not cfg.mail_enabled:
         raise RuntimeError("Gmail address/app password not configured")
@@ -24,6 +25,8 @@ def send_mail(to: str, subject: str, body: str) -> str:
     msg["To"] = to
     msg["Subject"] = subject
     msg["Message-ID"] = make_msgid(domain=cfg.gmail_address.split("@")[-1])
+    for name, value in (headers or {}).items():
+        msg[name] = value
     msg.set_content(body)
     with smtplib.SMTP_SSL(cfg.smtp_host, cfg.smtp_port, context=ssl.create_default_context(), timeout=30) as s:
         s.login(cfg.gmail_address, cfg.gmail_app_password)
@@ -56,17 +59,24 @@ def compose_entry(comp, profile: dict) -> tuple[str, str]:
     return subject, "\n".join(lines)
 
 
-def notify(subject: str, text: str) -> None:
+def notify(subject: str, text: str, click: str | None = None) -> None:
+    """Tell you about something (a possible win): ntfy push and/or an email to NOTIFY_EMAIL. `click` is the page a
+    tapped push notification opens."""
     cfg = get_config()
     if cfg.ntfy_url:
         try:
-            httpx.post(cfg.ntfy_url, content=text.encode("utf-8"), headers={"Title": subject[:200], "Tags": "trophy"},
-                       timeout=15)
+            # As query parameters, which (unlike headers) carry any character: the title quotes the email's subject.
+            params = {"title": subject[:200], "tags": "trophy"}
+            if click:
+                params["click"] = click
+            httpx.post(cfg.ntfy_url, content=text.encode("utf-8"), params=params, timeout=15)
         except Exception as exc:  # noqa: BLE001
             log.warning("ntfy failed: %s", exc)
     if cfg.notify_email and cfg.mail_enabled:
         try:
-            send_mail(cfg.notify_email, f"[compbot] {subject}", text)
+            # Tagged so the inbox check never reads it back in as a new email (NOTIFY_EMAIL is often this same Gmail).
+            # Only alerts to you carry it: email entries to promoters never say they came from compbot.
+            send_mail(cfg.notify_email, f"[compbot] {subject}", text, headers={inbox.OWN_HEADER: "alert"})
         except Exception as exc:  # noqa: BLE001
             log.warning("notify email failed: %s", exc)
 

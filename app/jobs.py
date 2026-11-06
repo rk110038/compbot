@@ -884,6 +884,78 @@ def run_inbox() -> str:
     return _run("inbox", _inbox)
 
 
+EMAIL_TEXT_KEPT = 5000  # characters of each email's text kept for the Inbox (the rest is a click away in Gmail)
+
+
+def forget_own_alerts() -> int:
+    """compbot's earlier alert emails, read back in from your own Gmail as if they were new mail: remove them, and undo
+    a 'possible win' that only one of them pointed to (an alert quotes the win email, so it looked like one itself)."""
+    from . import inbox
+
+    own = (get_config().gmail_address or "").strip().lower()
+    if not own:
+        return 0
+    with session_scope() as s:
+        rows = [e for e in s.scalars(select(Email).where(Email.subject.like("[compbot]%"))).all()
+                if inbox.is_own_alert(e.from_addr, e.subject, own_addr=own)]
+        if not rows:
+            return 0
+        ids = [e.id for e in rows]
+        for cid in {e.competition_id for e in rows if e.competition_id}:
+            comp = s.get(Competition, cid)
+            if not comp or comp.outcome != "possible_win":
+                continue
+            real = s.scalars(select(Email).where(Email.competition_id == cid, Email.category == "possible_win",
+                                                 Email.id.not_in(ids))
+                             .order_by(Email.received_at.desc().nulls_last())).first()
+            if real:
+                comp.outcome_note = f"Email: {real.subject[:200]}"
+            else:
+                comp.outcome, comp.outcome_note = "pending", ""
+        for e in rows:
+            s.delete(e)
+        log_event(s, "inbox", f"Removed {len(rows)} of compbot's own alert email{'s' if len(rows) != 1 else ''} from "
+                              "the Inbox: they had been read back in from your Gmail as if they were new mail")
+    return len(rows)
+
+
+def _win_alert(m, c, comp, email_id: int, gui_url: str | None) -> tuple[str, str, str | None]:
+    """(subject, text, link) for a possible-win alert. It says what the email was - who sent it, its subject, when,
+    and the sentence that says you've won - and which entry it looks like, so it makes sense without opening compbot."""
+    from . import inbox
+
+    cfg = get_config()
+    ex = inbox.explain(m.subject, m.text, m.from_domain, comp, c.category, c.signals)
+    sender = f"{m.from_name} <{m.from_addr}>" if m.from_name and m.from_name.lower() != m.from_addr else m.from_addr
+    when = (m.received_at.replace(tzinfo=timezone.utc).astimezone(ZoneInfo(cfg.tz)).strftime("%a %d %b %Y, %H:%M")
+            if m.received_at else "unknown")
+    lines = ["compbot thinks this email may say you've won a competition.", "",
+             f"From:      {sender}",
+             f"Subject:   {m.subject or '(no subject)'}",
+             f"Received:  {when}" + (" (it was in Spam)" if inbox.folder_label(m.folder) == "Spam" else ""), ""]
+    if ex.quote_hit:
+        lines += ["What it says:", f"  \u201c{ex.quote}\u201d", ""]
+    if comp:
+        entered = comp.last_entered_at or comp.entered_at
+        lines.append(f"Looks like your entry for: {comp.prize or comp.title}"
+                     + (f" (entered {entered.day} {entered:%b %Y})" if entered else ""))
+        if ex.match:
+            lines.append(f"  because {' and '.join(ex.match)}")
+    else:
+        lines.append("It doesn't match a competition compbot knows you entered, so check it's genuine.")
+    if ex.why:
+        lines.append(f"Why it looks like a win: {'; '.join(ex.why)}")
+    gmail = inbox.gmail_link(m.message_id, cfg.gmail_address)
+    page = f"{gui_url.rstrip('/')}/inbox/{email_id}" if gui_url else None
+    lines.append("")
+    if gmail:
+        lines.append(f"Open the email in Gmail: {gmail}")
+    lines.append(f"Review it in compbot: {page}" if page else "Review it in compbot: Inbox \u2192 possible win")
+    lines += ["", "A genuine promoter never asks for a fee or your bank details to claim a prize."]
+    about = m.subject or (comp.prize or comp.title if comp else "") or f"an email from {m.from_addr}"
+    return f"Possible win: {about}"[:180], "\n".join(lines), page or gmail
+
+
 def _inbox() -> str:
     from . import inbox
     from .entry import emailer
@@ -891,9 +963,11 @@ def _inbox() -> str:
     cfg = get_config()
     if not cfg.mail_enabled:
         return "Gmail not configured"
+    forget_own_alerts()
     with session_scope() as s:
         settings = get_settings(s)
         last = get_state(s, "inbox_last_run")
+        gui_url = get_state(s, "gui_url")
         known = set(s.scalars(select(Email.message_id)).all())
         cutoff = utcnow() - timedelta(days=200)
         # Detached snapshot of entered comps for matching (expire_on_commit=False keeps attributes loaded).
@@ -904,7 +978,7 @@ def _inbox() -> str:
     since = inbox.default_since(datetime.fromisoformat(last) if last else None)
     _progress["inbox"] = "Connecting to Gmail"
     msgs, truncated = inbox.fetch_messages(cfg.imap_host, cfg.gmail_address, cfg.gmail_app_password,
-                                           cfg.imap_folders, since, known)
+                                           cfg.imap_folders, since, known, own_addr=cfg.gmail_address)
     counts: dict[str, int] = {}
     titles = {c.id: c.title for c in comps}
     stopped_at = None
@@ -913,7 +987,7 @@ def _inbox() -> str:
             stopped_at = i - 1
             break
         _progress["inbox"] = f"Classifying {i}/{len(msgs)}"
-        if m.message_id in known:
+        if m.message_id in known or m.own:
             continue
         known.add(m.message_id)
         c = inbox.classify(m, comps)
@@ -929,8 +1003,8 @@ def _inbox() -> str:
         with session_scope() as s:
             row = Email(message_id=m.message_id[:500], folder=m.folder, from_addr=m.from_addr[:300],
                         from_name=m.from_name[:300], from_domain=m.from_domain[:200], subject=m.subject[:1000],
-                        received_at=m.received_at, snippet=m.text[:1500], category=c.category, score=c.score,
-                        signals=c.signals, competition_id=c.competition_id)
+                        received_at=m.received_at, snippet=m.text[:EMAIL_TEXT_KEPT], category=c.category,
+                        score=c.score, signals=c.signals, competition_id=c.competition_id)
             s.add(row)
             s.flush()
             email_id = row.id
@@ -941,8 +1015,13 @@ def _inbox() -> str:
                 where = f" (looks like: {comp.title})" if comp else " (no matching entry found - check it's genuine)"
                 log_event(s, "inbox", f"Possible win: '{m.subject}' from {m.from_addr}{where}", "success",
                           comp.id if comp else None)
-                follow_up = ("notify", f"From: {m.from_addr}\nSubject: {m.subject}\n{where}\n\n"
-                             "Open compbot to review. Never pay a fee or give bank details to claim a prize.")
+                try:
+                    alert = _win_alert(m, c, comp, email_id, gui_url)
+                except Exception as exc:  # noqa: BLE001 - never lose the email over its alert's wording
+                    log.warning("possible-win alert text failed: %s", exc)
+                    alert = (f"Possible win: {m.subject}"[:180], f"From: {m.from_addr}\nSubject: {m.subject}\n{where}"
+                             "\n\nOpen compbot's Inbox to review it.", None)
+                follow_up = ("notify", alert)
             elif c.category == "loss" and comp and comp.outcome == "pending":
                 comp.outcome, comp.outcome_note = "lost", f"Email: {m.subject[:200]}"
             elif c.category == "confirm" and c.confirm_link and comp and settings.get("auto_confirm_links", True):
@@ -957,7 +1036,8 @@ def _inbox() -> str:
                 row.action = "Flagged as a likely scam (asks for fees/bank details)"
         # 2) Side effects after the commit; record their result separately.
         if follow_up and follow_up[0] == "notify":
-            emailer.notify("Possible competition win!", follow_up[1])
+            subject, text, link = follow_up[1]
+            emailer.notify(subject, text, click=link)
         elif follow_up and follow_up[0] == "confirm":
             outcome = _click_confirm(follow_up[1])
             with session_scope() as s:

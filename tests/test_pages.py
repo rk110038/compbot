@@ -55,3 +55,31 @@ def test_pages_show_where_a_competition_was_found():
         settings = client.get("/settings", headers=H).text
         assert 'name="s_source_ct"' in settings and "CDB_USERNAME" in settings
         assert "No entry link" in client.get("/manual?reason=nolink", headers=H).text
+
+def test_inbox_shows_what_each_email_says_and_links_to_it():
+    from app.db import Competition, Email, init_db, session_scope
+    from app.main import app
+    init_db()
+    with session_scope() as s:
+        c = Competition(source="test", source_id="pages-win-1", thread_url="x", title="Win a Herbelin watch",
+                        prize="Herbelin Art Deco watch", method="web_form", status="entered", entry_count=1,
+                        entry_urls=["https://www.countryandtownhouse.com/win"], outcome="possible_win")
+        s.add(c)
+        s.flush()
+        e = Email(message_id="<pages-win-1@cth.example>", from_addr="comps@countryandtownhouse.com",
+                  from_name="Competitions", from_domain="countryandtownhouse.com",
+                  subject="Congratulations - you've won!", category="possible_win", competition_id=c.id,
+                  snippet="Dear Test, we are delighted to tell you that you are the winner of our Herbelin watch "
+                          "competition. Reply by Friday.", signals=["win:Congratulations"])
+        s.add(e)
+        s.flush()
+        eid = e.id
+    with TestClient(app) as client:
+        page = client.get("/inbox?category=possible_win", headers=H).text
+        assert f'href="/inbox/{eid}"' in page and "<mark>you are the winner</mark>" in page
+        assert "site (countryandtownhouse.com)" in page and "rfc822msgid%3Apages-win-1%40cth.example" in page
+        one = client.get(f"/inbox/{eid}", headers=H).text
+        assert "What it says" in one and "Reply by Friday." in one and f'action="/inbox/{eid}/action"' in one
+        assert client.get("/inbox/999999", headers=H).status_code == 404
+        wins = client.get("/wins", headers=H).text
+        assert f'href="/inbox/{eid}"' in wins and "from Competitions &lt;comps@countryandtownhouse.com&gt;" in wins

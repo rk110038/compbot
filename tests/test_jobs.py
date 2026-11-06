@@ -527,3 +527,107 @@ def test_competitions_time_email_comps_stay_email_comps(monkeypatch):
     with session_scope() as s:
         c = s.scalars(select(Competition).where(Competition.source_id == "ct:em1")).one()
         assert c.method == "email" and c.email_to == "teacomp@teacomp-promo.example" and not c.entry_urls
+
+def _gmail(monkeypatch, **extra):
+    from app.config import get_config
+
+    cfg = get_config()
+    for k, v in {"gmail_address": "me@gmail.com", "gmail_app_password": "pw", "notify_email": None, "ntfy_url": None,
+                 **extra}.items():
+        monkeypatch.setattr(cfg, k, v)
+
+
+def test_win_alert_says_what_the_email_was_and_alerts_are_never_read_back(monkeypatch):
+    from email.message import EmailMessage
+
+    from app import inbox
+    from app.db import Email, set_state, utcnow
+    from app.entry import emailer
+
+    _gmail(monkeypatch, notify_email="me@gmail.com")  # alerts go to the competition Gmail itself
+    init_db()
+    with session_scope() as s:
+        c = Competition(source="test", source_id="test-hotbin-alert", thread_url="x", title="Win a HOTBIN bundle",
+                        prize="HOTBIN composting bundle worth £250", method="web_form", status="entered",
+                        entry_count=1, entry_urls=["https://www.hotbin-test.example/win"], entered_at=utcnow(),
+                        last_entered_at=utcnow())
+        s.add(c)
+        s.flush()
+        cid = c.id
+        set_state(s, "gui_url", "http://nas.local:8085")
+
+    def mail(frm, subject, body, mid):
+        m = EmailMessage()
+        m["From"], m["To"], m["Subject"], m["Message-ID"] = frm, "me@gmail.com", subject, mid
+        m["Date"] = "Thu, 05 Nov 2026 19:58:00 +0000"
+        m.set_content(body)
+        return inbox.parse_message(m.as_bytes(), "INBOX", "me@gmail.com")
+
+    win = mail("HOTBIN <winners@hotbin-test.example>", "Congratulations - you've won!",
+               "Dear Test, we are delighted to tell you that you are the winner of our HOTBIN composting bundle "
+               "competition. Please reply with your address.", "<win-1@hotbin-test.example>")
+    # An alert from before they were tagged, which used to come back in as a 'scam' or another 'possible win'.
+    old_alert = mail("me@gmail.com", "[compbot] Possible competition win!",
+                     "From: winners@hotbin-test.example\nSubject: Congratulations - you've won!\n\nOpen compbot to "
+                     "review. Never pay a fee or give bank details to claim a prize.", "<alert-0@gmail.com>")
+    monkeypatch.setattr(inbox, "fetch_messages", lambda *a, **k: ([win, old_alert], False))
+    sent = []
+    monkeypatch.setattr(emailer, "send_mail",
+                        lambda to, subject, body, headers=None: sent.append((to, subject, body, headers)) or "<id>")
+
+    jobs._inbox()
+    with session_scope() as s:
+        rows = s.scalars(select(Email).where(Email.message_id.in_(["<win-1@hotbin-test.example>",
+                                                                   "<alert-0@gmail.com>"]))).all()
+        assert [r.message_id for r in rows] == ["<win-1@hotbin-test.example>"]
+        assert s.get(Competition, cid).outcome == "possible_win"
+        eid = rows[0].id
+    assert len(sent) == 1
+    to, subject, body, headers = sent[0]
+    assert to == "me@gmail.com" and subject == "[compbot] Possible win: Congratulations - you've won!"
+    assert headers == {"X-Compbot": "alert"}  # so it's never read back in
+    assert "From:      HOTBIN <winners@hotbin-test.example>" in body
+    assert ("\u201cDear Test, we are delighted to tell you that you are the winner of our HOTBIN composting bundle "
+            "competition.\u201d") in body
+    assert "Looks like your entry for: HOTBIN composting bundle worth £250 (entered " in body
+    assert "because it's from the competition's site (hotbin-test.example) and both mention \u201chotbin\u201d" in body
+    assert ("https://mail.google.com/mail/?authuser=me%40gmail.com#search/rfc822msgid%3Awin-1%40hotbin-test.example"
+            in body)
+    assert f"Review it in compbot: http://nas.local:8085/inbox/{eid}" in body
+
+
+def test_alerts_read_back_in_before_are_removed(monkeypatch):
+    from app.db import Email
+
+    _gmail(monkeypatch)
+    init_db()
+    note = "Email: [compbot] Possible competition win!"
+    with session_scope() as s:
+        only = Competition(source="test", source_id="test-alert-only", thread_url="x", title="Win a kettle",
+                           method="web_form", status="entered", entry_count=1, outcome="possible_win",
+                           outcome_note=note)
+        both = Competition(source="test", source_id="test-alert-both", thread_url="x", title="Win a toaster",
+                           method="web_form", status="entered", entry_count=1, outcome="possible_win",
+                           outcome_note=note)
+        s.add_all([only, both])
+        s.flush()
+        s.add_all([
+            Email(message_id="<a1@gmail.com>", from_addr="me@gmail.com", subject="[compbot] Possible competition win!",
+                  category="possible_win", competition_id=only.id),
+            Email(message_id="<a2@gmail.com>", from_addr="me@gmail.com", subject="[compbot] Possible competition win!",
+                  category="scam_suspect", competition_id=both.id),
+            Email(message_id="<real@toast.example>", from_addr="win@toast.example", subject="You've won a toaster",
+                  category="possible_win", competition_id=both.id),
+            Email(message_id="<fwd@gmail.com>", from_addr="me@gmail.com", subject="Fwd: you've won",
+                  category="possible_win"),
+        ])
+        ids = (only.id, both.id)
+    assert jobs.forget_own_alerts() == 2
+    with session_scope() as s:
+        left = set(s.scalars(select(Email.message_id).where(Email.message_id.in_(
+            ["<a1@gmail.com>", "<a2@gmail.com>", "<real@toast.example>", "<fwd@gmail.com>"]))).all())
+        assert left == {"<real@toast.example>", "<fwd@gmail.com>"}
+        assert s.get(Competition, ids[0]).outcome == "pending"  # only the alert said it was a win
+        b = s.get(Competition, ids[1])
+        assert b.outcome == "possible_win" and b.outcome_note == "Email: You've won a toaster"
+    assert jobs.forget_own_alerts() == 0

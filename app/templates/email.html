@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge with context %}
+{% block title %}{{ (e.subject or 'Email')[:60] }}{% endblock %}
+{% block content %}
+{% set gl = gmail_link(e) %}
+<p class="small"><a href="/inbox?category={{ e.category }}">‹ Inbox</a></p>
+<h1>{{ e.subject or '(no subject)' }}</h1>
+<div class="card" style="margin-bottom:14px">
+  <dl class="kv">
+    <dt>From</dt><dd>{{ e.from_name }} &lt;{{ e.from_addr }}&gt;</dd>
+    <dt>Received</dt><dd>{{ e.received_at | local('%a %d %b %Y, %H:%M') }} · {{ e.folder | folder_label }}</dd>
+    <dt>Filed as</dt><dd>{{ badge(e.category) }}{% if e.reviewed %} <span class="small muted">reviewed by you</span>{% endif %}</dd>
+    {% if x.why %}<dt>Why</dt><dd>{{ x.why | join('; ') }}</dd>{% endif %}
+    <dt>Competition</dt><dd>{% if c %}<a href="/competitions/{{ c.id }}">{{ c.prize or c.title }}</a>
+      {% if c.last_entered_at or c.entered_at %}<span class="small muted">entered {{ (c.last_entered_at or c.entered_at) | local('%d %b %Y') }}</span>{% endif %}
+      {% if x.match %}<div class="small muted">Matched: {{ x.match | join('; ') }}</div>{% endif %}
+      {% elif e.category == 'possible_win' %}<span class="warn-text">No entry of yours matches it: check it's genuine</span>
+      {% else %}<span class="muted">not matched</span>{% endif %}</dd>
+    {% if e.action %}<dt>Action</dt><dd>{{ e.action }}</dd>{% endif %}
+  </dl>
+  {% if gl %}<p><a class="btn" href="{{ gl }}" target="_blank" rel="noopener">Open in Gmail ↗</a></p>{% endif %}
+</div>
+<div class="card" style="margin-bottom:14px">
+  <h2>What it says</h2>
+  {% if x.quote_hit %}<div class="quote">“{{ x.quote_before }}<mark>{{ x.quote_hit }}</mark>{{ x.quote_after }}”</div>{% endif %}
+  <div class="post tall">{{ e.snippet or '(no text)' }}</div>
+  {% if e.snippet|length in [1500, kept] %}<p class="small muted">That's the start of the email{% if gl %}: open it in Gmail for the rest{% endif %}.</p>{% endif %}
+</div>
+<div class="card" style="margin-bottom:14px">
+  <h2>Your verdict</h2>
+  <form method="post" action="/inbox/{{ e.id }}/action" class="actions">
+    <select name="competition_id" style="max-width:260px">
+      <option value="">{{ 'Keep match' if c else 'Link to…' }}</option>
+      {% for rc in recent %}<option value="{{ rc.id }}">{{ (rc.prize or rc.title)[:60] }}</option>{% endfor %}
+    </select>
+    <button class="btn small green" name="action" value="confirm_win">🏆 It's a win</button>
+    <button class="btn small" name="action" value="not_win">Not a win</button>
+    <button class="btn small" name="action" value="loss">Loss</button>
+    <button class="btn small" name="action" value="link">Link</button>
+  </form>
+</div>
+<p class="small muted">Score {{ e.score }}{% if e.signals %} · {{ e.signals | join(' · ') }}{% endif %}</p>
+{% endblock %}

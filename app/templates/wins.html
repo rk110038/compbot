@@ -7,7 +7,9 @@
 <div class="card" style="margin-bottom:14px">
   <h2>Possible wins to confirm</h2>
   <table>
-    {% for c in possible %}<tr><td><a href="/competitions/{{ c.id }}">{{ c.prize or c.title }}</a><div class="small muted">{{ c.outcome_note }}</div></td>
+    {% for c in possible %}<tr><td><a href="/competitions/{{ c.id }}">{{ c.prize or c.title }}</a>
+      {% for e in win_emails.get(c.id, [])[:3] %}<div class="small">✉ <a href="/inbox/{{ e.id }}">{{ e.subject or '(no subject)' }}</a> <span class="muted">from {{ e.from_name or e.from_addr }} &lt;{{ e.from_addr }}&gt;, {{ e.received_at | local('%d %b %H:%M') }}</span></div>
+      {% else %}<div class="small muted">{{ c.outcome_note }}</div>{% endfor %}</td>
       <td class="actions">
         <form class="inline" method="post" action="/competitions/{{ c.id }}/action"><input type="hidden" name="action" value="won"><button class="btn small green">Confirm win</button></form>
         <form class="inline" method="post" action="/competitions/{{ c.id }}/action"><input type="hidden" name="action" value="pending"><button class="btn small">Not a win</button></form>

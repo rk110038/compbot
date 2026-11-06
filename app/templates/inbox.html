@@ -3,7 +3,7 @@
 {% block title %}Inbox{% endblock %}
 {% block content %}
 <h1>Inbox</h1>
-<p class="muted">Emails from your competition Gmail, classified automatically. <b>Possible wins</b> need your review: genuine promoters never ask for a fee or bank details.</p>
+<p class="muted">Emails from your competition Gmail, classified automatically. Each shows the sentence that made compbot file it where it did and, for a competition it matched, why. <b>Possible wins</b> need your review: genuine promoters never ask for a fee or bank details. compbot's own alerts to you are never listed here.</p>
 <div class="tabs">
   {% for cat in cats %}<a href="/inbox?category={{ cat }}" class="{{ 'active' if category == cat }}">{{ cat.replace('_', ' ') }} ({{ counts.get(cat, 0) }})</a>{% endfor %}
   <a href="/inbox?category=" class="{{ 'active' if not category }}">all</a>
@@ -13,16 +13,22 @@
   <tr><th>Received</th><th>From / subject</th><th>Class</th><th>Competition</th><th></th></tr>
   {% for e in rows %}
   {% set c = comps.get(e.competition_id) if e.competition_id else None %}
-  <tr>
-    <td class="nowrap small">{{ e.received_at | local }}<div class="muted">{{ e.folder }}</div></td>
-    <td><b>{{ e.subject }}</b><div class="small muted">{{ e.from_name }} &lt;{{ e.from_addr }}&gt;</div>
-      <details><summary class="small">Preview & signals (score {{ e.score }})</summary>
-        <div class="post small">{{ e.snippet[:1200] }}</div>
-        <div class="small muted">{{ e.signals | join(' · ') }}</div>
-        {% if e.action %}<div class="small">Action: {{ e.action }}</div>{% endif %}
-      </details></td>
+  {% set x = why[e.id] %}
+  {% set gl = gmail_link(e) %}
+  <tr id="email-{{ e.id }}">
+    <td class="nowrap small">{{ e.received_at | local }}<div class="muted">{{ e.folder | folder_label }}</div></td>
+    <td><a href="/inbox/{{ e.id }}"><b>{{ e.subject or '(no subject)' }}</b></a>
+      <div class="small muted">{{ e.from_name }} &lt;{{ e.from_addr }}&gt;</div>
+      {% if x.quote_hit %}<div class="quote small">“{{ x.quote_before }}<mark>{{ x.quote_hit }}</mark>{{ x.quote_after }}”</div>{% endif %}
+      {% if x.why %}<div class="small"><span class="muted">Why:</span> {{ x.why | join('; ') }}</div>{% endif %}
+      {% if e.action %}<div class="small"><span class="muted">Action:</span> {{ e.action }}</div>{% endif %}
+      <div class="small"><a href="/inbox/{{ e.id }}">Whole email</a>{% if gl %} · <a href="{{ gl }}" target="_blank" rel="noopener">Open in Gmail ↗</a>{% endif %}</div></td>
     <td>{{ badge(e.category) }}{% if e.reviewed %}<div class="small muted">reviewed</div>{% endif %}</td>
-    <td class="small">{% if c %}<a href="/competitions/{{ c.id }}">{{ (c.prize or c.title)[:60] }}</a>{% else %}<span class="muted">not matched</span>{% endif %}</td>
+    <td class="small">{% if c %}<a href="/competitions/{{ c.id }}">{{ (c.prize or c.title)[:60] }}</a>
+      {% if c.last_entered_at or c.entered_at %}<div class="muted">entered {{ (c.last_entered_at or c.entered_at) | local('%d %b') }}</div>{% endif %}
+      {% if x.match %}<div class="muted">Matched: {{ x.match | join('; ') }}</div>{% endif %}
+      {% elif e.category == 'possible_win' %}<span class="warn-text">No entry of yours matches it: check it's genuine</span>
+      {% else %}<span class="muted">not matched</span>{% endif %}</td>
     <td>
       <form method="post" action="/inbox/{{ e.id }}/action" class="actions">
         <select name="competition_id" style="max-width:200px">
