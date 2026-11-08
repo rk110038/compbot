@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Win a watch</title></head>
+<body>
+<!-- Doctor Who Magazine: the quiz isn't marked required, the AI's answer was doubted by its second check and left out,
+     and the form then said "* Required Please fix errors before proceeding". -->
+<h1>Win a Stormele watch</h1>
+<p>The watch has a gold dial and a steel case.</p>
+<form id="f">
+  <p>What colour is the watch dial?</p>
+  <label><input type="radio" name="q1" value="Gold"> Gold</label>
+  <label><input type="radio" name="q1" value="Silver"> Silver</label>
+  <label>First Name* <input name="fn" required></label>
+  <label>Email Address* <input type="email" name="em" required></label>
+  <button type="submit">SUBMIT</button>
+  <p id="msg"></p>
+</form>
+<script>
+document.getElementById('f').addEventListener('submit', e => {
+  e.preventDefault();
+  const q = document.querySelector('[name=q1]:checked');
+  if (!q) { document.getElementById('msg').textContent = '* Required Please fix errors before proceeding'; return; }
+  document.body.innerHTML = '<h2>THANK YOU</h2><p>Your entry has been received.</p>';
+});
+</script>
+</body></html>

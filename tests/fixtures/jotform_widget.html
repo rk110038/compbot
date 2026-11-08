@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Join The Flock</title></head>
+<body>
+<!-- Jotform (NaturalMat, Visa Cash App RB): the terms box is a widget in a frame of its own inside the form. compbot
+     filled the form's own boxes and got "There is 1 error on this page. Please correct it before moving on." -->
+<h1>Win £100 to spend</h1>
+<form id="f">
+  <label>First Name* <input name="fn" required></label>
+  <label>Email* <input type="email" name="em" required></label>
+  <ul><li class="form-line" data-type="control_widget"><iframe id="w1" src="form-widgets/terms.html?qid=22"></iframe></li>
+      <li class="form-line" data-type="control_widget"><iframe id="w2" src="form-widgets/partners.html?qid=31"></iframe></li></ul>
+  <button type="submit">Submit</button>
+  <p id="msg"></p>
+</form>
+<script>
+document.getElementById('f').addEventListener('submit', e => {
+  e.preventDefault();
+  const box = id => document.getElementById(id).contentDocument.querySelector('input[type=checkbox]').checked;
+  if (!box('w1')) { document.getElementById('msg').textContent = 'There is 1 error on this page. Please correct it before moving on. Terms & Conditions'; return; }
+  if (box('w2')) { document.getElementById('msg').textContent = 'Partner offers were ticked'; return; }
+  document.body.innerHTML = '<h2>Thank you! Your submission has been received.</h2>';
+});
+</script>
+</body></html>

@@ -351,7 +351,7 @@ JS_MARK_SUBMIT = "(idx) => {\n" + JS_HELPERS + r"""
   // screen belongs to the next question, so don't take it for this one's. compbot looks for the new question instead.
   const shown = e => vis(e) || (e.labels && Array.from(e.labels).some(vis)) || vis(e.closest('label')) || vis(e.parentElement);
   if (el && !shown(el)) return null;
-  const good = /^(enter|submit|send|sign ?up|subscribe|register|join|go|count me in|take part|enter now|enter competition|enter the (competition|draw|prize draw)|submit entry|enter draw|i'?m in|done|continue|next|confirm|win|enter to win|let'?s go|play|ok)\b/i;
+  const good = /^(enter|submit|send|sign ?up|subscribe|register|join|go|count me in|take part|enter now|enter competition|enter the (competition|draw|prize draw)|submit entry|enter draw|i'?m in|done|continue|next|confirm|win|enter to win|let'?s go|play|ok|start (the )?(game|quiz|playing|now))\b/i;
   const bad = /cancel|reset|back|close|log ?in|sign ?in|search|menu|cookie|accept all|reject|share|facebook|twitter|instagram|print|basket|cart/i;
   // Link-style buttons count too, e.g. Wayin/Cheetah forms' <a class="xCTA xButton">Submit</a> (Future plc comps), and
   // script-driven <div>s, e.g. Doctor Who Magazine's <div class="mrmButton" onclick=...>SUBMIT</div>.
@@ -592,17 +592,23 @@ JS_REVEAL = "([dryRun, linksOnly]) => {\n" + JS_HELPERS + r"""
   // A <button> is a submit button unless it says otherwise; links and type=button ones can't send a form.
   const couldSubmit = b => b.tagName === 'BUTTON' ? (b.getAttribute('type') || 'submit').toLowerCase() === 'submit'
     : b.tagName === 'INPUT' ? /^(submit|image)$/i.test(b.type || '') : false;
-  for (const b of __cbAll(document, 'button, a, [role=button], input[type=button]')) {
+  // A form with nothing to fill in can't send your details: its button only starts the competition (Qualifio's
+  // <form id="launchGame"> with just a "Click here" button, Chicago Town and Currys).
+  const fillable = 'input:not([type=hidden]):not([type=submit]):not([type=button]):not([type=image]):not([type=reset]), select, textarea';
+  const starter = /^(click here|participate|participate now|take part|start|start now|play|play now|play the game|enter|enter now|begin|let'?s go|go|continue|next|i'?m in)!?$/i;
+  const opensForm = (b, t) => { const f = b.form || b.closest('form'); return !!(f && starter.test(t) && !Array.from(f.querySelectorAll(fillable)).some(e => vis(e) || (e.labels && Array.from(e.labels).some(vis)))); };
+  for (const b of __cbAll(document, 'button, a, [role=button], input[type=button], input[type=submit]')) {
     if (!vis(b) || b.hasAttribute('data-cb-tried')) continue;
     const t = (txt(b) || b.value || '').trim();
+    const opener = opensForm(b, t);
     // Never press anything that could submit a form. Inside a form, only a quiz or form opener that can't send it
-    // (fishdeal's quiz is one big <form> opened by a "Take the Quiz" link).
-    if ((b.getAttribute('type') || '').toLowerCase() === 'submit') continue;
-    if (b.closest('form') && !(safe.test(t) && !couldSubmit(b))) continue;
+    // (fishdeal's quiz is one big <form> opened by a "Take the Quiz" link), or the button of a form with no fields.
+    if ((b.getAttribute('type') || '').toLowerCase() === 'submit' && !opener) continue;
+    if (b.closest('form') && !opener && !(safe.test(t) && !couldSubmit(b))) continue;
     const isLink = b.tagName === 'A' && /^https?:/i.test(b.href || '');
     const offsite = isLink && new URL(b.href, location.href).host !== location.host;
     const samePage = isLink && new URL(b.href, location.href).href.split('#')[0] === location.href.split('#')[0];
-    let isSafe = safe.test(t), isEnter = enter.test(t), isHere = false;
+    let isSafe = safe.test(t) || opener, isEnter = enter.test(t), isHere = false;
     if (!isSafe && !isEnter && isLink && !samePage && hereWord.test(t)) {
       const box = b.closest('p, li, td, h2, h3, h4, h5, div') || b.parentElement;
       const whole = box ? txt(box) : '';
@@ -1539,7 +1545,7 @@ REQUIRED_ERR_RE = re.compile(
     r"please (?:fix|correct) (?:the )?(?:following )?errors", re.I)
 
 
-def _required_fixes(container: dict) -> list[tuple[Field, Action]]:
+def _required_fixes(container: dict, ai_records: list | None = None) -> list[tuple[Field, Action]]:
     """After a 'this field is required' error: sensible choices for groups compbot left untouched."""
     from collections import defaultdict
 
@@ -1561,7 +1567,16 @@ def _required_fixes(container: dict) -> list[tuple[Field, Action]]:
     for f in fields:
         if f.tag == "radio" and not f.checked:
             if looks_like_question(f):
-                continue  # a quiz question: picking the first answer would only be a guess
+                # A quiz question: picking the first answer would only be a guess. But if the AI answered it and only
+                # its second check doubted the answer, that answer beats sending the form with the question blank
+                # (Doctor Who Magazine: "Ashley Carter" was right).
+                rec = next((r for r in ai_records or [] if r.get("answer") and (r.get("confidence") or 0) >= 80
+                            and normalise(str(r.get("question", ""))) == normalise(f.human_label[:200])), None)
+                o = choose_option(f.options, [rec["answer"]], threshold=80) if rec else None
+                if o:
+                    fixes.append((f, Action("radio", o.get("idx") or o.get("value"), source="ai",
+                                            note=f"{note}: the AI's answer, though its second check doubted it")))
+                continue
             o = next((o for o in f.options if not is_placeholder_option(o)), None)
             if o:
                 fixes.append((f, Action("radio", o.get("idx") or o.get("value"), source="rule", note=note)))
@@ -1952,6 +1967,101 @@ def _to_fields(container: dict) -> list[Field]:
 
 # A read-only date box with a calendar widget: set the date the way the widget would (flatpickr's own setDate, which
 # takes the ISO date compbot gives it), else write the value with the events the page's script listens for.
+# Drawn drop-down lists (Riddle's Title and quiz lists): a role=listbox box whose choices (role=option) only appear in a
+# pop-up once it's clicked. Found inside the form being filled; read by opening each one.
+JS_ARIA_DROPDOWNS = "([prefix, formId]) => {\n" + JS_HELPERS + r"""
+  const vis = __cbVis, txt = __cbTxt;
+  const root = (formId && __cbOne(`[data-cb-form="${formId}"]`)) || document;
+  const out = [];
+  let n = 0;
+  for (const box of __cbAll(root, '[role=listbox][aria-owns], [role=combobox][aria-owns]')) {
+    if (!vis(box) || box.tagName === 'SELECT' || box.tagName === 'INPUT' || box.closest('[role=option]')) continue;
+    const block = box.closest('.form-element-block, .form-group, .form-field, .field, li, fieldset') || box.parentElement;
+    const lab = block && Array.from(block.querySelectorAll('label, legend, .form-element-label')).find(l => !box.contains(l) && txt(l));
+    const label = (lab ? txt(lab) : '') || box.getAttribute('aria-label') || '';
+    let idx = box.getAttribute('data-cb-idx');
+    if (!idx) { idx = prefix + (n++); box.setAttribute('data-cb-idx', idx); }
+    const cls = block && typeof block.className === 'string' ? block.className : '';
+    const req = /(^|\s)required(\s|$)/.test(cls) || box.getAttribute('aria-required') === 'true' || /\*\s*$/.test(label);
+    out.push({idx, label: label.slice(0, 300), shown: txt(box).slice(0, 300), owns: box.getAttribute('aria-owns') || '',
+              required: req, context: block ? txt(block).slice(0, 300) : ''});
+  }
+  return out;
+}
+"""
+# The open pop-up's choices, marked "<box idx>_o<n>" in order (the same marks each time it's opened).
+JS_ARIA_OPTIONS = "([idx, owns]) => {\n" + JS_HELPERS + r"""
+  const vis = __cbVis, txt = __cbTxt;
+  const pop = owns ? (document.getElementById(owns) || __cbOne('#' + CSS.escape(owns))) : null;
+  const opts = (pop ? __cbAll(pop, '[role=option]') : __cbAll(document, '[role=option]')).filter(o => vis(o));
+  return opts.map((o, k) => { const oi = idx + '_o' + k; o.setAttribute('data-cb-idx', oi);
+    return {idx: oi, text: txt(o).slice(0, 200), value: txt(o).slice(0, 200)}; });
+}
+"""
+
+
+def _aria_dropdowns(page, frame, container: dict, prefix: str) -> list[Field]:
+    """The form's drawn drop-down lists that still need a choice, with their choices (each opened, read, closed)."""
+    out = []
+    for b in _safe_eval(frame, JS_ARIA_DROPDOWNS, [prefix, container.get("formId") or ""], default=[]) or []:
+        opts: list = []
+        try:
+            frame.locator(f'[data-cb-idx="{b["idx"]}"]').first.click(timeout=3000)
+            _pause(page, 0.5)
+            opts = _safe_eval(frame, JS_ARIA_OPTIONS, [b["idx"], b["owns"]], default=[]) or []
+        except Exception as exc:  # noqa: BLE001
+            log.debug("couldn't open drop-down %s: %s", b.get("label"), exc)
+        finally:
+            try:
+                page.keyboard.press("Escape")
+            except Exception:  # noqa: BLE001
+                pass
+        shown = (b.get("shown") or "").strip()
+        if not opts or any(o["text"] == shown for o in opts):
+            continue  # nothing to choose from, or a choice is already made
+        # Riddle shows the quiz question in the list itself until an answer is picked; the label just says "Quiz question".
+        label = shown if shown.endswith("?") else (b.get("label") or shown)
+        out.append(Field(idx=b["idx"], tag="select", type="select", label=clean_label(label),
+                         placeholder="" if label == shown else shown[:120], required=bool(b.get("required")),
+                         options=opts, context=b.get("context") or "", owns=b.get("owns") or ""))
+    return out
+
+
+# Jotform's widget fields live in frames of their own inside the form (terms boxes at
+# <form>.jotform.com/form-widgets/terms-conditions, pickers at widgets.jotform.io/pickers/).
+JOTFORM_WIDGET_RE = re.compile(r"^https://(?:[\w-]+\.)*jotform\.(?:com|eu|io|me|ca)/(?:form-widgets/|pickers/)", re.I)
+JS_WIDGET_BOXES = "(prefix) => {\n" + JS_HELPERS + r"""
+  const vis = __cbVis, txt = __cbTxt;
+  return Array.from(document.querySelectorAll('input[type=checkbox]')).filter(c => vis(c) || (c.labels && Array.from(c.labels).some(vis)))
+    .map((c, k) => { const idx = prefix + k; c.setAttribute('data-cb-idx', idx);
+      const lab = (c.labels && c.labels[0]) || c.closest('label');
+      return {idx, label: (txt(lab) || txt(document.body)).slice(0, 300), checked: c.checked}; });
+}
+"""
+
+
+def _fill_widget_frames(frame, ctx: Ctx, gen: list) -> list[dict]:
+    """Tick (or leave) the tick boxes in the form's Jotform widget frames, by the same rules as any tick box."""
+    from .forms import map_checkbox
+
+    done = []
+    for child in list(getattr(frame, "child_frames", []) or []):
+        if child.is_detached() or not JOTFORM_WIDGET_RE.match(child.url or ""):
+            continue
+        gen[0] += 1
+        for b in _safe_eval(child, JS_WIDGET_BOXES, f"g{gen[0]}w_", default=[]) or []:
+            label = b.get("label") or ""
+            f = Field(idx=b["idx"], tag="input", type="checkbox", label=label, checked=bool(b.get("checked")),
+                      required=bool(re.search(r"\*\s*required\b|\brequired\s*$", label, re.I)))
+            a = map_checkbox(f, ctx)
+            if a.kind not in ("check", "uncheck"):
+                continue
+            ok = _apply(child, f, a)
+            done.append({"label": f.human_label, "action": a.kind, "source": a.source, "note": f"{a.note} (form widget)",
+                         "ok": ok})
+    return done
+
+
 JS_SET_PICKER = "([idx, value]) => {\n" + JS_HELPERS + r"""
   const el = __cbOne(`[data-cb-idx="${idx}"]`);
   if (!el) return false;
@@ -1983,6 +2093,13 @@ def _apply(frame, f: Field, a: Action) -> bool:
             except Exception:  # noqa: BLE001
                 loc.click(timeout=4000)
                 loc.press_sequentially(a.value or "", delay=20, timeout=15000)
+            return True
+        if a.kind == "select" and f.owns:
+            # A drawn drop-down: open it, mark its choices again (it may draw them afresh) and click the one wanted.
+            loc.click(timeout=4000)
+            time.sleep(0.4)
+            _safe_eval(frame, JS_ARIA_OPTIONS, [f.idx, f.owns])
+            frame.locator(f'[data-cb-idx="{a.value}"]').first.click(timeout=4000)
             return True
         if a.kind == "select":
             loc.select_option(value=a.value, timeout=6000)
@@ -2362,7 +2479,7 @@ class Browser:
                     m = QUIZ_FAIL_RE.search(text)
                     res.result = "failed"
                     res.message = f"Quiz score too low to unlock the entry ({quiz_summary}): \u201c{m.group(0)}\u201d"
-                elif quiz_summary is not None:
+                elif quiz_summary is not None and not login:
                     res.result, res.message = "failed", f"Played the quiz ({quiz_summary}) but no entry form appeared"
                 elif widget:
                     res.result = "widget"
@@ -2427,6 +2544,9 @@ class Browser:
                 # Fill in rounds: many forms only reveal later fields (or the submit button) once earlier ones are set.
                 for _round in range(4):
                     fields = [f for f in _to_fields(container) if f.idx not in done_idx]
+                    gen[0] += 1
+                    fields += [f for f in _aria_dropdowns(page, frame, container, f"g{gen[0]}d_")
+                               if f.idx not in done_idx]
                     if not fields:
                         break
                     if any(f.type == "password" and "optional" not in f.desc for f in fields):
@@ -2502,6 +2622,12 @@ class Browser:
                     container = refreshed
                     if _round:
                         details["steps"].append(f"step {step}: more fields appeared after filling")
+
+                # Jotform draws some of its boxes as widgets, each in a frame of its own inside the form (Visa Cash
+                # App RB, NaturalMat: "I agree to terms & conditions. * REQUIRED"); fill those too.
+                widget_fields = _fill_widget_frames(frame, ctx, gen)
+                if widget_fields:
+                    details["fields"] += widget_fields
 
                 # A field on this page: earlier pages' fields may be hidden now, or gone.
                 cur_ids = [f["idx"] for f in container.get("fields", []) if f["idx"] in done_idx]
@@ -2721,7 +2847,7 @@ class Browser:
                     if not retried_required and same_form and REQUIRED_ERR_RE.search(new_text):
                         gen[0] += 1
                         cur = _refresh_container(frame, done_idx, f"g{gen[0]}q_")
-                        fixes = _required_fixes(cur) if cur else []
+                        fixes = _required_fixes(cur, details.get("ai")) if cur else []
                         applied = []
                         for f, a in fixes:
                             if _apply(frame, f, a):
@@ -2867,5 +2993,12 @@ def enter_isolated(url: str, ctx: Ctx, settings: dict, shot_prefix: str, comp_co
         steps = list((again.details or {}).get("steps") or [])
         if again.details is not None:
             again.details["steps"] = ["the site's HTTP/2 connection failed, so compbot used HTTP/1.1"] + steps
+        if again.result == "error" and re.search(r"Timeout|ERR_(?:TIMED_OUT|CONNECTION_(?:RESET|CLOSED))",
+                                                  again.message or ""):
+            # Waitrose: the HTTP/2 connection is dropped and HTTP/1.1 is left hanging. That's the site turning
+            # automated browsers away, not a passing page error.
+            again.result = "blocked"
+            again.message = ("Site refused automated access (it dropped the HTTP/2 connection, and over HTTP/1.1 "
+                             "the page never loaded)")
         return again
     return r

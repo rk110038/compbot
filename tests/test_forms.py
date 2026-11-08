@@ -424,3 +424,17 @@ def test_country_list_named_after_the_billing_address(profile):
     t = Field("2", "input", "text", name="dwfrm_billing_billingAddress_country", label="")
     assert map_field(t, ctx(profile)).value == "United Kingdom"
     assert map_field(Field("3", "input", "text", name="billingAddress_country", label="Town"), ctx(profile)).value == "Testville"
+
+def test_quiz_question_naming_a_profile_detail_is_still_a_quiz(profile):
+    # Olive: "Which county does Bakewell pudding originate from?" was taken for your county and skipped.
+    opts = [{"text": t, "value": t, "idx": f"q{i}"} for i, t in enumerate(["Devon", "Kent", "Derbyshire"])]
+    f = Field("1", "radio", "radio", label="Which county does Bakewell pudding originate from?", required=True,
+              options=opts)
+    a = map_field(f, ctx(profile, answers=["Derbyshire"]))
+    assert (a.kind, a.value, a.source) == ("radio", "q2", "answer")
+    assert map_field(f, ctx(profile)).note == "required choice with no known answer"  # left for the AI
+    # Questions about you still get your details.
+    counties = [{"text": t, "value": t} for t in ["Berkshire", "Kent"]]
+    assert map_field(Field("2", "select", "select", label="Which county do you live in?", options=counties),
+                     ctx(profile)).value == "Berkshire"
+    assert map_field(Field("3", "input", "text", label="What is your email address?"), ctx(profile)).source == "email"

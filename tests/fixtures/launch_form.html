@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Race to the Base merch giveaway</title></head>
+<body>
+<!-- Qualifio (Chicago Town, Currys): the first screen is a form with nothing in it but a "Click here" button, which
+     brings up the entry form. compbot never pressed a form's own button, so it found "no entry form". -->
+<h1>Race to the Base merch giveaway</h1>
+<div id="box">
+  <p>Click the link below, fill in your info and click 'submit' for a chance to win!</p>
+  <form id="launchGame" name="launchGame" method="post" action="#">
+    <input name="jouer" id="jouer" type="submit" class="bouton" value="Click here">
+    <input type="hidden" name="qlfQs" value="x">
+  </form>
+</div>
+<script>
+document.getElementById('launchGame').addEventListener('submit', e => {
+  e.preventDefault();
+  document.getElementById('box').innerHTML = '<form id="f"><label>First name* <input name="fn" required></label>'
+    + '<label>Email* <input type="email" name="em" required></label>'
+    + '<label><input type="checkbox" name="tc" required> I agree to the competition terms and conditions *</label>'
+    + '<button type="submit">Submit</button></form>';
+  document.getElementById('f').addEventListener('submit', ev => { ev.preventDefault(); document.body.innerHTML = '<h2>Thanks for entering!</h2>'; });
+});
+</script>
+</body></html>

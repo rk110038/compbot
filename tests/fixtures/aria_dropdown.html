@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Win a cruise</title>
+<style>.rid-dropdown{border:1px solid #888;min-height:24px;cursor:pointer;margin:.3rem 0} .rid-popup{border:1px solid #444;background:#fff} li{padding:4px;cursor:pointer}</style></head>
+<body>
+<!-- Riddle (Cruise Collective, Olive): Title and the quiz are drawn drop-downs (role=listbox) whose choices only exist in
+     a pop-up once clicked. compbot didn't see them, so the "Submit and continue" button stayed disabled. -->
+<h1>Win a 7-night Greek cruise</h1>
+<div id="form">
+  <div class="form-element-block dropdown required"><label class="form-element-label" for="33"><div><p>Title</p></div></label>
+    <div class="rid-dropdown" id="dd1" role="listbox" tabindex="0" aria-haspopup="true" aria-owns="Popup_37"><span class="t"></span></div></div>
+  <div class="form-element-block text required"><label for="fn">First Name</label><input id="fn" type="text" required></div>
+  <div class="form-element-block email required"><label for="em">Email</label><input id="em" type="email" required></div>
+  <div class="form-element-block dropdown required"><label class="form-element-label" for="41"><div><p><strong>Quiz question</strong></p></div></label>
+    <div class="rid-dropdown" id="dd2" role="listbox" tabindex="0" aria-haspopup="true" aria-owns="Popup_45"><span class="t">How many ships are currently in the fleet?</span></div></div>
+  <button id="go" type="button" disabled>Submit and continue</button>
+  <p id="msg"></p>
+</div>
+<script>
+const choices = {Popup_37: ['Mr', 'Mrs', 'Miss', 'Ms', 'Dr'], Popup_45: ['2', '4', '6', '8']};
+const picked = {};
+function check() { document.getElementById('go').disabled = !(picked.dd1 && picked.dd2 && fn.value && em.value); }
+for (const box of document.querySelectorAll('[role=listbox][aria-owns]')) {
+  box.addEventListener('click', () => {
+    const id = box.getAttribute('aria-owns');
+    document.querySelectorAll('.rid-popup').forEach(p => p.remove());
+    const pop = document.createElement('div'); pop.className = 'rid-popup'; pop.id = id;
+    pop.innerHTML = '<ul role="listbox">' + choices[id].map((c, i) => `<li role="option" aria-selected="false" data-value="${i}">${c}</li>`).join('') + '</ul>';
+    pop.addEventListener('click', e => { const li = e.target.closest('[role=option]'); if (!li) return; box.querySelector('.t').textContent = li.textContent; picked[box.id] = li.textContent; pop.remove(); check(); });
+    box.after(pop);
+  });
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape') document.querySelectorAll('.rid-popup').forEach(p => p.remove()); });
+['fn', 'em'].forEach(id => document.getElementById(id).addEventListener('input', check));
+document.getElementById('go').addEventListener('click', () => {
+  if (picked.dd1 !== 'Mr' || picked.dd2 !== '6') { document.getElementById('msg').textContent = 'Wrong: ' + JSON.stringify(picked); return; }
+  document.body.innerHTML = '<h2>Thanks for entering - good luck!</h2>';
+});
+</script>
+</body></html>

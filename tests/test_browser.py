@@ -654,3 +654,42 @@ def test_gleam_giveaway_on_a_blog_is_not_entered_through_its_comment_box(browser
     res = browser.enter(f"{fixture_server}/gleam_comment.html", Ctx(profile=profile), _settings(entry_mode="auto"),
                         "gc1", {})
     assert res.result == "widget" and "gleam.io/AnU0E" in res.message, res.message
+
+def test_http2_refusal_is_retried_over_http1(monkeypatch):
+    # Waitrose: net::ERR_HTTP2_PROTOCOL_ERROR, and over HTTP/1.1 the page then never loads: the site blocks bots.
+    from app.entry import browser as br
+    monkeypatch.setattr(br, "_WORKER_MODULE", "tests.fixtures.http2_worker")
+    res = br.enter_isolated("https://example.com/win", Ctx(profile={}), _settings(), "h2a", {}, timeout=60)
+    assert res.result == "blocked" and "HTTP/2" in res.message, res.message
+    assert res.details["steps"][0].startswith("the site's HTTP/2 connection failed")
+    monkeypatch.setenv("HTTP1_LOADS", "1")
+    res = br.enter_isolated("https://example.com/win", Ctx(profile={}), _settings(), "h2b", {}, timeout=60)
+    assert res.result == "dry_run_ok" and res.details["steps"] == [
+        "the site's HTTP/2 connection failed, so compbot used HTTP/1.1", "filled"]
+
+def test_empty_form_whose_button_starts_the_competition(browser, fixture_server, profile):
+    res = browser.enter(f"{fixture_server}/launch_form.html", Ctx(profile=profile), _settings(entry_mode="dry_run"),
+                        "lf1", {})
+    assert res.result == "dry_run_ok" and "clicked 'Click here'" in res.details["steps"], (res.message, res.details)
+    res = browser.enter(f"{fixture_server}/launch_form.html", Ctx(profile=profile), _settings(entry_mode="auto"),
+                        "lf2", {})
+    assert res.result == "entered", (res.message, res.details["steps"])
+
+def test_drawn_drop_down_lists_are_chosen_from(browser, fixture_server, profile):
+    res = browser.enter(f"{fixture_server}/aria_dropdown.html", Ctx(profile=profile, answers=["6"]),
+                        _settings(entry_mode="auto"), "ad1", {})
+    assert res.result == "entered", (res.message, res.details["fields"])
+    by = {f["label"]: f for f in res.details["fields"]}
+    assert by["Title"]["source"] == "title" and by["Title"]["ok"]
+    assert by["How many ships are currently in the fleet?"]["source"] == "answer"
+
+def test_jotform_terms_widget_in_its_own_frame_is_ticked(browser, fixture_server, profile, monkeypatch):
+    import re
+
+    from app.entry import browser as br
+    monkeypatch.setattr(br, "JOTFORM_WIDGET_RE", re.compile(r"^http://127\.0\.0\.1:\d+/form-widgets/"))
+    res = browser.enter(f"{fixture_server}/jotform_widget.html", Ctx(profile=profile), _settings(entry_mode="auto"),
+                        "jw1", {})
+    assert res.result == "entered", (res.message, res.details["fields"])
+    widget = [f for f in res.details["fields"] if "(form widget)" in f["note"]]
+    assert [(f["action"], f["ok"]) for f in widget] == [("check", True), ("uncheck", True)], widget

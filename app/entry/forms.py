@@ -36,6 +36,7 @@ class Field:
     checked: bool = False
     picker: bool = False     # a read-only date box filled through its calendar widget
     link_inside: bool = False  # a drawn tick box with links inside it (ticked with a script click, see _apply)
+    owns: str = ""           # a drawn drop-down list (role=listbox): the id of the pop-up holding its choices
 
     @property
     def desc(self) -> str:
@@ -312,12 +313,28 @@ def _key_from_text(d: str) -> str | None:
     return None
 
 
+# A question about you, not a quiz: "Which county do you live in?", "Where are you from?".
+ABOUT_YOU_RE = re.compile(r"\b(?:do|did) you (?:live|reside|come from|currently live)\b|\bwhere (?:do|did|are) you\b|"
+                          r"\bare you (?:from|based)\b")
+
+
+def _quiz_label(f: Field) -> bool:
+    """A visible label that's a quiz question ("Which county does Bakewell pudding originate from?")."""
+    vis = normalise(f.label or "")
+    raw = (f.label or "").strip().rstrip("* ").strip()
+    if not vis or PERSONAL_Q_RE.search(vis) or ABOUT_YOU_RE.search(vis):
+        return False
+    return raw.endswith("?") and bool(QUESTION_START_RE.match(vis)) and len(vis.split()) >= 4
+
+
 def detect_profile_key(f: Field) -> str | None:
     label = _label_text(f)
     core = re.sub(r"[*?:()]+|\brequired\b", " ", label)
     core = re.sub(r"\s+", " ", core).strip()
     if label and OTHER_PERSON_RE.search(label):
         return None
+    if _quiz_label(f):
+        return None  # "Which county does Bakewell pudding originate from?" is a quiz, not your county
     if core in SPLIT_NAME:
         return SPLIT_NAME[core]
     d = f.desc

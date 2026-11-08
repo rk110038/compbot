@@ -448,3 +448,12 @@ def test_questions_about_your_taste_skip_the_second_check(fake_ollama, fixture_s
     assert res.result == "entered", (res.message, res.details.get("ai"))
     rec = res.details["ai"][0]
     assert rec["used"] and rec["answer"] == "Gold" and "check" not in rec
+
+def test_doubted_ai_answer_is_used_when_the_form_insists(fake_ollama, fixture_server, profile):
+    # The second check turns "Gold" down for a dial question; the quiz isn't marked required, so it was left blank and
+    # the site said "* Required". Then the AI's own answer beats sending the question blank.
+    with Browser() as b:
+        res = b.enter(f"{fixture_server}/ai_required_quiz.html", Ctx(profile=profile), AI, "ai7", {})
+    assert res.result == "entered", (res.message, res.details["steps"])
+    assert any("site said fields were required" in s for s in res.details["steps"])
+    assert any(f["source"] == "ai" and "second check doubted" in f["note"] for f in res.details["fields"])
