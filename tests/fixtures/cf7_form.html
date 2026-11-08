@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Win £50 if you can find Kenny</title></head>
+<body>
+<!-- Love It! (Contact Form 7): each box's words are in the <p> before its wrapper, the acceptance box's in the <p> after,
+     and the submit button stays disabled until the acceptance box is ticked. -->
+<h1>Win £50 if you can find Kenny</h1>
+<form class="wpcf7-form" id="f">
+<p>Your Name </p><p><span class="wpcf7-form-control-wrap"><input class="wpcf7-form-control wpcf7-text" type="text" name="your-name"></span> </p>
+<p>Your Email </p><p><span class="wpcf7-form-control-wrap"><input class="wpcf7-form-control wpcf7-email" type="email" name="your-email"></span> </p>
+<p>Your age </p><p><span class="wpcf7-form-control-wrap"><select class="wpcf7-form-control wpcf7-select" name="age-group"><option value="18-30">18-30</option><option value="31-40">31-40</option><option value="41-50">41-50</option><option value="51-60">51-60</option><option value="60+">60+</option></select></span> </p>
+<p>Your Address </p><p><span class="wpcf7-form-control-wrap"><textarea class="wpcf7-form-control wpcf7-textarea" name="your-address"></textarea></span> </p>
+<p>Kenny is in this square: </p><p><span class="wpcf7-form-control-wrap"><input class="wpcf7-form-control wpcf7-text" type="text" name="kenny-answer"></span> </p>
+<p><span class="wpcf7-form-control-wrap"><span class="wpcf7-form-control wpcf7-acceptance"><span class="wpcf7-list-item"><input type="checkbox" name="acceptance-955" value="1"></span></span></span> </p>
+<p>Please tick this checkbox to authorise us to contact you about your competition entry and be notified by email of future magazine editions and competitions. Your data is only used in accordance with our <a href="/privacy-policy/">Privacy Policy</a>.</p>
+<p><input class="wpcf7-form-control wpcf7-submit" type="submit" value="CLICK HERE TO ENTER NOW!" disabled></p>
+<div class="wpcf7-response-output" id="msg"></div>
+</form>
+<script>
+const f = document.getElementById('f'), acc = f.querySelector('[name="acceptance-955"]'), btn = f.querySelector('[type=submit]');
+acc.addEventListener('change', () => { btn.disabled = !acc.checked; });
+f.addEventListener('submit', e => {
+  e.preventDefault();
+  const v = n => f.querySelector(`[name="${n}"]`).value;
+  if (v('your-name') !== 'Test Person' || v('age-group') !== '41-50' || v('kenny-answer') !== 'G5' || !v('your-address').includes('RG1 1AA')) {
+    document.getElementById('msg').textContent = 'One or more fields have an error. Please check and try again.'; return;
+  }
+  document.body.innerHTML = '<h2>Thank you for your message. It has been sent.</h2>';
+});
+</script>
+</body></html>

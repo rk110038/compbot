@@ -631,3 +631,23 @@ def test_alerts_read_back_in_before_are_removed(monkeypatch):
         b = s.get(Competition, ids[1])
         assert b.outcome == "possible_win" and b.outcome_note == "Email: You've won a toaster"
     assert jobs.forget_own_alerts() == 0
+
+def test_email_quiz_entries_are_never_sent_without_their_answers(monkeypatch):
+    from app.config import DEFAULT_SETTINGS
+    from app.entry import emailer
+
+    init_db()
+    with session_scope() as s:
+        c = Competition(source="mse", source_id="mse-email-quiz", thread_url="x", title="E: 11/11 Win £50 picture quiz",
+                        method="email", status="queued", email_to="picturequiz@mag.example",
+                        body_text="Email your answers to the picture quiz on page 52 to picturequiz@mag.example")
+        s.add(c)
+        s.flush()
+        cid = c.id
+    monkeypatch.setattr(emailer, "send_mail", lambda *a, **k: (_ for _ in ()).throw(AssertionError("sent")))
+    from app.config import get_config
+    monkeypatch.setattr(get_config(), "gmail_address", "me@gmail.com")
+    monkeypatch.setattr(get_config(), "gmail_app_password", "pw")
+    assert jobs._enter_email(cid, dict(DEFAULT_SETTINGS, entry_mode="auto"), {"first_name": "A"}) == "needs_input"
+    c = _get(cid)
+    assert c.status == "manual" and "needs answers" in c.status_reason

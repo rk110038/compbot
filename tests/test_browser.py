@@ -613,3 +613,44 @@ def test_next_question_that_comes_up_by_itself(browser, fixture_server, profile)
     assert res.result == "entered", (res.message, res.details["steps"])
     assert "step 1: the next question came up by itself" in res.details["steps"], res.details["steps"]
     assert [f["source"] for f in res.details["fields"]] == ["answer", "full_name", "email"], res.details["fields"]
+
+
+def test_boxes_named_only_by_placeholders_and_first_choices(browser, fixture_server, profile):
+    # Johansens: the Title list's options were read as First name's label, and day 1 was guessed for the Day list.
+    res = browser.enter(f"{fixture_server}/list_labels.html", Ctx(profile=profile), _settings(entry_mode="auto"), "ll1", {})
+    assert res.result == "entered", (res.message, res.details["fields"])
+    by_source = {f["source"]: f for f in res.details["fields"]}
+    assert {"title", "first_name", "last_name", "dob_day", "dob_month", "dob_year", "email"} <= set(by_source)
+    assert not any("Mr" in f["label"] and "Mrs" in f["label"] for f in res.details["fields"]), res.details["fields"]
+
+def test_members_only_pages_are_sign_in_walls():
+    from app.entry.browser import LOGIN_WALL_RE
+
+    assert LOGIN_WALL_RE.search("This is for McLaren Racing Club members only. Join today and unlock:")
+    assert LOGIN_WALL_RE.search("Members-only competitions") and LOGIN_WALL_RE.search(
+        "This competition is only open to registered members.")
+    assert not LOGIN_WALL_RE.search("Our members only get the best offers")
+    assert not LOGIN_WALL_RE.search("Competition open to UK residents only")
+
+def test_page_for_registered_users_only_is_a_sign_in_wall(browser, fixture_server, profile):
+    res = browser.enter(f"{fixture_server}/registered_only.html", Ctx(profile=profile), _settings(entry_mode="dry_run"),
+                        "ro1", {})
+    assert res.result == "login" and "open to registered users" in res.message, res.message
+
+def test_contact_form_7_labels_and_acceptance_box(browser, fixture_server, profile):
+    # Love It!: no <label>s (the words sit in the <p> beside each box's wrapper), and the button waits for the
+    # acceptance box. compbot left every box unlabelled, skipped the acceptance box and found the button disabled.
+    from datetime import date
+
+    p = dict(profile, dob=f"{date.today().year - 46}-01-01")  # aged 46: the 41-50 group
+    res = browser.enter(f"{fixture_server}/cf7_form.html", Ctx(profile=p, answers=["G5"]), _settings(entry_mode="auto"),
+                        "cf1", {})
+    assert res.result == "entered", (res.message, res.details["fields"])
+    labels = {f["label"]: f["source"] for f in res.details["fields"]}
+    assert labels.get("Your Name") == "full_name" and labels.get("Your age") == "age"
+    assert any(k.startswith("Please tick this checkbox") and v == "rule" for k, v in labels.items())
+
+def test_gleam_giveaway_on_a_blog_is_not_entered_through_its_comment_box(browser, fixture_server, profile):
+    res = browser.enter(f"{fixture_server}/gleam_comment.html", Ctx(profile=profile), _settings(entry_mode="auto"),
+                        "gc1", {})
+    assert res.result == "widget" and "gleam.io/AnU0E" in res.message, res.message

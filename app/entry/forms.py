@@ -39,7 +39,7 @@ class Field:
 
     @property
     def desc(self) -> str:
-        parts = [self.label, self.placeholder, self.aria, self.name, self.id, self.autocomplete]
+        parts = [self.label, _placeholder(self), self.aria, self.name, self.id, self.autocomplete]
         return normalise(" ".join(p for p in parts if p))
 
     @property
@@ -78,6 +78,35 @@ def normalise(s: str) -> str:
     s = re.sub(r"([a-z])([A-Z])", r"\1 \2", s or "")
     s = re.sub(r"[_\-\[\]().:/|*]+", " ", s)
     return re.sub(r"\s+", " ", s).strip().lower()
+
+
+# Microsoft Forms reads each question out with its number and type ("2. Full name Single line text.", "County Multi
+# Line Text.", "Which issue? Single choice."); GoGirl's forms add "(Required.)". Only the question itself matters.
+_FORM_TYPE_RE = re.compile(
+    r"(?:\s*(?:\(required\.?\)|required to answer\.?|single[- ]line text\.?|multi[- ]?line text\.?|single choice\.?|"
+    r"multiple choice\.?|ranking\.?|rating\.?|likert\.?|file upload\.?|net promoter score\.?))+\s*$", re.I)
+_FORM_NUMBER_RE = re.compile(r"^\s*(?:\*\s*)?\d{1,2}\s*[.)]\s+(?=\S)")
+
+
+def clean_label(text: str) -> str:
+    t = re.sub(r"\s+", " ", text or "").strip()
+    out = _FORM_TYPE_RE.sub("", t)
+    out = re.sub(r"(?<=\S) Date\.$", "", out)  # Microsoft Forms' date questions ("Date of birth Date.")
+    out = _FORM_NUMBER_RE.sub("", out).strip()
+    return out or t
+
+
+# The placeholder Microsoft and Google Forms put in every box. With a label beside it, it says nothing about the
+# field, and its "answer" made every box (name and email included) look like a quiz answer.
+GENERIC_PLACEHOLDER_RE = re.compile(
+    r"^\s*(?:please\s+)?(?:enter|type|write|add|give|insert)?\s*(?:your|an?|the)?\s*(?:answer|response|reply)s?"
+    r"(?:\s+here)?\s*\.{0,3}\s*$", re.I)
+
+
+def _placeholder(f: "Field") -> str:
+    if f.label and f.label.strip() and GENERIC_PLACEHOLDER_RE.match(f.placeholder or ""):
+        return ""
+    return f.placeholder
 
 
 AUTOCOMPLETE_MAP = {
@@ -209,13 +238,20 @@ MATH_CUE_RE = re.compile(r"=|\bequals?\b|\bwhat(?:'s|\u2019s| is)\b|\?|\bsolve\b
 # Codes copied from a picture and similar "prove you're human" boxes (The Times: "The security code does not match").
 CODE_CHECK_RE = re.compile(
     r"security code|verification code|captcha|enter the (?:code|characters|letters|text|word)s? (?:shown|above|below|"
-    r"you see|in the (?:image|picture|box))|type the (?:code|characters|letters|text)|anti ?-?spam|spam (?:check|"
-    r"protection|question)|human verification|are you (?:a )?human|prove you(?:'re| are) (?:human|not a robot)", re.I)
+    r"you see|(?:(?:seen|shown|displayed|written) )?(?:in|on) the (?:image|picture|box))|type the (?:code|characters|"
+    r"letters|text)|anti ?-?spam|spam (?:check|protection|question)|human verification|are you (?:a )?human|"
+    r"prove you(?:'re| are) (?:human|not a robot)", re.I)
+# A box labelled just "Answer" or "Code" under "Enter the characters seen in the image below" (At The Races, My
+# Switzerland): the words around it say it's a picture CAPTCHA. Not a mere "protected by reCAPTCHA" notice.
+CODE_CONTEXT_RE = re.compile(
+    r"enter the (?:characters|letters|code|text|word)s?\b.{0,40}\b(?:image|picture|below|above|shown)|type the "
+    r"(?:characters|letters|code|text)\b|audio captcha|characters? (?:seen|shown|displayed) (?:in|on) the|"
+    r"security code", re.I)
 GENERIC_AUTOCOMPLETE = {"full_name", "address1"}
 
 
 def _raw_label(f: Field) -> str:
-    return re.sub(r"\s+", " ", " ".join(p for p in (f.label, f.placeholder, f.aria) if p)).strip().lower()
+    return re.sub(r"\s+", " ", " ".join(p for p in (f.label, _placeholder(f), f.aria) if p)).strip().lower()
 
 
 def is_math_check(f: Field, ctx: Ctx | None = None) -> bool:
@@ -226,7 +262,10 @@ def is_math_check(f: Field, ctx: Ctx | None = None) -> bool:
 
 
 def is_code_check(f: Field) -> bool:
-    return bool(CODE_CHECK_RE.search(_raw_label(f)))
+    if CODE_CHECK_RE.search(_raw_label(f)):
+        return True
+    core = normalise(f.label or f.placeholder or f.aria)
+    return len(core.split()) <= 3 and bool(CODE_CONTEXT_RE.search(f.context or ""))
 
 
 # Date boxes: "DD/MM/YYYY", "MM/DD" (Klaviyo's birthday), "YYYY-MM-DD" in the placeholder or label.
@@ -254,12 +293,12 @@ def _date_hint(f: Field) -> str:
 
 
 def _label_text(f: Field) -> str:
-    return normalise(" ".join(p for p in [f.label, f.placeholder, f.aria] if p))
+    return normalise(" ".join(p for p in [f.label, _placeholder(f), f.aria] if p))
 
 
 def _visible_profile_key(f: Field) -> str | None:
     """The profile detail named by what the field shows you (its label or placeholder), if any."""
-    vis = normalise(" ".join(p for p in (f.label, f.placeholder) if p))
+    vis = normalise(" ".join(p for p in (f.label, _placeholder(f)) if p))
     core = re.sub(r"\s+", " ", re.sub(r"[*?:()]+|\brequired\b", " ", vis)).strip()
     if not core or OTHER_PERSON_RE.search(core):
         return None
@@ -287,8 +326,11 @@ def detect_profile_key(f: Field) -> str | None:
     part = DOB_PARTS.get(ph) or DOB_PARTS.get(core)
     if part and birthish and f.type not in ("email", "tel"):
         return part  # one box of a date of birth split into three (Cornwall Living)
-    if f.type != "date" and birthish and date_format(_date_hint(f)):
-        return "dob"  # a whole date in the format its placeholder shows ("MM/DD" birthday, 58 & Co)
+    # A whole date in the format its placeholder shows ("MM/DD" birthday, 58 & Co), or a "DD-MM-YYYY" box whose only
+    # words are "Minimum age: 18" (Visa Cash App RB's Jotform date of birth).
+    agey = bool(re.search(r"minimum age|\bage\b|\baged\b|over 1[68]|\b1[68] ?\+", normalise(f.label + " " + f.context[:300])))
+    if f.type != "date" and (birthish or agey) and date_format(_date_hint(f)):
+        return "dob"
     if f.type == "email":
         return "email_confirm" if KEY_PATTERNS[0][1].search(d) else "email"
     if f.type == "tel":
@@ -394,6 +436,11 @@ def profile_value(key: str, p: dict, f: Field | None = None) -> str:
         return p.get("country") or "United Kingdom"
     if key == "address3":
         return ""
+    if key == "address1" and f is not None and f.tag == "textarea" and not re.search(
+            r"line ?1|\b1\b|street|house|building|road|first line", _label_text(f)):
+        # One box for the whole address (Love It!'s "Your Address"): line 1 alone wouldn't get a prize delivered.
+        return "\n".join(str(p.get(k)).strip() for k in ("address1", "address2", "town", "county", "postcode")
+                         if str(p.get(k) or "").strip())
     return str(p.get(key, "") or "")
 
 
@@ -484,6 +531,36 @@ def _next_answer(ctx: Ctx) -> str | None:
 
 CHANNEL_RE = re.compile(r"^(?:by )?(?:e ?mail|sms|text(?: message)?|post|phone|telephone|whats ?app|online advertisements?|"
                         r"social media|push notifications?)$")
+COUNTRY_NAMES = {
+    "united kingdom", "uk", "great britain", "ireland", "france", "germany", "spain", "italy", "portugal", "belgium",
+    "netherlands", "luxembourg", "austria", "switzerland", "denmark", "sweden", "norway", "finland", "iceland",
+    "poland", "czech republic", "czechia", "slovakia", "hungary", "romania", "bulgaria", "greece", "croatia",
+    "slovenia", "estonia", "latvia", "lithuania", "cyprus", "malta", "united states", "usa", "canada", "australia",
+    "new zealand", "india", "china", "japan", "brazil", "mexico", "south africa", "afghanistan", "albania", "algeria"}
+
+
+def looks_like_country_list(options: list[dict]) -> bool:
+    texts = {normalise(o.get("text", "")) for o in options}
+    return len(texts & COUNTRY_NAMES) >= 6
+
+
+def dob_part_from_options(options: list[dict]) -> str | None:
+    """Which part of a date a list of choices is: days (1-31), months (January... or 1-12) or years (1900-2100)."""
+    texts = [normalise(o.get("text", "")) for o in options if normalise(o.get("text", ""))]
+    if not texts:
+        return None
+    if sum(1 for t in texts if t in MONTHS or t in {m[:3] for m in MONTHS}) >= 10:
+        return "dob_month"
+    nums = [int(t) for t in texts if t.isdigit()]
+    if len(nums) < 0.8 * len(texts):
+        return None
+    if all(1900 <= n <= 2100 for n in nums):
+        return "dob_year"
+    if max(nums) <= 12 and len(nums) <= 12:
+        return "dob_month"
+    if max(nums) <= 31 and len(nums) >= 28:
+        return "dob_day"
+    return None
 
 
 def map_checkbox(f: Field, ctx: Ctx) -> Action:
@@ -525,6 +602,11 @@ def map_choice(f: Field, ctx: Ctx) -> Action:
         if TERMS_RE.search(about) and not (MARKETING_RE.search(about) and not TERMS_RE.search(normalise(f.label))):
             return Action(kind, real[0].get("idx") or real[0].get("value"), source="rule", note="terms / consent")
     key = detect_profile_key(f)
+    if key is None and looks_like_country_list(real):
+        key = "country"  # a list of countries labelled only "Please choose" (EMP)
+    if key == "dob" and kind == "select":
+        # One list of a date of birth split into three, labelled only "Date of Birth" (Johansens' Day list).
+        key = dob_part_from_options(real) or key
     if key == "age" or AGE_GROUP_RE.search(label_d):
         # "Age: 18-24 / 25-34 / ..." is answered from your date of birth, never guessed (the AI picked 18-24, 58 & Co).
         bands = [(o, age_band(o.get("text", ""))) for o in real]
@@ -620,6 +702,9 @@ def map_text(f: Field, ctx: Ctx) -> Action:
         val = profile_value(key, ctx.profile, f)
         if val or key == "address3":
             return Action("fill", val, source=key) if val else Action("skip", note="address line 3")
+        if key == "address2" and f.required and (ctx.profile.get("town") or "").strip():
+            # A required second address line, and your address has none: your town is the usual stand-in.
+            return Action("fill", ctx.profile["town"].strip(), source="town", note="address line 2 is required")
         return Action("unknown" if f.required else "skip", note=f"profile has no {key}")
     if HEAR_SPECIFY_RE.search(label) and (ctx.heard_other or HEAR_RE.search(d)):
         return Action("fill", HEARD_AT, source="rule", note="where you heard (other)")

@@ -12,7 +12,8 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import or_, select
 
 from . import llm
-from .analyse import COMP_URL_HINT, NON_ENTRY_URL_HINT, Analysis, apply_analysis, analyse, registrable_domain
+from .analyse import COMP_URL_HINT, NEEDS_ANSWERS_RE, NON_ENTRY_URL_HINT, Analysis, apply_analysis, analyse, \
+    registrable_domain
 from .config import get_config
 from .db import (
     DISK_BUSY_MESSAGE,
@@ -830,6 +831,7 @@ def _enter_email(cid: int, settings: dict, profile: dict, force: bool = False) -
         comp = s.get(Competition, cid)
         subject, body = emailer.compose_entry(comp, profile)
         to = comp.email_to
+        comp_answers, comp_question, title = list(comp.answers or []), comp.question, comp.title or ""
         post_text, links = comp.body_text or "", [
             u for u in list(comp.other_links or []) + list(comp.entry_urls or [])
             if registrable_domain(u) not in AGGREGATOR_DOMAINS]  # listing sites' own links (and their bot-free redirects)
@@ -839,8 +841,13 @@ def _enter_email(cid: int, settings: dict, profile: dict, force: bool = False) -
         s.flush()
         att_id = att.id
     clause = _email_clause(post_text, links) if settings.get("respect_automation_clauses", True) else None
+    needs_answers = not (comp_answers or []) and bool(comp_question or NEEDS_ANSWERS_RE.search(post_text + " " + title))
     if not to:
         result, msg = "needs_input", "No email address to send the entry to"
+    elif needs_answers:
+        # A quiz, crossword or picture puzzle answered in the email itself: sent without the answers it would only
+        # be a wasted entry (a re-queue from the manual queue mustn't send one).
+        result, msg = "needs_input", "Email entry needs answers that aren't in the post - add them, then re-queue it"
     elif not force and not settings.get("enter_email_comps", True):
         result, msg = "needs_input", "Email entries are switched off in settings"
     elif clause:

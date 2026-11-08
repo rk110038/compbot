@@ -326,3 +326,87 @@ def test_data_shared_with_a_sponsor_is_third_party_marketing(profile):
     assert (a.kind, a.note) == ("uncheck", "third-party marketing"), a
     assert map_field(Field("2", "input", "checkbox", label="I agree to the Privacy Policy and Terms and Conditions."),
                      c).kind == "check"
+
+
+def test_microsoft_and_google_forms_boxes_are_read_by_their_labels(profile):
+    from app.entry.forms import clean_label
+
+    # Microsoft Forms reads out each question's number and type; GoGirl adds "(Required.)".
+    assert clean_label("2. Full name Single line text.") == "Full name"
+    assert clean_label("County Multi Line Text.") == "County"
+    assert clean_label("Which issue of the magazine do you have? Single choice.") == (
+        "Which issue of the magazine do you have?")
+    assert clean_label("* 4. My parents email address is... (Required.)") == "My parents email address is..."
+    assert clean_label("Date of birth Date.") == "Date of birth"
+    assert clean_label("3. How old are you?") == "How old are you?"
+    assert clean_label("Single line text.") == "Single line text."  # nothing else to go on
+    # Their "Enter your answer" placeholder made every box a quiz answer: the AI typed "Full name" as your name.
+    c = ctx(profile, answers=["Friday"])
+    ph = "Enter your answer"
+    assert map_field(Field("1", "input", "text", label="Full name", placeholder=ph, required=True), c).value == "Test Person"
+    assert map_field(Field("2", "input", "text", label="Email address", placeholder=ph), c).value == "test.person@example.com"
+    a = map_field(Field("3", "input", "text", label="Phone number", placeholder=ph, required=True),
+                  ctx(dict(profile, phone=""), answers=["Friday"]))
+    assert a.kind == "unknown" and a.note == "profile has no phone"
+    a = map_field(Field("4", "input", "text", label="The winner will check in on which day?", placeholder=ph), c)
+    assert (a.kind, a.value, a.source) == ("fill", "Friday", "answer")
+    # With no label, the placeholder is all there is.
+    a = map_field(Field("5", "input", "text", placeholder="Your answer", required=True), ctx(profile, answers=["Blue"]))
+    assert (a.kind, a.value) == ("fill", "Blue")
+
+
+def test_picture_captcha_under_a_plain_answer_box(profile):
+    # At The Races / My Switzerland: a box labelled "Answer" under "Enter the characters seen in the image below".
+    a = map_field(Field("1", "input", "text", label="Answer", required=True,
+                        context="Enter the characters seen in the image below: Download audio CAPTCHA Answer Submit"),
+                  ctx(profile))
+    assert a.kind == "unknown" and a.note.startswith("captcha")
+    # A quiz answer box near a "protected by reCAPTCHA" notice is still the quiz answer.
+    a = map_field(Field("2", "input", "text", label="Answer", required=True,
+                        context="This site is protected by reCAPTCHA and the Google Privacy Policy and Terms apply."),
+                  ctx(profile, answers=["Paris"]))
+    assert (a.kind, a.value) == ("fill", "Paris")
+
+
+def test_country_list_labelled_please_choose(profile):
+    names = ["Austria", "Belgium", "Bulgaria", "Croatia", "Cyprus", "France", "Germany", "Ireland", "Spain",
+             "United Kingdom"]
+    f = Field("1", "select", "select", label="Please choose", required=True,
+              options=[{"text": "Please choose", "value": ""}] + [{"text": n, "value": n[:2].upper()} for n in names])
+    a = map_field(f, ctx(profile))
+    assert (a.kind, a.value, a.source) == ("select", "UN", "country")
+
+
+def test_required_address_line_2_gets_your_town(profile):
+    p = dict(profile, address2="")
+    a = map_field(Field("1", "input", "text", label="Address Line 2", required=True), ctx(p))
+    assert (a.kind, a.value, a.source) == ("fill", "Testville", "town")
+    assert map_field(Field("2", "input", "text", label="Address Line 2"), ctx(p)).kind == "skip"
+    assert map_field(Field("3", "input", "text", label="Address Line 2", required=True),
+                     ctx(dict(p, address2="Flat 2"))).value == "Flat 2"
+
+def test_date_of_birth_lists_labelled_as_a_whole(profile):
+    from app.entry.forms import dob_part_from_options
+
+    days = [{"text": "Day *", "value": ""}] + [{"text": str(d), "value": str(d)} for d in range(1, 32)]
+    a = map_field(Field("1", "select", "select", label="Date of Birth", required=True, options=days), ctx(profile))
+    assert (a.kind, a.value, a.source) == ("select", "5", "dob_day")
+    months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
+              "November", "December"]
+    assert dob_part_from_options([{"text": m} for m in months]) == "dob_month"
+    assert dob_part_from_options([{"text": str(y)} for y in range(1930, 2009)]) == "dob_year"
+    assert dob_part_from_options([{"text": str(m)} for m in range(1, 13)]) == "dob_month"
+    assert dob_part_from_options([{"text": "Yes"}, {"text": "No"}]) is None
+
+def test_one_box_for_the_whole_address_gets_all_of_it(profile):
+    a = map_field(Field("1", "textarea", "textarea", label="Your Address", required=True), ctx(profile))
+    assert a.value == "1 Test Street\nTestville\nBerkshire\nRG1 1AA"
+    assert map_field(Field("2", "textarea", "textarea", label="Address line 1"), ctx(profile)).value == "1 Test Street"
+    assert map_field(Field("3", "input", "text", label="Your Address"), ctx(profile)).value == "1 Test Street"
+
+def test_date_box_marked_with_a_minimum_age_is_your_birthday(profile):
+    # Visa Cash App RB (Jotform): placeholder "DD-MM-YYYY", label "Minimum age: 18".
+    f = Field("1", "input", "text", label="Minimum age: 18", placeholder="DD-MM-YYYY", required=True,
+              context="2 digit day, 2 digit month, 4 digit year Minimum age: 18")
+    a = map_field(f, ctx(profile))
+    assert (a.kind, a.value, a.source) == ("fill", "05-03-1980", "dob")

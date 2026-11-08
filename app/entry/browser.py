@@ -29,6 +29,7 @@ from .forms import (
     Field,
     apply_llm_action,
     choose_option,
+    clean_label,
     find_automation_clause,
     is_placeholder_option,
     looks_like_question,
@@ -113,16 +114,38 @@ JS_EXTRACT = "(prefix) => {\n" + JS_HELPERS + r"""
     if (!t) {
       let prev = el.previousElementSibling, hops = 0;
       while (prev && hops < 3 && !t) {
+        // The box before this one (Johansens' Title list before First name): its words belong to it, not to us.
+        if (prev.matches('input, select, textarea, button')) break;
         const pt = txt(prev);
         if (pt && pt.length < 200 && !prev.querySelector('input,select,textarea')) t = pt;
         prev = prev.previousElementSibling; hops++;
       }
     }
-    if (!t && el.parentElement) { const pt = txt(el.parentElement); if (pt.length < 150) t = pt; }
+    if (!t && !el.getAttribute('placeholder') && !el.getAttribute('aria-label')) {
+      // Contact Form 7 (Love It!): <p>Your Name</p><p><span class="wpcf7-form-control-wrap"><input></span></p>. The words
+      // sit beside a wrapper that holds only this box: before it, or after it for a tick box.
+      const own = el.tagName === 'SELECT' ? txt(el) : '';
+      const after = el.type === 'checkbox' || el.type === 'radio';
+      let n = el;
+      for (let i = 0; i < 5 && n.parentElement && !t; i++) {
+        const p = n.parentElement;
+        if (p === document.body || p.tagName === 'FORM' || p.querySelectorAll('input:not([type=hidden]), select, textarea').length > 1) break;
+        const inner = txt(p).replace(own, '').trim();
+        if (inner) { if (inner.length < 150) t = inner; break; }
+        const sib = after ? p.nextElementSibling : p.previousElementSibling;
+        if (sib && !sib.matches('input, select, textarea, button') && !sib.querySelector('input,select,textarea,button')) {
+          const st = txt(sib);
+          if (st && st.length < 400) t = st;
+        }
+        n = p;
+      }
+    }
+    if (!t && el.parentElement) { const pt = txt(el.parentElement).replace(el.tagName === 'SELECT' ? txt(el) : '', '').trim(); if (pt.length < 150) t = pt; }
     return t.slice(0, 300);
   };
   const ctxText = (el) => { const up = n => n.parentElement || (n.getRootNode && n.getRootNode().host) || null; let n = up(el); for (let i = 0; i < 4 && n; i++) { const t = txt(n); if (t.length > 40) return t.slice(0, 400); n = up(n); } return ''; };
-  const isReq = (el, label) => el.required || el.getAttribute('aria-required') === 'true' || /\*\s*$|\(required\)/i.test(label || '');
+  // Contact Form 7's acceptance boxes keep the form's submit button disabled until they're ticked (unless "optional").
+  const isReq = (el, label) => el.required || el.getAttribute('aria-required') === 'true' || /\*\s*$|\(required\)/i.test(label || '') || (el.type === 'checkbox' && !!el.closest('.wpcf7-acceptance:not(.optional)'));
   const CHROME = 'header, nav, footer, [role=banner], [role=navigation], [role=contentinfo], [role=search], #footer, .footer, [id*=site-footer i], [class*=site-footer i], [class*=page-footer i], [id*=page-footer i]';
   const choiceVis = (el) => vis(el) || (el.labels && Array.from(el.labels).some(vis)) || vis(el.closest('label')) || vis(el.parentElement);
   let counter = 0;
@@ -225,7 +248,12 @@ JS_EXTRACT = "(prefix) => {\n" + JS_HELPERS + r"""
           if (q) f.context = q.slice(0, 300);
         }
       }
-      if (el.tagName === 'SELECT') f.options = Array.from(el.options).map(o => ({value: o.value, text: (o.text || '').trim()}));
+      if (el.tagName === 'SELECT') {
+        f.options = Array.from(el.options).map(o => ({value: o.value, text: (o.text || '').trim()}));
+        // A list's own first, empty choice ("Day *", "Month *", "Country *") names it, like a placeholder does.
+        if (!f.placeholder && el.options.length && !el.options[0].value && (el.options[0].text || '').trim().length < 40)
+          f.placeholder = el.options[0].text.trim();
+      }
       fields.push(f);
     }
     // ARIA choice widgets aren't <input>s: Google Forms draws its tick boxes and radio buttons as
@@ -433,11 +461,13 @@ JS_COOKIES = "(acceptMode) => {\n" + JS_HELPERS + r"""
     'truste-consent-required', 'cookie-reject'];
   const acceptIds = ['onetrust-accept-btn-handler', 'CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll',
     'didomi-notice-agree-button', 'truste-consent-button', 'cookie-accept'];
-  const mark = b => { document.querySelectorAll('[data-cb-cookie]').forEach(e => e.removeAttribute('data-cb-cookie')); b.setAttribute('data-cb-cookie', '1'); };
+  const mark = b => { __cbAll(document, '[data-cb-cookie]').forEach(e => e.removeAttribute('data-cb-cookie')); b.setAttribute('data-cb-cookie', '1'); };
   for (const id of (acceptMode ? acceptIds : rejectIds.concat(acceptIds))) { const b = document.getElementById(id); if (b && vis(b)) { mark(b); return id; } }
-  const reject = /^(reject all|reject|reject all cookies|decline|decline all|necessary only|only necessary|essential only|use necessary cookies only|refuse all|deny|disagree|do not consent|continue without accepting)$/i;
-  const accept = /^(accept all|accept|accept all cookies|accept cookies|i accept|agree|i agree|allow all|allow all cookies|allow cookies|got it|ok|okay|agree and close|accept & close|accept and close|yes,? i'?m happy|i understand|understood|ok,? got it|that'?s fine|accept (and|&) continue|accept all (and|&) continue|agree (and|&) continue|consent)$/i;
-  const banner = '[id*=cookie i],[class*=cookie i],[id*=consent i],[class*=consent i],[id*=gdpr i],[class*=gdpr i],[class*=cmp i],[id*=cmp i],[aria-label*=cookie i],[aria-label*=consent i],[id*=privacy i],[class*=privacy i],[role=dialog],[aria-modal=true]';
+  const reject = /^(reject all|reject|reject all cookies|decline|decline all|necessary only|only necessary|essential only|use necessary cookies only|refuse all|deny|deny all|disagree|do not consent|continue without accepting|continue without agreeing|(reject|decline) (all )?(and|&) close|reject non-?essentials?( cookies)?|reject (optional|additional|non-?necessary) cookies|(accept|allow|use) (only )?(essential|necessary|required) cookies( only)?|(accept|allow) (only )?(essential|necessary)( only)?|only (essential|necessary|required) cookies)$/i;
+  const accept = /^(accept all|accept|accept all cookies|accept cookies|i accept|agree|i agree|allow all|allow all cookies|allow cookies|got it|ok|okay|agree and close|agree & close|accept & close|accept and close|accept all (and|&) close|yes,? i'?m happy|i understand|understood|ok,? got it|that'?s fine|accept (and|&) continue|accept all (and|&) continue|agree (and|&) continue|consent)$/i;
+  // Consent managers' own boxes too: Shopify's banner is a role=alertdialog, Usercentrics draws its banner in a shadow
+  // root under #usercentrics-root, CookieYes uses cky-*, Termly / iubenda / Osano / Klaro their own names.
+  const banner = '[id*=cookie i],[class*=cookie i],[id*=consent i],[class*=consent i],[id*=gdpr i],[class*=gdpr i],[class*=cmp i],[id*=cmp i],[aria-label*=cookie i],[aria-label*=consent i],[id*=privacy i],[class*=privacy i],[role=dialog],[role=alertdialog],[aria-modal=true],[id*=shopify-pc i],[id*=usercentrics i],[data-testid^=uc-],[class*=cky-],[class*=termly i],[id*=termly i],[class*=iubenda i],[id*=iubenda i],[class*=osano i],[class*=klaro i]';
   // Only a consent-manager *iframe* counts as "all of this frame is the banner" - never the competition page itself.
   const framey = window !== window.top && /sp_message|consent|cookie|privacy-mgmt|cmp/i.test(location.href);
   // Never press a button belonging to a real form (one with text/email fields): that could submit an entry.
@@ -452,11 +482,11 @@ JS_COOKIES = "(acceptMode) => {\n" + JS_HELPERS + r"""
     for (let n = b.parentElement, i = 0; n && i < 4; n = n.parentElement, i++) { const t = __cbTxt(n); if (t.length < 700 && embedPh.test(t)) return true; }
     return false;
   };
-  const btns = Array.from(document.querySelectorAll('button, [role=button], a, input[type=button]')).filter(b => vis(b) && !inEntryForm(b) && !inEmbedPlaceholder(b));
+  const btns = __cbAll(document, 'button, [role=button], a, input[type=button]').filter(b => vis(b) && !inEntryForm(b) && !inEmbedPlaceholder(b));
   for (const re of (acceptMode ? [accept] : [reject, accept])) {
     for (const b of btns) {
-      const t = (b.innerText || b.value || '').replace(/\s+/g, ' ').trim();
-      if (re.test(t) && (framey || b.closest(banner))) { mark(b); return t; }
+      const t = (b.innerText || b.value || b.textContent || '').replace(/\s+/g, ' ').trim();
+      if (re.test(t) && (framey || __cbClosest(b, banner))) { mark(b); return t; }
     }
   }
   return null;
@@ -533,7 +563,7 @@ JS_REVEAL = "([dryRun, linksOnly]) => {\n" + JS_HELPERS + r"""
   // Buttons that only open the entry form or quiz: safe to press even in a dry run.
   const safe = /^((let'?s )?(start|begin|take|do|play|try)( the| our| this| a)?( quiz| game| competition| challenge| test)?( now| here)?|get started|let'?s (go|start|play)|show (the )?(form|questions?)|reveal (the )?(form|question)|continue)!?$/i;
   // Buttons that might themselves submit an entry: only pressed for real entries.
-  const enter = /^(enter( now| here| (the |this |our )?(competition|comp|giveaway|prize draw|draw|quiz|reader treat)( here| now)?| to win| now for free)?|(click|tap) (here )?to enter( the (competition|comp|giveaway|prize draw|draw))?( now| here)?|click here to enter now|take part|enter (&|and) win|i want to win|join (in|now)|(join|sign ?up|subscribe|register|opt in)( now)? to enter|count me in|(submit|send) your entry)!?$/i;
+  const enter = /^(enter( now| here| (the |this |our )?(competition|comp|contest|giveaway|prize draw|draw|quiz|reader treat)( here| now)?| to win| now for free)?|(click|tap) (here )?to enter( the (competition|comp|contest|giveaway|prize draw|draw))?( now| here)?|click here to enter now|take part|enter (&|and) win|i want to win|join (in|now|today)|join (the |this |our )?(contest|competition|comp|giveaway|prize draw|draw)|(join|sign ?up|subscribe|register|opt in)( now)? to enter|count me in|(submit|send) your entry)!?$/i;
   // "For your chance to win, click HERE and complete the online form": the word "here" is the link to the entry form.
   const hereWord = /^(click )?here!?$/i;
   const hereSentence = /\b(enter|entry|entries|form|chance to win|to win)\b/i;
@@ -559,11 +589,16 @@ JS_REVEAL = "([dryRun, linksOnly]) => {\n" + JS_HELPERS + r"""
   const h1 = document.querySelector('h1');
   const top0 = h1 ? h1.getBoundingClientRect().top + scrollY : 0;
   let best = null, bestScore = -1e9, bestGate = null;
+  // A <button> is a submit button unless it says otherwise; links and type=button ones can't send a form.
+  const couldSubmit = b => b.tagName === 'BUTTON' ? (b.getAttribute('type') || 'submit').toLowerCase() === 'submit'
+    : b.tagName === 'INPUT' ? /^(submit|image)$/i.test(b.type || '') : false;
   for (const b of __cbAll(document, 'button, a, [role=button], input[type=button]')) {
     if (!vis(b) || b.hasAttribute('data-cb-tried')) continue;
-    // Never press anything that could submit a form.
-    if (b.closest('form') || (b.getAttribute('type') || '').toLowerCase() === 'submit') continue;
     const t = (txt(b) || b.value || '').trim();
+    // Never press anything that could submit a form. Inside a form, only a quiz or form opener that can't send it
+    // (fishdeal's quiz is one big <form> opened by a "Take the Quiz" link).
+    if ((b.getAttribute('type') || '').toLowerCase() === 'submit') continue;
+    if (b.closest('form') && !(safe.test(t) && !couldSubmit(b))) continue;
     const isLink = b.tagName === 'A' && /^https?:/i.test(b.href || '');
     const offsite = isLink && new URL(b.href, location.href).host !== location.host;
     const samePage = isLink && new URL(b.href, location.href).href.split('#')[0] === location.href.split('#')[0];
@@ -889,7 +924,9 @@ SUCCESS_RE = re.compile(
     # Referral widgets (Viral Loops, Gleam...) swap the form for "share your link for more entries" once you're in.
     r"share (?:your|this) (?:unique |personal |referral )*link|(?:earn|get|unlock) (?:more|extra|bonus) entries|"
     # Free Spin Daily's wheel, once spun: "You have won 10 entries".
-    r"you(?:'ve| have) won (?:an?|one|two|three|four|five|ten|\d+) (?:extra |bonus )?entr(?:y|ies)\b",
+    r"you(?:'ve| have) won (?:an?|one|two|three|four|five|ten|\d+) (?:extra |bonus )?entr(?:y|ies)\b|"
+    # Contact Form 7's standard reply (Love It!): "Thank you for your message. It has been sent."
+    r"thank(?:s| you) for your message\.? (?:it|this) has been sent",
     re.I | re.M)
 ALREADY_RE = re.compile(
     r"already (?:been )?entered|already (?:subscribed|registered|signed up|a subscriber)|only (?:one|1) entry|you "
@@ -918,7 +955,13 @@ LOGIN_WALL_RE = re.compile(
     r"you (?:need|have|must) (?:to )?(?:be )?(?:log(?:ged)? ?in|sign(?:ed)? ?in)|"
     r"(?:log ?in|sign ?in|logged in|signed in)\b[^.\n]{0,60}?\bto (?:enter|view (?:the|this) (?:form|"
     r"competition|question)|see (?:the|this) (?:form|question|competition)|take part|access (?:the|this) (?:form|"
-    r"competition))", re.I)
+    r"competition))|"
+    # McLaren: "This is for McLaren Racing Club members only. Join today and unlock..."
+    r"\b(?:is|are) (?:only )?for (?:[\w&'\u2019-]+ ){0,4}members only\b|\bmembers[- ]only (?:competition|content|"
+    r"area|giveaway|prize draw)s?\b|\bonly (?:open|available) to (?:registered |signed[- ]in )?members\b|"
+    # LoveReading: "Our free to enter prize draws are open to registered users. Registration is free and easy."
+    r"\b(?:open|available) (?:only )?to registered (?:users|members|customers)\b|\bregistered (?:users|members) only\b",
+    re.I)
 # The site's own bot check turned the entry down after it was sent (seen in its message or its server's reply).
 CAPTCHA_REFUSAL_RE = re.compile(
     r"unable to verify (?:the )?re-?captcha|re-?captcha v?\d? ?(?:test|check|verification) failed|verify that you are "
@@ -1266,6 +1309,9 @@ WIDGET_NAMES = {"gleam.io": "Gleam", "rafflecopter.com": "Rafflecopter", "woobox
                 "upviral.com": "UpViral", "wishpond.com": "Wishpond", "shortstack.com": "ShortStack",
                 "shortstack.page": "ShortStack", "promosimple.com": "PromoSimple", "vyper.io": "Vyper",
                 "easypromosapp.com": "Easypromos", "giveawaytools.com": "Giveaway Tools"}
+# A blog's own comment form (WordPress: <form id="commentform" class="comment-form" action=".../wp-comments-post.php">).
+COMMENT_FORM_RE = re.compile(r"commentform|comment-form|wp-comments-post|comment-respond", re.I)
+JS_ALL_LINKS = "() => Array.from(document.querySelectorAll('a[href]')).map(a => a.href).filter(Boolean).slice(0, 500)"
 JS_CLEAR_STORAGE = "() => { try { localStorage.clear(); sessionStorage.clear(); } catch (e) {} return true; }"
 # Every field compbot has read on the page so far (they carry data-cb-idx), to tell forms already there before a
 # click from ones the click brought up.
@@ -1299,6 +1345,23 @@ def _widget_host(page) -> str | None:
         m = WIDGET_FRAME_RE.match(u or "")
         if m:
             return m.group(1).lower()
+    return None
+
+
+def _why_not_enterable(page) -> tuple[str, str] | None:
+    """(result, message) when the page itself says why it can't be entered here: closed, a giveaway widget, or a
+    sign-in wall. None if it doesn't say."""
+    text = _page_text(page)
+    if CLOSED_RE.search(text):
+        return "closed", "Page says the competition has closed"
+    widget = _widget_host(page)
+    if widget:
+        return "widget", (f"The entry is a {WIDGET_NAMES.get(widget, widget)} widget, which needs you to sign in or "
+                          "complete its steps - enter it yourself")
+    login = LOGIN_WALL_RE.search(text)
+    if login:
+        said = _sentence_at(text, login.start(), login.end())
+        return "login", f"Only signed-in members can enter (\u201c{said}\u201d) - sign in and enter it yourself"
     return None
 
 
@@ -1374,6 +1437,12 @@ WORD_LIMIT_RE = re.compile(r"(\d{1,3})\s*words?|(ten|fifteen|twenty|twenty[- ]fi
 WORD_NUMS = {"ten": 10, "fifteen": 15, "twenty": 20, "twenty five": 25, "twenty-five": 25, "thirty": 30, "fifty": 50}
 
 
+def _echoes_label(answer: str, f: Field) -> bool:
+    a = normalise(answer).strip(" ?*")
+    return bool(a) and a in {normalise(x).strip(" ?*") for x in (f.label, clean_label(f.label), f.placeholder,
+                                                                  f.aria) if x}
+
+
 def _page_context(page, frame) -> str:
     text = _safe_eval(page.main_frame, JS_MAIN_TEXT, default="") or ""
     if frame is not page.main_frame:  # form inside an embed: its own text matters too
@@ -1409,6 +1478,14 @@ def _ai_fill(page, frame, plan, settings: dict, comp_context: dict, details: dic
             record = {"question": question[:200], "options": (options or [])[:12]}
             if res:
                 _ai_record(record, res)["used"] = False
+            if res and res["answer"] and not options and _echoes_label(res["answer"], f):
+                # "Full name" typed into the Full name box: the AI read the label, not a question.
+                record.update(used=False, reason="the answer only repeats the box's label")
+                details.setdefault("ai", []).append(record)
+                if a.kind == "unknown":
+                    a = Action("unknown", note="AI only repeated the box's label")
+                out.append((f, a))
+                continue
             if res and res["answer"] and res["confidence"] >= min_conf and settings.get("ai_double_check", True):
                 check = llm.verify_answer(question, res["answer"], options, page_text, settings,
                                           web_results=res.get("web_results"))
@@ -1857,7 +1934,8 @@ def _to_fields(container: dict) -> list[Field]:
     for f in container.get("fields", []):
         out.append(Field(
             idx=f["idx"], tag=f["tag"], type=f.get("type", "text"), name=f.get("name", ""), id=f.get("id", ""),
-            label=f.get("label", ""), placeholder=f.get("placeholder", ""), autocomplete=f.get("autocomplete", ""),
+            label=clean_label(f.get("label", "")), placeholder=f.get("placeholder", ""),
+            autocomplete=f.get("autocomplete", ""),
             aria=f.get("aria", ""), required=bool(f.get("required")), options=f.get("options") or [],
             context=f.get("context", ""), maxlength=f.get("maxlength"), checked=bool(f.get("checked")),
             picker=bool(f.get("picker")), link_inside=bool(f.get("linkInside")),
@@ -2019,11 +2097,14 @@ def _server_errors(responses: list) -> str:
 class Browser:
     """One Chromium instance reused for a whole entry run."""
 
-    def __init__(self):
+    def __init__(self, http1: bool = False):
         from playwright.sync_api import sync_playwright
 
         self._pw = sync_playwright().start()
-        self.browser = self._pw.chromium.launch(headless=get_config().headless, args=["--disable-dev-shm-usage"])
+        # http1: some sites' HTTP/2 front ends reset automated browsers' connections (net::ERR_HTTP2_PROTOCOL_ERROR)
+        # but serve the same pages over HTTP/1.1.
+        args = ["--disable-dev-shm-usage"] + (["--disable-http2"] if http1 else [])
+        self.browser = self._pw.chromium.launch(headless=get_config().headless, args=args)
 
     def close(self) -> None:
         try:
@@ -2305,6 +2386,24 @@ class Browser:
             if clause:
                 return tc_blocked()
 
+            if COMMENT_FORM_RE.search(best[1].get("meta", "")):
+                widget = _widget_host(page)
+                link = None
+                if not widget:
+                    links = [u for u in (_safe_eval(page.main_frame, JS_ALL_LINKS, default=[]) or [])
+                             if WIDGET_FRAME_RE.match(u or "")]
+                    link = links[0] if links else None
+                    widget = WIDGET_FRAME_RE.match(link).group(1).lower() if link else (
+                        "gleam.io" if "gleam" in (ctx.tags or []) else None)
+                if widget:
+                    # Just Average Jen: "Leave a comment" is one of the Gleam's entry actions, not the entry itself.
+                    res.result = "widget"
+                    res.message = (f"The entry is a {WIDGET_NAMES.get(widget, widget)} widget (the form on the page "
+                                   "is only for blog comments) - enter it yourself" + (f": {link[:200]}" if link else ""))
+                    res.final_url = page.url
+                    res.screenshot_before = _shot(page, cfg.screenshot_dir / f"{shot_prefix}_widget.jpg")
+                    return res
+
             cap = detect_captcha(page)
             if cap:
                 res.result, res.message = "captcha", f"CAPTCHA on the form ({cap}) - enter manually"
@@ -2429,6 +2528,15 @@ class Browser:
                         details["steps"].append(f"step {step}: the next question came up by itself")
                         best = (frame, more, _score_container(more, ctx))
                         continue
+                if step == 1 and not n_filled:
+                    # Nothing on the "form" was ours to fill (LoveReading's search box beside "open to registered
+                    # users. Log in here"): say why the page can't be entered, as when no form is found at all.
+                    why = _why_not_enterable(page)
+                    if why:
+                        res.result, res.message = why
+                        res.final_url = page.url
+                        res.screenshot_before = _shot(page, cfg.screenshot_dir / f"{shot_prefix}_noform.jpg")
+                        return res
                 if dry_run:
                     res.final_url = page.url
                     held = _await_enabled(page, frame.locator('[data-cb-submit="1"]').first) if submit_label else None
@@ -2688,7 +2796,7 @@ _WORKER_MODULE = "app.entry.worker"
 
 
 def enter_isolated(url: str, ctx: Ctx, settings: dict, shot_prefix: str, comp_context: dict,
-                   timeout: float = ENTRY_TIMEOUT_S) -> AttemptResult:
+                   timeout: float = ENTRY_TIMEOUT_S, http1: bool = False) -> AttemptResult:
     """Run one entry in its own process with a hard time limit, so no single page can stall a whole run.
 
     The worker sends its result as soon as it's known and only then closes the browser, so a page that's slow to
@@ -2699,7 +2807,7 @@ def enter_isolated(url: str, ctx: Ctx, settings: dict, shot_prefix: str, comp_co
     import threading
 
     payload = pickle.dumps({"url": url, "ctx": ctx, "settings": settings, "shot_prefix": shot_prefix,
-                            "comp_context": comp_context})
+                            "comp_context": comp_context, "http1": http1})
     proc = subprocess.Popen([sys.executable, "-m", _WORKER_MODULE], cwd=str(_PROJECT_ROOT),
                             stdin=subprocess.PIPE, stdout=subprocess.PIPE)
     got: list[bytes] = []
@@ -2746,4 +2854,11 @@ def enter_isolated(url: str, ctx: Ctx, settings: dict, shot_prefix: str, comp_co
         return AttemptResult(result="error", message=f"Couldn't read the browser result: {exc}"[:500])
     if isinstance((r.details or {}).get("timing"), dict):
         r.details["timing"]["shutdown_seconds"] = shutdown
+    if not http1 and r.result == "error" and "ERR_HTTP2_PROTOCOL_ERROR" in (r.message or ""):
+        log.info("HTTP/2 refused for %s - trying again over HTTP/1.1", url)
+        again = enter_isolated(url, ctx, settings, shot_prefix, comp_context, timeout, http1=True)
+        steps = list((again.details or {}).get("steps") or [])
+        if again.details is not None:
+            again.details["steps"] = ["the site's HTTP/2 connection failed, so compbot used HTTP/1.1"] + steps
+        return again
     return r

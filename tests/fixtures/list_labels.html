@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Win a two-night stay</title>
+<style>body{font-family:sans-serif;max-width:700px;margin:2rem auto} select,input{display:block;margin-top:.5rem}</style></head>
+<body>
+<!-- Johansens: no <label>s. Each box's words are its placeholder or its list's first, empty choice ("Day *"), and the
+     box before it is another box. compbot read the Title list's options as First name's label (and so on down the
+     form), and picked day 1 for the Day list, labelled only "Date of Birth". -->
+<h1>Win a two-night stay at Murrayshall Country Estate</h1>
+<form id="f">
+  <p>* denotes required field</p>
+  <select name="title" id="title" required><option value="">Title *</option><option>Mr</option><option>Mrs</option><option>Ms</option></select>
+  <input name="firstName" id="firstName" placeholder="First Name *" required>
+  <input name="lastName" placeholder="Surname *" required>
+  <span>Date of Birth</span>
+  <select name="dateOfBirth" id="dateOfBirth" required><option value="">Day *</option></select>
+  <select name="monthOfBirth" id="monthOfBirth" required><option value="">Month *</option></select>
+  <select name="yearOfBirth" id="yearOfBirth" required><option value="">Year *</option></select>
+  <input type="email" name="email" id="email" placeholder="Email *" required>
+  <button type="submit">Enter</button>
+  <p id="msg"></p>
+</form>
+<script>
+const day = document.getElementById('dateOfBirth'), month = document.getElementById('monthOfBirth'), year = document.getElementById('yearOfBirth');
+for (let d = 1; d <= 31; d++) day.add(new Option(String(d), String(d)));
+['January','February','March','April','May','June','July','August','September','October','November','December'].forEach((m, i) => month.add(new Option(m, String(i + 1))));
+for (let y = 2008; y >= 1930; y--) year.add(new Option(String(y), String(y)));
+document.getElementById('f').addEventListener('submit', e => {
+  e.preventDefault();
+  const fn = document.getElementById('firstName').value;
+  if (day.value !== '5' || month.value !== '3' || year.value !== '1980' || fn !== 'Test') {
+    document.getElementById('msg').textContent = 'Please check your details: ' + [fn, day.value, month.value, year.value].join(' ');
+    return;
+  }
+  document.body.innerHTML = '<h2>Thank you, your entry has been received</h2>';
+});
+</script>
+</body></html>

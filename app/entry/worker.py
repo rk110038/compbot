@@ -33,7 +33,7 @@ def main() -> None:
 
     b = None
     try:
-        b = Browser()
+        b = Browser(http1=bool(job.get("http1")))
         r = b.enter(job["url"], job["ctx"], job["settings"], job["shot_prefix"], job["comp_context"], on_result=send)
     except Exception as exc:  # noqa: BLE001
         r = AttemptResult(result="error", message=f"{type(exc).__name__}: {exc}"[:800])
