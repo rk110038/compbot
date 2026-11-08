@@ -135,7 +135,9 @@ def test_rules_winners_and_sign_in_links_are_not_entry_pages():
     a = analyse("E: 27/11 Win a stay", "<p>https://www.futureplc.com/competition-rules/</p>"
                 "<p>https://www.example-hotel.co.uk/win-a-stay</p>", DEFAULT_SETTINGS, TODAY)
     assert a.entry_urls == ["https://www.example-hotel.co.uk/win-a-stay"]
-    for u in ("https://auth.pumpkinspicecafegame.com/login", "https://example.com/login", "https://example.com/signin?next=1"):
+    for u in ("https://auth.pumpkinspicecafegame.com/login", "https://example.com/login", "https://example.com/signin?next=1",
+              "https://www.prizedeck.com/prizedraw/win-a-wireless-speaker", "https://www.heathrow.com/myheathrow/s/offers/prize-draw",
+              "https://vast.gg/CampaignsDetailed/8efd9f10-9e50-43cc-b18d-16b226a25bac"):
         assert ACCOUNT_URL_RE.search(u), u
     for u in ("https://example.com/win/login-to-enter-x", "https://www.authentic-foods.co.uk/win"):
         assert not ACCOUNT_URL_RE.search(u), u

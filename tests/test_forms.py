@@ -183,6 +183,20 @@ def test_single_radio_consent(profile):
     assert map_field(f, ctx(profile)).value == "t1"
 
 
+def test_a_question_with_only_one_answer_gets_it(profile):
+    # Slimming World: "Which issue of the magazine do you have?" offered just "197 Nov/Dec 2026", and was left blank.
+    opts = [{"value": "", "text": "Please select", "idx": "p"}, {"value": "197", "text": "197 Nov/Dec 2026", "idx": "o"}]
+    f = Field("q", "select", "select", label="Which issue of the magazine do you have?", options=opts)
+    a = map_field(f, ctx(profile))
+    assert (a.kind, a.value, a.note) == ("select", "o", "the only choice"), a
+    radio = Field("q2", "radio", "radio", label="Which issue of the magazine do you have?", options=opts[1:])
+    assert map_field(radio, ctx(profile)).value == "o"
+    # ...but never a lone "Yes please" to offers.
+    offers = Field("m", "radio", "radio", label="Would you like to hear about our offers?",
+                   options=[{"value": "y", "text": "Yes please", "idx": "y"}])
+    assert map_field(offers, ctx(profile)).kind != "radio"
+
+
 def test_county_abbreviations_match_select_options(profile):
     # Muddy Stilettos: profile county "Berks" didn't match "Berkshire", the select was skipped and submit stayed disabled.
     opts = [{"value": "", "text": "-- Select your country or county"}, {"value": "4", "text": "Bucks & Oxon"},

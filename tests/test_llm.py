@@ -113,6 +113,7 @@ def test_status_and_answer_use_native_api(fake_ollama):
     sent = FakeOllama.chats[-1]
     assert sent["model"] == "gemma4:12b" and sent["think"] is False and sent["format"]["type"] == "object"
     assert sent["options"]["draft_num_predict"] == 0  # no speculative draft model (Gemma 4's fails on some GPUs)
+    assert sent["options"]["num_predict"] == 1024  # a reply that runs away is cut off, not left to time out
     assert "test.person@example.com" not in json.dumps(FakeOllama.chats)  # no profile data in prompts
 
 

@@ -6,6 +6,7 @@ Anything that needs those is handed to the manual queue with a reason.
 from __future__ import annotations
 
 import base64
+import html
 import json
 import logging
 import os
@@ -57,6 +58,8 @@ const __cbVis = (el) => {
   if (!el || !el.getBoundingClientRect) return false;
   const s = getComputedStyle(el);
   if (s.display === 'none' || s.visibility === 'hidden' || parseFloat(s.opacity || '1') < 0.05) return false;
+  // A box that draws nothing itself (display: contents, e.g. a label round a hidden radio button) shows its children.
+  if (s.display === 'contents') return Array.from(el.children || []).some(__cbVis);
   let r = el.getBoundingClientRect();
   if (r.width < 2 || r.height < 2) {
     // An inline link wrapped round a block ("<a><div class=button>TAP TO ENTER</div></a>") has an empty box of its
@@ -157,7 +160,8 @@ JS_EXTRACT = "(prefix) => {\n" + JS_HELPERS + r"""
   };
   const ctxText = (el) => { const up = n => n.parentElement || (n.getRootNode && n.getRootNode().host) || null; let n = up(el); for (let i = 0; i < 4 && n; i++) { const t = txt(n); if (t.length > 40) return t.slice(0, 400); n = up(n); } return ''; };
   // Contact Form 7's acceptance boxes keep the form's submit button disabled until they're ticked (unless "optional").
-  const isReq = (el, label) => el.required || el.getAttribute('aria-required') === 'true' || /\*\s*$|\(required\)/i.test(label || '') || (el.type === 'checkbox' && !!el.closest('.wpcf7-acceptance:not(.optional)'));
+  // Zoho Forms puts a hidden "Required" after the label ("Phone * Required"), so its asterisk isn't at the end.
+  const isReq = (el, label) => el.required || el.getAttribute('aria-required') === 'true' || /\*\s*$|\(required\)|\*\s*required\s*$/i.test(label || '') || (el.type === 'checkbox' && !!el.closest('.wpcf7-acceptance:not(.optional)'));
   const CHROME = 'header, nav, footer, [role=banner], [role=navigation], [role=contentinfo], [role=search], #footer, .footer, [id*=site-footer i], [class*=site-footer i], [class*=page-footer i], [id*=page-footer i]';
   const choiceVis = (el) => vis(el) || (el.labels && Array.from(el.labels).some(vis)) || vis(el.closest('label')) || vis(el.parentElement);
   let counter = 0;
@@ -184,7 +188,12 @@ JS_EXTRACT = "(prefix) => {\n" + JS_HELPERS + r"""
       if (choice ? !choiceVis(el) : !vis(el)) continue;
       let idx = el.getAttribute('data-cb-idx');
       if (!idx) { idx = prefix + (counter++); el.setAttribute('data-cb-idx', idx); }
-      const label = labelFor(el);
+      // Radix's tick box (TaylorMade): the <button role="checkbox"> before it is what you click and what holds the
+      // state; this hidden input only carries the value to the form. Ticking the input left the button unticked.
+      const twin = type === 'checkbox' && el.getAttribute('aria-hidden') === 'true' && el.previousElementSibling &&
+        el.previousElementSibling.matches('button[role=checkbox]') ? el.previousElementSibling : null;
+      if (twin) twin.setAttribute('data-cb-idx', idx);
+      const label = (twin && labelFor(twin)) || labelFor(el);
       if (type === 'radio') {
         const key = el.name || idx;
         if (!groups[key]) {
@@ -241,7 +250,8 @@ JS_EXTRACT = "(prefix) => {\n" + JS_HELPERS + r"""
       const f = {idx, tag: el.tagName.toLowerCase(), type: fpk && picker ? 'date' : type, name: el.name || '', id: el.id || '', label,
         placeholder: el.getAttribute('placeholder') || '', autocomplete: el.getAttribute('autocomplete') || '',
         aria: el.getAttribute('aria-label') || '', required: isReq(el, label), options: [], context: ctxText(el),
-        maxlength: el.maxLength > 0 ? el.maxLength : null, checked: !!el.checked, picker};
+        maxlength: el.maxLength > 0 ? el.maxLength : null, checked: twin ? twin.getAttribute('aria-checked') === 'true' : !!el.checked, picker};
+      if (twin && !f.required) f.required = twin.getAttribute('aria-required') === 'true' || twin.required;
       if (type === 'checkbox' && el.name) {
         // A group of checkboxes ("What are you interested in? [ ] MTB [ ] Moto"): use the group's own question.
         const same = Array.from(el.getRootNode().querySelectorAll('input[type=checkbox]')).filter(c => c.name === el.name);
@@ -409,13 +419,16 @@ JS_MARK_SUBMIT = "(idx) => {\n" + JS_HELPERS + r"""
     if (after(b)) s += 1;  // a form's button comes after its fields
     return s;
   };
-  // The field's own form first, then wider and wider boxes around the field until a likely submit button turns up
-  // (Great British Chefs has no <form>; Riddle puts "Submit and continue" in a <form> of its own). A field drawn
-  // inside a web component (Roborock's email box) climbs out of its shadow root to the form around it.
+  // The field's own form first, then wider and wider boxes around it until a likely submit button turns up (Great
+  // British Chefs has no <form>; Riddle puts "Submit and continue" in a <form> of its own). The walk starts from the
+  // form, not the field: a page builder (Leadfamly, JYSK's game) puts its "Start game" button in a block of its own
+  // beside the form's, a dozen boxes up from the form and more from the field. A field drawn inside a web component
+  // (Roborock's email box) climbs out of its shadow root to the form around it.
   const up = n => n.parentElement || (n.getRootNode && n.getRootNode().host) || null;
   const roots = [];
   if (form) roots.push(form);
-  for (let n = el && up(el), i = 0; n && i < 12; n = up(n), i++) if (!roots.includes(n)) roots.push(n);
+  const from = form || el;
+  for (let n = from && up(from), i = 0; n && i < 12; n = up(n), i++) if (!roots.includes(n)) roots.push(n);
   if (!roots.length) roots.push(document.body);
   let best = null, bestScore = -99;
   for (const root of roots) {
@@ -436,6 +449,15 @@ JS_MARK_SUBMIT = "(idx) => {\n" + JS_HELPERS + r"""
     if (!wheel) return null;
     wheel.setAttribute('data-cb-submit', '1');
     return 'the prize wheel';
+  }
+  // A styled box drawn under a see-through real button (Parkdean's Sitecore form: <input type="submit" value="Send">
+  // at opacity 0 over <div class="form__btn-view">Send</div>): press the real button, or nothing gets sent.
+  if (best.tagName === 'DIV' || best.tagName === 'SPAN') {
+    const bt = (txt(best) || '').toLowerCase();
+    const twin = Array.from((best.parentElement || best).querySelectorAll('input[type=submit], input[type=image], button'))
+      .find(c => c !== best && !best.contains(c) && getComputedStyle(c).display !== 'none' &&
+        ((c.tagName === 'INPUT' ? c.value : txt(c)) || '').trim().toLowerCase() === bt);
+    if (twin) best = twin;
   }
   best.setAttribute('data-cb-submit', '1');
   return (txt(best) || best.value || 'submit').slice(0, 60);
@@ -487,13 +509,14 @@ JS_COOKIES = "(acceptMode) => {\n" + JS_HELPERS + r"""
   // Normally compbot refuses cookies. acceptMode is the second try on a page that showed no entry form after a refusal
   // (some sites only load their competition embed once you accept).
   const rejectIds = ['onetrust-reject-all-handler', 'CybotCookiebotDialogBodyButtonDecline', 'didomi-notice-disagree-button',
-    'truste-consent-required', 'cookie-reject'];
+    'truste-consent-required', 'cookie-reject', 'ccc-reject-settings'];
   const acceptIds = ['onetrust-accept-btn-handler', 'CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll',
-    'didomi-notice-agree-button', 'truste-consent-button', 'cookie-accept'];
+    'CybotCookiebotDialogBodyButtonAccept', 'didomi-notice-agree-button', 'truste-consent-button', 'cookie-accept',
+    'ccc-recommended-settings'];
   const mark = b => { __cbAll(document, '[data-cb-cookie]').forEach(e => e.removeAttribute('data-cb-cookie')); b.setAttribute('data-cb-cookie', '1'); };
   for (const id of (acceptMode ? acceptIds : rejectIds.concat(acceptIds))) { const b = document.getElementById(id); if (b && vis(b)) { mark(b); return id; } }
-  const reject = /^(reject all|reject|reject all cookies|decline|decline all|necessary only|only necessary|essential only|use necessary cookies only|refuse all|deny|deny all|disagree|do not consent|continue without accepting|continue without agreeing|(reject|decline) (all )?(and|&) close|reject non-?essentials?( cookies)?|reject (optional|additional|non-?necessary) cookies|(accept|allow|use) (only )?(essential|necessary|required) cookies( only)?|(accept|allow) (only )?(essential|necessary)( only)?|only (essential|necessary|required) cookies)$/i;
-  const accept = /^(accept all|accept|accept all cookies|accept cookies|i accept|agree|i agree|allow all|allow all cookies|allow cookies|got it|ok|okay|agree and close|agree & close|accept & close|accept and close|accept all (and|&) close|yes,? i'?m happy|i understand|understood|ok,? got it|that'?s fine|accept (and|&) continue|accept all (and|&) continue|agree (and|&) continue|consent)$/i;
+  const reject = /^(reject all|reject|reject all cookies|decline|decline all|necessary only|only necessary|essential only|use necessary cookies only|refuse all|deny|deny all|disagree|do not consent|i do not accept( cookies)?|i don'?t accept( cookies)?|continue without accepting|continue without agreeing|(reject|decline) (all )?(and|&) close|reject non-?essentials?( cookies)?|reject (optional|additional|non-?necessary) cookies|(accept|allow|use) (only )?(essential|necessary|required) cookies( only)?|(accept|allow) (only )?(essential|necessary)( only)?|only (essential|necessary|required) cookies)$/i;
+  const accept = /^(accept all|accept|accept all cookies|accept cookies|i accept|i accept( all)? cookies|agree|i agree|allow all|allow all cookies|allow cookies|got it|ok|okay|agree and close|agree & close|accept & close|accept and close|accept all (and|&) close|yes,? i'?m happy|i understand|understood|ok,? got it|that'?s fine|accept (and|&) continue|accept all (and|&) continue|agree (and|&) continue|consent)$/i;
   // Consent managers' own boxes too: Shopify's banner is a role=alertdialog, Usercentrics draws its banner in a shadow
   // root under #usercentrics-root, CookieYes uses cky-*, Termly / iubenda / Osano / Klaro their own names.
   const banner = '[id*=cookie i],[class*=cookie i],[id*=consent i],[class*=consent i],[id*=gdpr i],[class*=gdpr i],[class*=cmp i],[id*=cmp i],[aria-label*=cookie i],[aria-label*=consent i],[id*=privacy i],[class*=privacy i],[role=dialog],[role=alertdialog],[aria-modal=true],[id*=shopify-pc i],[id*=usercentrics i],[data-testid^=uc-],[class*=cky-],[class*=termly i],[id*=termly i],[class*=iubenda i],[id*=iubenda i],[class*=osano i],[class*=klaro i]';
@@ -511,7 +534,8 @@ JS_COOKIES = "(acceptMode) => {\n" + JS_HELPERS + r"""
     for (let n = b.parentElement, i = 0; n && i < 4; n = n.parentElement, i++) { const t = __cbTxt(n); if (t.length < 700 && embedPh.test(t)) return true; }
     return false;
   };
-  const btns = __cbAll(document, 'button, [role=button], a, input[type=button]').filter(b => vis(b) && !inEntryForm(b) && !inEmbedPlaceholder(b));
+  // A consent dialog's tabs ("Consent / Details / About" in Cookiebot's) only switch what it shows.
+  const btns = __cbAll(document, 'button, [role=button], a, input[type=button]').filter(b => vis(b) && !inEntryForm(b) && !inEmbedPlaceholder(b) && b.getAttribute('role') !== 'tab' && !b.closest('[role=tablist]'));
   for (const re of (acceptMode ? [accept] : [reject, accept])) {
     for (const b of btns) {
       const t = (b.innerText || b.value || b.textContent || '').replace(/\s+/g, ' ').trim();
@@ -527,7 +551,8 @@ JS_AGE_GATE = "() => {\n" + JS_HELPERS + r"""
   const vis = __cbVis, txt = __cbTxt;
   const ask = /\b(are you (over|aged?) (18|eighteen)|over (18|eighteen)\s*\?|of legal (drinking|purchase|purchasing) age|verify (your|that you are of legal) age|confirm (that )?you are (over|at least|aged?) (18|eighteen)|age verification)\b/i;
   const yes = /^(yes|yes,? i am|yes,? i'?m over (18|eighteen)|i am( over)? (18|eighteen)( or over)?|i'?m over (18|eighteen)|over (18|eighteen)|i am of legal (drinking )?age|enter|enter site|enter the site|confirm|i confirm)!?$/i;
-  for (const box of document.querySelectorAll('[role=dialog], [aria-modal=true], dialog, [class*=age i], [id*=age i], [class*=modal i], [class*=popup i], [class*=overlay i]')) {
+  // (Brains Brewery's Blockify gate is a fixed #av-overlay-wrap inside a box that has no size of its own.)
+  for (const box of document.querySelectorAll('[role=dialog], [aria-modal=true], dialog, [class*=age i], [id*=age i], [class*=modal i], [class*=popup i], [class*=overlay i], [id*=overlay i], [class*=verif i], [id*=verif i]')) {
     if (!vis(box)) continue;
     const t = txt(box);
     if (t.length > 900 || !ask.test(t)) continue;
@@ -575,7 +600,9 @@ JS_CAPTCHA = "() => {\n" + JS_HELPERS + r"""
   const formInputs = __cbAll(document, 'input[type=text], input[type=email], input[type=tel], input:not([type]), textarea').filter(__cbVis);
   if (formInputs.length >= 2) return null;
   const head = (document.title + ' ' + (document.body ? document.body.innerText.slice(0, 600) : '')).toLowerCase();
-  if (/just a moment|verify you are human|checking your browser|are you a robot|attention required|access denied|request blocked|unusual traffic|verification failed|403 forbidden|pardon our interruption/.test(head)) return 'challenge-page';
+  // AWS WAF's puzzle page (AEG Presents): "Human Verification - Let's confirm you are human ... Begin".
+  if (/just a moment|verify you are human|human verification|confirm (that )?you('| a)re (a )?human|checking your browser|are you a robot|attention required|access denied|request blocked|unusual traffic|verification failed|403 forbidden|pardon our interruption/.test(head)) return 'challenge-page';
+  if (__cbAll(document, '.amzn-captcha-verify-button, #captcha-container [class*=amzn-captcha]').some(__cbVis)) return 'challenge-page';
   return null;
 }
 """
@@ -588,11 +615,12 @@ JS_TERMS_LINKS = r"""
 
 JS_REVEAL = "([dryRun, linksOnly]) => {\n" + JS_HELPERS + r"""
   const vis = __cbVis;
-  const txt = el => __cbTxt(el).replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}\u{200D}]/gu, '').replace(/\s+/g, ' ').trim();
+  // Emoji, and a footnote mark on the end ("enter to win¹", Dacia), aren't part of what the button says.
+  const txt = el => __cbTxt(el).replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}\u{200D}]/gu, '').replace(/\s+/g, ' ').trim().replace(/\s*[\u00B9\u00B2\u00B3\u2070-\u2079*\u2020\u2021]+$/u, '');
   // Buttons that only open the entry form or quiz: safe to press even in a dry run.
   const safe = /^((let'?s )?(start|begin|take|do|play|try)( the| our| this| a)?( quiz| game| competition| challenge| test)?( now| here)?|get started|let'?s (go|start|play)|show (the )?(form|questions?)|reveal (the )?(form|question)|continue)!?$/i;
   // Buttons that might themselves submit an entry: only pressed for real entries.
-  const enter = /^(enter( now| here| (the |this |our )?(competition|comp|contest|giveaway|prize draw|draw|quiz|reader treat)( here| now)?| to win| now for free)?|(click|tap) (here )?to enter( the (competition|comp|contest|giveaway|prize draw|draw))?( now| here)?|click here to enter now|take part|enter (&|and) win|i want to win|join (in|now|today)|join (the |this |our )?(contest|competition|comp|giveaway|prize draw|draw)|(join|sign ?up|subscribe|register|opt in)( now)? to enter|count me in|(submit|send) your entry)!?$/i;
+  const enter = /^(enter( now| here| (the |this |our )?(competition|comp|contest|giveaway|prize draw|draw|quiz|reader treat)( here| now)?| to win|( now)? for free)?|(click|tap) (here )?to (enter|win)( the (competition|comp|contest|giveaway|prize draw|draw))?( now| here)?|click here to enter now|take part|enter (&|and) win|i want to win|join (in|now|today)|join (the |this |our )?(contest|competition|comp|giveaway|prize draw|draw)|(join|sign ?up|subscribe|register|opt in)( now)? to enter|count me in|(submit|send) your entry)!?$/i;
   // "For your chance to win, click HERE and complete the online form": the word "here" is the link to the entry form.
   const hereWord = /^(click )?here!?$/i;
   const hereSentence = /\b(enter|entry|entries|form|chance to win|to win)\b/i;
@@ -617,7 +645,7 @@ JS_REVEAL = "([dryRun, linksOnly]) => {\n" + JS_HELPERS + r"""
   };
   const h1 = document.querySelector('h1');
   const top0 = h1 ? h1.getBoundingClientRect().top + scrollY : 0;
-  let best = null, bestScore = -1e9, bestGate = null;
+  let best = null, bestScore = -1e9, bestGate = null, bestLabel = '';
   // A <button> is a submit button unless it says otherwise; links and type=button ones can't send a form.
   const couldSubmit = b => b.tagName === 'BUTTON' ? (b.getAttribute('type') || 'submit').toLowerCase() === 'submit'
     : b.tagName === 'INPUT' ? /^(submit|image)$/i.test(b.type || '') : false;
@@ -628,7 +656,11 @@ JS_REVEAL = "([dryRun, linksOnly]) => {\n" + JS_HELPERS + r"""
   const opensForm = (b, t) => { const f = b.form || b.closest('form'); return !!(f && starter.test(t) && !Array.from(f.querySelectorAll(fillable)).some(e => vis(e) || (e.labels && Array.from(e.labels).some(vis)))); };
   for (const b of __cbAll(document, 'button, a, [role=button], input[type=button], input[type=submit]')) {
     if (!vis(b) || b.hasAttribute('data-cb-tried')) continue;
-    const t = (txt(b) || b.value || '').trim();
+    let t = (txt(b) || b.value || '').trim();
+    // A button carrying its own small print ("ENTER FOR FREE / By clicking enter for free, you agree to the Terms and
+    // Conditions", Make Me A Winner) says what its first line says.
+    const lines = String(b.innerText || '').split('\n').map(s => s.replace(/\s*[\u00B9\u00B2\u00B3\u2070-\u2079*\u2020\u2021]+$/u, '').trim()).filter(Boolean);
+    if (lines.length > 1 && lines[0].length <= 40 && !safe.test(t) && !enter.test(t) && (safe.test(lines[0]) || enter.test(lines[0]))) t = lines[0];
     const opener = opensForm(b, t);
     // Never press anything that could submit a form. Inside a form, only a quiz or form opener that can't send it
     // (fishdeal's quiz is one big <form> opened by a "Take the Quiz" link), or the button of a form with no fields.
@@ -661,7 +693,7 @@ JS_REVEAL = "([dryRun, linksOnly]) => {\n" + JS_HELPERS + r"""
     if (__cbClosest(b, 'main, article, [role=main]')) s += 2;
     if (__cbClosest(b, 'header, nav, footer, aside, [role=navigation], [role=banner], [role=contentinfo]')) s -= 8;
     s -= Math.min(6, Math.abs(b.getBoundingClientRect().top + scrollY - top0) / 600);  // nearer the headline
-    if (s > bestScore) { best = b; bestScore = s; bestGate = gate; }
+    if (s > bestScore) { best = b; bestScore = s; bestGate = gate; bestLabel = t; }
   }
   if (!best || bestScore < -6) return null;
   __cbAll(document, '[data-cb-reveal],[data-cb-gate]').forEach(e => { e.removeAttribute('data-cb-reveal'); e.removeAttribute('data-cb-gate'); });
@@ -673,7 +705,7 @@ JS_REVEAL = "([dryRun, linksOnly]) => {\n" + JS_HELPERS + r"""
     const lab = (bestGate.labels && bestGate.labels[0]) || bestGate.closest('label');
     gateLabel = (txt(lab) || txt(bestGate.parentElement)).slice(0, 120);
   }
-  return {label: (txt(best) || best.value || '').trim(), gate: gateLabel, href: best.tagName === 'A' ? (best.href || '') : ''};
+  return {label: bestLabel, gate: gateLabel, href: best.tagName === 'A' ? (best.href || '') : ''};
 }
 """
 
@@ -819,7 +851,8 @@ JS_QUIZ_SCAN = "([skip, focus, dryRun]) => {\n" + JS_HELPERS + r"""
   }
 
   // The button that moves the quiz on: next / reveal / see results / (for real entries) enter the draw.
-  const NEXT = /^(next( question| step)?|continue|reveal( the)?( next)?( question)?( \d+)?|show( me)?( the)?( next)? question( \d+)?|(tap|click) (here )?to reveal|check( my| the)? answers?|submit( my| your)? answers?|confirm( my)?( answer)?|lock (it |answer )?in|(see|show|get|view|reveal) (my |your |the )?(results?|score)|finish( the)?( quiz)?|done|ok|start( the)? quiz|begin( the)? quiz|let'?s go)!?$/i;
+  // Riddle's single-choice questions: pick an answer, then press "CHOOSE" (Radio Times).
+  const NEXT = /^(next( question| step)?|continue|reveal( the)?( next)?( question)?( \d+)?|show( me)?( the)?( next)? question( \d+)?|(tap|click) (here )?to reveal|check( my| the)? answers?|submit( my| your)? answers?|confirm( my)?( answer)?|choose( (this|my|your))?( answer)?|lock (it |answer )?in|(see|show|get|view|reveal) (my |your |the )?(results?|score)|finish( the)?( quiz)?|done|ok|start( the)? quiz|begin( the)? quiz|let'?s go)!?$/i;
   const ENTER = /^(enter( now| here)?|enter( the)?( prize)? (draw|competition|giveaway)|claim( your)?( prize| entry)?|complete (your )?(prize draw )?entry|go to( the)? (entry|form|draw))!?$/i;
   const RETRY = /^(retry|try again|have another go|another go|go again|try another answer)!?$/i;
   const QUIZY = /question|quiz|reveal|result|score|answer/i;
@@ -988,6 +1021,8 @@ WRONG_PAGE_PATH_RE = re.compile(
 # The entry form is only for signed-in members (Living North, The Lady, Delia): nothing to fill in until you sign in.
 LOGIN_WALL_RE = re.compile(
     r"you (?:need|have|must) (?:to )?(?:be )?(?:log(?:ged)? ?in|sign(?:ed)? ?in)|"
+    # Make Me A Winner's pop-up on pressing "Enter for free": "Oops, you don't appear to be signed in."
+    r"you (?:don['\u2019]?t|do not) (?:appear|seem) to be (?:log(?:ged)? ?in|sign(?:ed)? ?in)|"
     r"(?:log ?in|sign ?in|logged in|signed in)\b[^.\n]{0,60}?\bto (?:enter|view (?:the|this) (?:form|"
     r"competition|question)|see (?:the|this) (?:form|question|competition)|take part|access (?:the|this) (?:form|"
     r"competition))|"
@@ -1375,6 +1410,16 @@ JS_FIELD_SHOWN = "(idx) => {\n" + JS_HELPERS + r"""
   const e = __cbOne(`[data-cb-idx="${idx}"]`);
   if (!e) return false;
   return __cbShown(e);
+}
+"""
+
+# Whether the button marked [data-cb-submit] belongs with these fields: it's in no form, or in the form holding them.
+JS_SUBMIT_BESIDE = "(idxs) => {\n" + JS_HELPERS + r"""
+  const b = __cbOne('[data-cb-submit="1"]');
+  if (!b) return false;
+  const f = b.form || __cbClosest(b, 'form');
+  if (!f) return true;
+  return idxs.some(i => { const e = __cbOne(`[data-cb-idx="${i}"]`); return !!e && __cbContains(f, e); });
 }
 """
 
@@ -2022,23 +2067,30 @@ JS_ARIA_DROPDOWNS = "([prefix, formId]) => {\n" + JS_HELPERS + r"""
   const root = (formId && __cbOne(`[data-cb-form="${formId}"]`)) || document;
   const out = [];
   let n = 0;
-  for (const box of __cbAll(root, '[role=listbox][aria-owns], [role=combobox][aria-owns], input[role=combobox][aria-autocomplete=list], input[role=combobox][aria-autocomplete=both]')) {
+  // A search box with its list of choices right after it (Outgrow's lead forms: Gilbert's "Day of your choice"), the
+  // choices only drawn once the box is clicked.
+  const listAfter = b => { const l = b.nextElementSibling; return l && l.matches('[role=listbox]') ? l : null; };
+  const boxes = __cbAll(root, '[role=listbox][aria-owns], [role=combobox][aria-owns], input[role=combobox][aria-autocomplete=list], input[role=combobox][aria-autocomplete=both], button[role=combobox]')
+    .concat(__cbAll(root, 'input + [role=listbox]').map(l => l.previousElementSibling).filter(b => b && b.matches('input[type=search], input[type=text], input:not([type])') && !b.matches('[role=combobox]')));
+  for (const box of boxes) {
     const isInput = box.tagName === 'INPUT';
     if (!vis(box) || box.tagName === 'SELECT' || (isInput && box.type !== 'text' && box.type !== 'search' && box.type !== '') || box.closest('[role=option]')) continue;
     if (box.closest('header, nav, footer, [role=navigation], [role=banner], [role=contentinfo]')) continue;  // a language picker
     const block = box.closest('.form-element-block, .form-group, .form-field, .field, li, fieldset') || box.parentElement;
     const lab = block && Array.from(block.querySelectorAll('label, legend, .form-element-label')).find(l => !box.contains(l) && txt(l));
-    const label = (lab ? txt(lab) : '') || box.getAttribute('aria-label') || '';
+    const label = (lab ? txt(lab) : '') || box.getAttribute('aria-label') || box.getAttribute('placeholder') || '';
     let idx = box.getAttribute('data-cb-idx');
     if (!idx) { idx = prefix + (n++); box.setAttribute('data-cb-idx', idx); }
     const cls = block && typeof block.className === 'string' ? block.className : '';
     const req = /(^|\s)required(\s|$)/.test(cls) || box.getAttribute('aria-required') === 'true' || box.required || /\*\s*$/.test(label);
+    const after = isInput ? listAfter(box) : null;
+    if (after && !after.id) after.id = 'cb-list-' + idx;
     // A typed-in list (react-select) shows its choice beside the box, not in it.
     const ctl = isInput ? (box.closest('[class*=control i], [class*=container i]') || box.parentElement) : box;
-    const shown = isInput ? (box.value || txt(ctl)) : txt(box);
+    const shown = isInput ? (box.value || (after ? '' : txt(ctl))) : txt(box);
     out.push({idx, label: label.slice(0, 300), shown: shown.slice(0, 300), input: isInput,
-              owns: box.getAttribute('aria-owns') || box.getAttribute('aria-controls') || '',
-              required: req, context: block ? txt(block).slice(0, 300) : ''});
+              owns: box.getAttribute('aria-owns') || box.getAttribute('aria-controls') || (after ? after.id : ''),
+              chosen: !!(after && box.value), required: req, context: block ? txt(block).slice(0, 300) : ''});
   }
   return out;
 }
@@ -2055,16 +2107,28 @@ JS_ARIA_OPTIONS = "([idx, owns]) => {\n" + JS_HELPERS + r"""
 """
 
 
+def _open_drawn(loc, timeout: int) -> None:
+    """Click a drawn drop-down (or one of its choices). When something sits on top of it (a sign-up pop-up over
+    Gilbert's form frame), focus it and send the click to it directly instead."""
+    try:
+        loc.click(timeout=timeout)
+    except Exception:  # noqa: BLE001
+        loc.focus(timeout=2000)
+        loc.dispatch_event("click", timeout=2000)
+
+
 def _aria_dropdowns(page, frame, container: dict, prefix: str) -> list[Field]:
     """The form's drawn drop-down lists that still need a choice, with their choices (each opened, read, closed).
     A typed-in list (react-select: TaylorMade's "Country of residence") counts only if clicking it shows choices; one
     that needs typing first (an address look-up) stays a text box."""
     out = []
     for b in _safe_eval(frame, JS_ARIA_DROPDOWNS, [prefix, container.get("formId") or ""], default=[]) or []:
+        if b.get("chosen"):
+            continue  # its box already holds a choice; opening it again (and pressing Escape) would clear a search box
         owns = b.get("owns") or "*"
         opts: list = []
         try:
-            frame.locator(f'[data-cb-idx="{b["idx"]}"]').first.click(timeout=3000)
+            _open_drawn(frame.locator(f'[data-cb-idx="{b["idx"]}"]').first, 3000)
             _pause(page, 0.5)
             opts = _safe_eval(frame, JS_ARIA_OPTIONS, [b["idx"], owns], default=[]) or []
         except Exception as exc:  # noqa: BLE001
@@ -2075,8 +2139,8 @@ def _aria_dropdowns(page, frame, container: dict, prefix: str) -> list[Field]:
             except Exception:  # noqa: BLE001
                 pass
         shown = (b.get("shown") or "").strip()
-        if not opts or any(o["text"] == shown for o in opts):
-            continue  # nothing to choose from, or a choice is already made
+        if not opts or any(o["text"] == shown and not is_placeholder_option(o) for o in opts):
+            continue  # nothing to choose from, or a choice is already made ("No selection" is no choice)
         # Riddle shows the quiz question in the list itself until an answer is picked; the label just says "Quiz question".
         if shown.endswith("?"):
             label, placeholder = shown, ""
@@ -2171,10 +2235,10 @@ def _apply(frame, f: Field, a: Action) -> bool:
             return True
         if a.kind == "select" and f.owns:
             # A drawn drop-down: open it, mark its choices again (it may draw them afresh) and click the one wanted.
-            loc.click(timeout=4000)
+            _open_drawn(loc, 4000)
             time.sleep(0.4)
             _safe_eval(frame, JS_ARIA_OPTIONS, [f.idx, f.owns])
-            frame.locator(f'[data-cb-idx="{a.value}"]').first.click(timeout=4000)
+            _open_drawn(frame.locator(f'[data-cb-idx="{a.value}"]').first, 4000)
             return True
         if a.kind == "select":
             loc.select_option(value=a.value, timeout=6000)
@@ -2280,6 +2344,36 @@ def _bot_refusal(new_text: str, server: str, container: dict, frame) -> tuple[st
     return None
 
 
+def _reply_text(raw: str) -> str:
+    """What an error reply says, readably: a JSON reply's words (any HTML in them as text), not its tokens and ids."""
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        data = None
+    if isinstance(data, (dict, list)):
+        bits: list[str] = []
+
+        def walk(v, key: str = "") -> None:
+            if isinstance(v, dict):
+                for k, x in v.items():
+                    if not re.search(r"csrf|token|nonce|^id$|_id$|^key$|hash|signature", str(k), re.I):
+                        walk(x, str(k))
+            elif isinstance(v, list):
+                for x in v:
+                    walk(x, key)
+            elif isinstance(v, str) and v.strip() and not re.fullmatch(r"[\w.+/=-]{24,}", v.strip()):
+                bits.append(v)
+            elif v is True and key:
+                bits.append(key)  # {"captcha_required": true}
+
+        walk(data)
+        raw = " ".join(bits) or raw
+    if "<" in raw:
+        raw = re.sub(r"<(script|style)\b.*?</\1\s*>", " ", raw, flags=re.S | re.I)
+        raw = html.unescape(re.sub(r"<[^>]+>", " ", raw))
+    return re.sub(r"\s+", " ", raw).strip()
+
+
 def _server_errors(responses: list) -> str:
     """'HTTP 403 from a.klaviyo.com/client/subscriptions: {...}' for error replies seen after submitting."""
     out = []
@@ -2287,7 +2381,7 @@ def _server_errors(responses: list) -> str:
         try:
             u = urlparse(r.url)
             try:
-                body = re.sub(r"\s+", " ", r.text())[:220]
+                body = _reply_text(r.text())[:220]
             except Exception:  # noqa: BLE001
                 body = ""
             out.append(f"HTTP {r.status} from {u.netloc}{u.path[:60]}" + (f": {body}" if body else ""))
@@ -2362,6 +2456,7 @@ class Browser:
         checked_urls: set[str] = set()
         quiz_deadline = time.time() + QUIZ_BUDGET_S
         play_quizzes = bool(settings.get("play_quizzes", True))
+        pre_quiz_idx: set[str] = set()  # fields of a form already on the page that isn't the quiz's entry form
 
         def best_form():
             gen[0] += 1
@@ -2436,6 +2531,19 @@ class Browser:
                 if best and best[2] >= 4:
                     details["steps"].append("form appeared after scrolling the page")
             if best and best[2] >= 4 and _newsletter_only(best[1], ctx):
+                # The only form so far is a newsletter sign-up. The entry may be further down, drawn once it's
+                # scrolled to (Radio Times' Riddle quiz, whose entry form comes after its question).
+                scroll_through(page)
+                prime_iframes(page)
+                lower = best_form()
+                if lower and lower[2] >= 4 and not _newsletter_only(lower[1], ctx):
+                    best = lower
+                    details["steps"].append("form appeared after scrolling the page")
+                elif play_quizzes and _quiz_present(_quiz_scan(page, dry_run=dry_run)[1]):
+                    # Play the quiz: its entry form comes after it. The newsletter isn't that form.
+                    pre_quiz_idx |= {f["idx"] for f in best[1].get("fields", [])}
+                    best = None
+            if best and best[2] >= 4 and _newsletter_only(best[1], ctx):
                 # The page's only form is a newsletter sign-up, and the article links to the real entry form
                 # ("Click HERE to enter", Sea Angler): follow the link rather than sign up to the newsletter.
                 hit = next(((fr, r) for fr in _all_frames(page) if (r := _safe_eval(fr, JS_REVEAL, [dry_run, True]))),
@@ -2506,7 +2614,7 @@ class Browser:
                 if _quiz_present(qscan):
                     live.status("Playing the quiz")
                     page, qbest, quiz_summary = play_quiz(page, context, live, ctx, settings, comp_context, details,
-                                                          dry_run, set(), quiz_deadline, gen)
+                                                          dry_run, set(pre_quiz_idx), quiz_deadline, gen)
                     details["steps"].append(f"quiz: {quiz_summary}")
                     if qbest:
                         best = qbest
@@ -2752,6 +2860,21 @@ class Browser:
                         details["steps"].append(f"step {step}: the next question came up by itself")
                         best = (frame, more, _score_container(more, ctx))
                         continue
+                if not submit_label and n_filled:
+                    # Measure from another box of this form that's on screen, else from the page as a whole
+                    # (SurveyMonkey's page 2, a list of radio buttons drawn by the site: none of its boxes counted as
+                    # on screen, and compbot said it couldn't find the "Next" button right below them).
+                    others = [i for f in container.get("fields", []) if f["idx"] != submit_idx
+                              for i in [f["idx"]] + [o.get("idx") for o in f.get("options") or [] if o.get("idx")]]
+                    for i in others[:40]:
+                        if _safe_eval(frame, JS_FIELD_SHOWN, i, default=False):
+                            submit_label = _safe_eval(frame, JS_MARK_SUBMIT, i)
+                            if submit_label:
+                                break
+                    if not submit_label:
+                        submit_label = _safe_eval(frame, JS_MARK_SUBMIT, "")
+                        if submit_label and not _safe_eval(frame, JS_SUBMIT_BESIDE, list(cur)[:60], default=False):
+                            submit_label = None  # another form's button (a footer sign-up), not this one's
                 if step == 1 and not n_filled:
                     # Nothing on the "form" was ours to fill (LoveReading's search box beside "open to registered
                     # users. Log in here"): say why the page can't be entered, as when no form is found at all.
@@ -2981,6 +3104,11 @@ class Browser:
         except Exception as exc:  # noqa: BLE001
             log.exception("entry error for %s", url)
             res.result, res.message = "error", f"{type(exc).__name__}: {exc}"[:800]
+            if "ERR_TOO_MANY_REDIRECTS" in str(exc) and ACCOUNT_URL_RE.search(url):
+                # Heathrow Rewards' prize draw page bounces a visitor who isn't signed in round and round.
+                res.result = "login"
+                res.message = ("Only signed-in members can enter (the page keeps redirecting a visitor who isn't "
+                               "signed in) - sign in and enter it yourself")
             try:
                 res.screenshot_after = _shot(page, cfg.screenshot_dir / f"{shot_prefix}_error.jpg")
             except Exception:  # noqa: BLE001

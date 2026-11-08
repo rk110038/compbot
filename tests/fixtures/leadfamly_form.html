@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Black Friday game</title></head>
+<body>
+<!-- Leadfamly (JYSK's Black Friday game): the entry form and its "Start game" button are separate blocks of a page
+     builder, each wrapped in a dozen boxes. The button (type="button", outside the form) only meets the form's fields
+     sixteen boxes up, beyond compbot's search for a submit button, so it said it couldn't find one. -->
+<h1>Win a £500 gift card</h1>
+<div class="campaign"><div class="section"><div class="content"><div class="grid__row"><div class="grid__col">
+<div class="grid__col-container"><div class="grid__col-addons">
+  <div class="grid__addon"><div class="addon lf-form"><div class="flow"><div class="section"><div class="col">
+  <div class="content"><div class="content__item">
+    <form id="f" novalidate>
+      <div class="form__row"><div class="form__col"><div class="form__field"><div class="form__control">
+        <label for="fn">First name</label><input id="fn" name="field_1" required>
+      </div></div></div></div>
+      <div class="form__row"><div class="form__col"><div class="form__field"><div class="form__control">
+        <label for="em">E-mail</label><input id="em" type="email" name="field_2" required>
+      </div></div></div></div>
+      <div class="form__row"><div class="form__col"><div class="form__field"><div class="form__control">
+        <input id="tc" type="checkbox" name="field_3" required><label for="tc">I accept the terms and conditions</label>
+      </div></div></div></div>
+    </form>
+  </div></div></div></div></div></div></div>
+  <div class="grid__addon"><div class="lf-button primary">
+    <button type="button" class="btn btn--primary content__item-action lf-button__element" id="go">Start game</button>
+  </div></div>
+</div></div></div></div></div></div></div></div>
+<script>
+document.getElementById('go').addEventListener('click', () => {
+  const f = document.getElementById('f');
+  if (!f.fn.value || !f.em.value || !f.tc.checked) { alert('Please fill in the form'); return; }
+  document.body.innerHTML = '<h2>Thanks for entering! Good luck in the game.</h2>';
+});
+</script>
+</body></html>

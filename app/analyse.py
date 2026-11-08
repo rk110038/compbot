@@ -86,6 +86,9 @@ ACCOUNT_URL_RE = re.compile(
     r"https?://(?:[a-z0-9-]+\.)*(?:globalplayer\.com|smoothradio\.com|capitalfm\.com|capitalxtra\.com|heart\.co\.uk|"
     r"classicfm\.com|radiox\.co\.uk|lbc\.co\.uk|goldradiouk\.com)/|britishairways\.com/content/the-british-airways-club|"
     r"//profile\.[^/]+/|marksandspencer\.com/mysparks|itv\.com/win/|/my-?account/|/account/(?:prize|rewards|login)|"
+    # Members-only prize draws: PrizeDeck ("SIGN IN or JOIN NOW" to enter), Heathrow Rewards (myheathrow), Vast's
+    # giveaways ("Sign up to enter", then social-media tasks).
+    r"prizedeck\.com/prizedraw/|heathrow\.com/myheathrow/|//vast\.gg/campaigns|"
     # A sign-in page (auth.pumpkinspicecafegame.com/login): the entry is behind an account.
     r"^https?://(?:auth|login|signin|sso|accounts?)\.[^/]+/|^https?://[^/?#]+(?:/[^?#]*)?/(?:log-?in|sign-?in)(?:[/?#.]|$)",
     re.I)

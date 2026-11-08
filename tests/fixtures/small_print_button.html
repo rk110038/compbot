@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Freebie Friday - Win £1,300 Cash</title>
+<style>#oops { display: none; position: fixed; top: 30%; left: 30%; background: #fff; border: 2px solid; padding: 20px; }
+  #oops.open { display: block; } button small { display: block; font-size: 10px; }</style></head>
+<body>
+<!-- Make Me A Winner: the button carries its small print, so it didn't read as "enter for free" (and that wording
+     wasn't known either); pressing it says you need an account. Dacia's link says "enter to win¹". -->
+<h1>FREEBIE FRIDAY - WIN £1,300 CASH</h1>
+<p>1 FREE ENTRY - NO PURCHASE NECESSARY</p>
+<button type="button" id="free">ENTER FOR FREE<small>By clicking enter for free, you agree to the Terms and Conditions of this competition.</small></button>
+<div id="oops" role="dialog"><h2>OOPS, YOU DON'T APPEAR TO BE SIGNED IN.</h2>
+  <p>If you don't already have an account, creating one will make it super easy to enter in the future!</p>
+  <a href="/login">LOGIN / CREATE AN ACCOUNT</a></div>
+<script>document.getElementById('free').onclick = () => document.getElementById('oops').classList.add('open');</script>
+</body></html>

@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>WIN tickets to a musical | Radio Times</title>
+<style>.spacer { height: 1800px; }</style></head>
+<body>
+<!-- Radio Times: the only form on screen is the newsletter sign-up; the competition is a Riddle quiz further down,
+     drawn when it's scrolled to, whose entry form comes after its question. compbot signed up to the newsletter. -->
+<h1>WIN tickets to Disney's HIGH SCHOOL MUSICAL</h1>
+<p>We're giving one lucky winner the chance to win two tickets.</p>
+<aside>
+  <form id="nl"><p>The best TV and entertainment news in your inbox</p><p>Sign up to receive our newsletter!</p>
+    <input type="email" name="email" id="email-address" placeholder="Email address" required>
+    <button type="submit">Sign Up</button></form>
+</aside>
+<div class="spacer"><p>Harry Judd (McFly) stars as Coach Bolton.</p></div>
+<iframe src="/form-widgets/riddle-quiz.html" loading="lazy" width="620" height="520" title="Riddle"></iframe>
+<p>The closing date for entries is 11.59pm on 19th November.</p>
+<script>
+document.getElementById('nl').addEventListener('submit', e => { e.preventDefault(); document.body.innerHTML = '<h2>Thanks for subscribing</h2>'; });
+</script>
+</body></html>

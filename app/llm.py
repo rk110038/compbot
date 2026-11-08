@@ -217,9 +217,11 @@ def chat_json(system: str, user: str, settings: dict | None = None, schema: dict
         if base:
             # draft_num_predict 0: don't load the model's speculative-decoding draft model (Gemma 4 ships one). Our
             # replies are a few dozen tokens, so it barely helps, costs VRAM, and fails to load on some GPUs.
+            # num_predict caps a reply that runs away (8 Nov: Qwen wrote 3,000+ tokens about Frodo's blade until the
+            # 150 s timeout, which then paused the AI for the next ten minutes of entries).
             payload = {"model": model, "messages": messages, "stream": False, "format": schema or "json",
                        "think": False, "keep_alive": "30m",
-                       "options": {"temperature": 0, "num_ctx": 8192, "draft_num_predict": 0}}
+                       "options": {"temperature": 0, "num_ctx": 8192, "draft_num_predict": 0, "num_predict": 1024}}
             r = httpx.post(f"{base}/api/chat", json=payload, timeout=timeout)
             if r.status_code == 400 and "think" in r.text.lower():
                 payload.pop("think")

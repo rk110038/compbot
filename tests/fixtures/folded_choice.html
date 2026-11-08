@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Revive Retreats</title>
+<style>#opts label { display: block; padding: 4px; } #chosen { display: none; }</style></head>
+<body>
+<!-- A survey that folds a question away once it's answered ("Your answer: Berkshire - change"), so the radio buttons
+     compbot filled aren't on screen any more when it looks for the button; "Next" is still right there. -->
+<h1>Revive Retreats</h1>
+<form id="f">
+  <p>2. Which region are you based in?</p>
+  <div id="opts">
+    <label><input type="radio" name="q2" value="Bedfordshire"> Bedfordshire</label>
+    <label><input type="radio" name="q2" value="Berkshire"> Berkshire</label>
+    <label><input type="radio" name="q2" value="Kent"> Kent</label>
+  </div>
+  <p id="chosen">Your answer: <b id="ans"></b> <a href="#" id="change">change</a></p>
+  <button type="submit">Next</button>
+  <p id="msg"></p>
+</form>
+<script>
+document.querySelectorAll('[name=q2]').forEach(r => r.addEventListener('change', () => {
+  document.getElementById('ans').textContent = r.value;
+  setTimeout(() => { document.getElementById('opts').style.display = 'none'; document.getElementById('chosen').style.display = 'block'; }, 200);
+}));
+document.getElementById('f').addEventListener('submit', e => {
+  e.preventDefault();
+  const r = document.querySelector('[name=q2]:checked');
+  if (!r) { document.getElementById('msg').textContent = 'This question requires an answer.'; return; }
+  document.body.innerHTML = '<h2>Thank you for completing our survey! Your response has been recorded.</h2>';
+});
+</script>
+</body></html>

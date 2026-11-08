@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Gilbert x England Rugby</title>
+<style>.select_dropdown { list-style: none; margin: 0; padding: 0; border: 1px solid #ccc; }
+  .custom_dropdown:not(.open) .select_dropdown { display: none; } .err { color: red; }</style></head>
+<body>
+<!-- Outgrow's lead form (Gilbert): "Day of your choice*" is a search box with its list of choices right after it,
+     which only fills in once the box is clicked ("No result found" until then). compbot left it empty. -->
+<h1>Win tickets to the Nations Finals weekend</h1>
+<form id="f" novalidate>
+  <div class="form-group"><label class="leadfrom_title" for="fn">First Name*</label><input id="fn" placeholder="First Name" aria-required="true"></div>
+  <div class="form-group"><label class="leadfrom_title" for="em">My Email is*</label><input id="em" type="email" placeholder="Email Address" aria-required="true"></div>
+  <div class="form-group dropdown"><label class="leadfrom_title" for="missing-id"><span>Day of your choice<span class="requiredAsteric">*</span></span></label>
+    <div class="custom_dropdown" id="dd1"><input type="search" class="custom_input" placeholder="Day of your choice">
+      <ul role="listbox" class="select_dropdown" id="ulDrop_1"><li aria-disabled="true">No result found</li></ul></div></div>
+  <button type="submit">ENTER</button>
+  <p class="err" id="msg"></p>
+</form>
+<script>
+const dd = document.getElementById('dd1'), inp = dd.querySelector('input'), ul = dd.querySelector('ul');
+const DAYS = ['Friday 27th November', 'Saturday 28th November', 'Sunday 29th November'];
+inp.addEventListener('click', () => {
+  dd.classList.add('open');
+  ul.innerHTML = DAYS.map((d, i) => `<li role="option" class="option" id="o${i}">${d}</li>`).join('');
+  ul.querySelectorAll('li').forEach(li => li.addEventListener('click', () => { inp.value = li.textContent; dd.classList.remove('open'); }));
+});
+document.getElementById('f').addEventListener('submit', e => {
+  e.preventDefault();
+  if (!DAYS.includes(inp.value)) { document.getElementById('msg').textContent = 'Field is required'; return; }
+  document.body.innerHTML = '<h2>Thank you for entering!</h2><p>' + inp.value + '</p>';
+});
+</script>
+</body></html>

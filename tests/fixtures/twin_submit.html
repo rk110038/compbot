@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Lidl competition</title>
+<style>.form__btn-container { position: relative; display: inline-block; }
+  .form__btn { position: absolute; inset: 0; opacity: 0; z-index: 2; width: 160px; height: 42px; }
+  .form__btn:disabled { pointer-events: none; }
+  .form__btn-view { display: inline-block; width: 160px; height: 42px; background: #0a0; color: #fff; text-align: center; line-height: 42px; }</style></head>
+<body>
+<!-- Parkdean's Sitecore form: the real <input type="submit" value="Send"> sits see-through over a styled
+     <div class="form__btn-view">Send</div>, disabled until the form is filled in. compbot pressed the styled box,
+     so nothing was sent. -->
+<h1>Win a holiday</h1>
+<form id="f">
+  <label for="fn">First name</label><input id="fn" class="form__input" placeholder="Your first name" required>
+  <label for="em">Email address</label><input id="em" class="form__input" type="email" placeholder="Your email address" required>
+  <div class="form__btn-container">
+    <input value="Send" type="submit" class="form__btn" disabled>
+    <div class="form__btn-view" role="presentation"><span>Send</span></div>
+  </div>
+</form>
+<script>
+const f = document.getElementById('f'), btn = f.querySelector('.form__btn');
+f.addEventListener('input', () => { btn.disabled = !(f.fn.value && f.em.value); });
+f.addEventListener('submit', e => { e.preventDefault(); document.body.innerHTML = '<h2>Thank you for entering!</h2>'; });
+</script>
+</body></html>

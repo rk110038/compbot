@@ -203,8 +203,8 @@ HEAR_PREFS = ["moneysavingexpert", "money saving expert", "mse", "forum", "onlin
 HEAR_SPECIFY_RE = re.compile(r"^(?:if other,? )?(?:please )?specify\b|^other\b.{0,25}specify|^if other\b")
 HEARD_AT = "MoneySavingExpert forum"
 PLACEHOLDER_OPT_RE = re.compile(
-    r"^\s*(?:-+.*|please (?:select|choose).*|(?:select|choose)\b.*|pick one.*|make a selection.*|dd|mm|yyyy|day|"
-    r"month|year)?\s*$", re.I)
+    r"^\s*(?:-+.*|please (?:select|choose).*|(?:select|choose)\b.*|pick one.*|make a selection.*|no selection|"
+    r"nothing selected|none selected|dd|mm|yyyy|day|month|year)?\s*$", re.I)
 YES_RE = re.compile(r"^(yes|y|true|i do|i am|i agree|agree|yes please|opt in)\b", re.I)
 NO_RE = re.compile(r"^(no|n|false|i don ?t|no thanks|not now|opt out)\b", re.I)
 
@@ -691,6 +691,10 @@ def map_choice(f: Field, ctx: Ctx) -> Action:
         o, score = match_answer_option(f.options, ctx.answers)
         if o and score >= 75:
             return Action(kind, o.get("idx") or o.get("value"), source="answer", note=f"answer match {score}")
+    if len(real) == 1 and (f.required or looks_like_question(f)) and not MARKETING_RE.search(
+            label_d + " " + normalise(real[0].get("text", ""))):
+        # One answer to choose from (Slimming World: "Which issue of the magazine do you have?" - "197 Nov/Dec 2026").
+        return Action(kind, real[0].get("idx") or real[0].get("value"), source="rule", note="the only choice")
     if not f.required:
         if looks_like_question(f):  # an unanswered quiz question - the AI may be able to help
             return Action("skip", note="question with no known answer")

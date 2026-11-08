@@ -347,6 +347,18 @@ def test_server_refusal_after_submit_is_reported(browser, fixture_server, profil
     assert res.details["server_errors"].startswith("HTTP 501")
 
 
+def test_error_reply_is_shown_as_words_not_tokens():
+    from app.entry.browser import _reply_text
+    # DHL's reply: a fresh CSRF token and a pop-up whose HTML says what went wrong.
+    raw = ('{"csrf":{"id":"f1-logistics-hub-2022-2026-21-BRA__token","value":"c68e6e5a8c.iSfHQMBZkl8wd5uyTzBxJn2Db7pUh-aTSJ'
+           'YWx5lOpJc.1l2sCYRqyi1mPu7WJWgjExnNXfgywKv7LNV"},"errors":[],"messages":[],"modal":{"html":"<div class=\\"m\\">'
+           '<h2>Sorry!</h2><p>You have already taken part today.</p><script>x()</script></div>"}}')
+    assert _reply_text(raw) == "Sorry! You have already taken part today."
+    assert _reply_text('{"captcha_required": true}') == "captcha_required"
+    assert _reply_text("<html><title>Attention Required! | Cloudflare</title></html>") == "Attention Required! | Cloudflare"
+    assert _reply_text("Bad request") == "Bad request"
+
+
 def test_wayin_link_submit_and_country_field(browser, fixture_server, profile):
     # CinemaBlend (Future plc / Wayin): Submit is <a class="xCTA xButton">, and "Country" got the quiz answer
     # because it starts with "count".
@@ -674,6 +686,70 @@ def test_empty_form_whose_button_starts_the_competition(browser, fixture_server,
     res = browser.enter(f"{fixture_server}/launch_form.html", Ctx(profile=profile), _settings(entry_mode="auto"),
                         "lf2", {})
     assert res.result == "entered", (res.message, res.details["steps"])
+
+def test_start_button_in_a_block_beside_the_form_is_found(browser, fixture_server, profile):
+    res = browser.enter(f"{fixture_server}/leadfamly_form.html", Ctx(profile=profile), _settings(entry_mode="auto"),
+                        "lff", {})
+    assert res.result == "entered", (res.message, res.details["steps"])
+    assert res.details["steps"] == ["step 1: clicked 'Start game'"], res.details["steps"]
+
+def test_quiz_further_down_is_played_instead_of_signing_up_to_the_newsletter(browser, fixture_server, profile):
+    # Radio Times: a newsletter box on screen, the competition a Riddle quiz further down whose form follows "CHOOSE".
+    res = browser.enter(f"{fixture_server}/newsletter_then_quiz.html", Ctx(profile=profile, answers=["McFly"]),
+                        _settings(entry_mode="auto"), "nq1", {})
+    assert res.result == "entered" and "Thanks for enter" in res.message, (res.message, res.details["steps"])
+    steps = res.details["steps"]
+    assert "quiz: clicked 'CHOOSE'" in steps and "the entry form appeared after the quiz" in steps, steps
+
+def test_aws_waf_puzzle_page_is_a_bot_check(browser, fixture_server, profile):
+    res = browser.enter(f"{fixture_server}/aws_waf.html", Ctx(profile=profile), _settings(entry_mode="auto"), "aw1", {})
+    assert res.result == "blocked" and "bot-check" in res.message, (res.result, res.message)
+
+def test_button_with_its_small_print_and_a_sign_in_pop_up(browser, fixture_server, profile):
+    res = browser.enter(f"{fixture_server}/small_print_button.html", Ctx(profile=profile), _settings(entry_mode="auto"),
+                        "sp1", {})
+    assert res.result == "login" and "APPEAR TO BE SIGNED IN" in res.message, (res.result, res.message)
+    assert "clicked 'ENTER FOR FREE'" in res.details["steps"], res.details["steps"]
+
+def test_link_with_a_footnote_mark_is_followed(browser, fixture_server, profile):
+    res = browser.enter(f"{fixture_server}/footnote_link.html", Ctx(profile=profile, answers=["UNIVERSE"]),
+                        _settings(entry_mode="auto"), "fn1", {})
+    assert res.result == "entered", (res.message, res.details["steps"])
+    assert "clicked 'enter to win'" in res.details["steps"], res.details["steps"]
+
+def test_next_is_found_below_radio_buttons_drawn_by_the_site(browser, fixture_server, profile):
+    # Labels with display: contents round hidden radio buttons draw nothing themselves: their words are what shows.
+    res = browser.enter(f"{fixture_server}/contents_radios.html", Ctx(profile=profile), _settings(entry_mode="auto"),
+                        "cr1", {})
+    assert res.result == "entered", (res.message, res.details["steps"], res.details.get("fields"))
+    assert res.details["steps"] == ["step 1: clicked 'Next'"], res.details["steps"]
+
+def test_next_is_found_when_the_answered_question_folds_away(browser, fixture_server, profile):
+    res = browser.enter(f"{fixture_server}/folded_choice.html", Ctx(profile=profile), _settings(entry_mode="auto"),
+                        "fc1", {})
+    assert res.result == "entered", (res.message, res.details["steps"], res.details.get("fields"))
+    assert res.details["steps"] == ["step 1: clicked 'Next'"], res.details["steps"]
+
+def test_search_box_with_its_choices_listed_after_it(browser, fixture_server, profile):
+    # Outgrow (Gilbert): the choices only appear once the box is clicked; any day will do.
+    res = browser.enter(f"{fixture_server}/outgrow_dropdown.html", Ctx(profile=profile), _settings(entry_mode="auto"),
+                        "og1", {})
+    assert res.result == "entered", (res.message, res.details["steps"], res.details.get("fields"))
+    by = {f["label"].rstrip("*"): f for f in res.details["fields"]}
+    assert by["Day of your choice"]["action"] == "select" and by["Day of your choice"]["ok"], by
+
+def test_see_through_real_button_over_a_styled_one_is_pressed(browser, fixture_server, profile):
+    res = browser.enter(f"{fixture_server}/twin_submit.html", Ctx(profile=profile), _settings(entry_mode="auto"),
+                        "tw1", {})
+    assert res.result == "entered", (res.message, res.details["steps"])
+    assert res.details["steps"] == ["step 1: clicked 'Send'"], res.details["steps"]
+
+def test_radix_tick_box_is_ticked_by_its_button(browser, fixture_server, profile):
+    res = browser.enter(f"{fixture_server}/radix_checkbox.html", Ctx(profile=profile), _settings(entry_mode="auto"),
+                        "rx1", {})
+    assert res.result == "entered", (res.message, res.details["steps"], res.details.get("fields"))
+    terms = next(f for f in res.details["fields"] if "Terms and Conditions" in f["label"])
+    assert terms["action"] == "check" and terms["ok"], terms
 
 def test_drawn_drop_down_lists_are_chosen_from(browser, fixture_server, profile):
     res = browser.enter(f"{fixture_server}/aria_dropdown.html", Ctx(profile=profile, answers=["6"]),

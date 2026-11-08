@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Riddle</title>
+<style>.answer.sel { outline: 3px solid green; } #form { display: none; }</style></head>
+<body>
+<div id="quiz">
+  <p>SELECT ONE</p>
+  <h2>Which band was Harry Judd a member of?</h2>
+  <div class="answers">
+    <button type="button" class="answer">McFly</button>
+    <button type="button" class="answer">Busted</button>
+    <button type="button" class="answer">Take That</button>
+  </div>
+  <button type="button" id="choose" disabled>CHOOSE</button>
+</div>
+<form id="form">
+  <label for="fn">First name *</label><input id="fn" placeholder="Enter your first name" required>
+  <label for="sn">Surname *</label><input id="sn" placeholder="Enter your surname" required>
+  <label for="em">Email *</label><input id="em" type="email" placeholder="Enter your email" required>
+  <label><input type="checkbox" id="mk"> To hear from Radio Times: tick to receive marketing communications.</label>
+  <button type="submit">ENTER NOW</button>
+</form>
+<script>
+let picked = null;
+document.querySelectorAll('.answer').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.answer').forEach(x => x.classList.remove('sel'));
+  b.classList.add('sel'); picked = b.textContent; document.getElementById('choose').disabled = false;
+});
+document.getElementById('choose').onclick = () => {
+  document.getElementById('quiz').style.display = 'none';
+  document.getElementById('form').style.display = 'block';
+};
+document.getElementById('form').addEventListener('submit', e => {
+  e.preventDefault();
+  document.body.innerHTML = '<h2>Thanks for entering!</h2><p>You picked ' + picked + '.</p>';
+});
+</script>
+</body></html>

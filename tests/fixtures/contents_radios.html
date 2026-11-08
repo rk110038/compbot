@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Revive Retreats</title>
+<style>
+  .rb input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+  .rb label { display: contents; }
+  .rb .txt { display: inline-block; padding: 6px; }
+</style></head>
+<body>
+<!-- SurveyMonkey's page 2 (Revive Retreats): a list of radio buttons drawn by the site, an "Other (please specify)"
+     box, and Prev / Next. None of the radio buttons counted as on screen, so compbot didn't look for "Next" from
+     them and said it couldn't find the submit button. -->
+<h1>Revive Retreats by Muddy Stilettos</h1>
+<form id="f">
+  <p>2. Which region are you based in?</p>
+  <div class="answers">
+  <div class="rb"><label><input type="radio" name="q2" value="Bedfordshire"><span class="txt">Bedfordshire</span></label></div>
+  <div class="rb"><label><input type="radio" name="q2" value="Berkshire"><span class="txt">Berkshire</span></label></div>
+  <div class="rb"><label><input type="radio" name="q2" value="Kent"><span class="txt">Kent</span></label></div>
+  <div class="rb"><label><input type="radio" name="q2" value="Other"><span class="txt">Other (please specify)</span></label></div>
+  </div>
+  <input type="text" name="q2_other" aria-label="Other (please specify)">
+  <button type="button" id="prev">Prev</button> <button type="submit">Next</button>
+  <p id="msg"></p>
+</form>
+<script>
+document.getElementById('f').addEventListener('submit', e => {
+  e.preventDefault();
+  const r = document.querySelector('[name=q2]:checked');
+  if (!r) { document.getElementById('msg').textContent = 'This question requires an answer.'; return; }
+  document.body.innerHTML = '<h2>Thank you for completing our survey! Your response has been recorded.</h2><p>Region: ' + r.value + '</p>';
+});
+</script>
+</body></html>
