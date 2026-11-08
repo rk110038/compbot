@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Revive Retreats</title>
+<style>.opt input{position:absolute;opacity:0;width:1px;height:1px} .opt{display:block;padding:4px}</style></head>
+<body>
+<!-- SurveyMonkey: page 1 (name, email) stays in the page, hidden, once page 2 ("Which region are you based in?",
+     radio buttons drawn by the site) shows. compbot measured from a page-1 box and "couldn't find the submit button". -->
+<h1>Revive Retreats</h1>
+<form id="f">
+  <div id="p1">
+    <label>Name <input name="nm" required></label>
+    <label>Email Address <input type="email" name="em" required></label>
+    <button type="submit" class="next-button">Next</button>
+  </div>
+  <div id="p2" style="display:none">
+    <p>2. Which region are you based in?</p>
+    <ul>
+      <li class="opt"><input type="radio" name="region" id="r1" value="Bedfordshire"><label for="r1">Bedfordshire</label></li>
+      <li class="opt"><input type="radio" name="region" id="r2" value="Berkshire"><label for="r2">Berkshire</label></li>
+      <li class="opt"><input type="radio" name="region" id="r3" value="Kent"><label for="r3">Kent</label></li>
+    </ul>
+    <button type="button" id="prev">Prev</button> <button type="submit" class="next-button">Done</button>
+  </div>
+  <p id="msg"></p>
+</form>
+<script>
+let page = 1;
+document.getElementById('f').addEventListener('submit', e => {
+  e.preventDefault();
+  if (page === 1) { document.getElementById('p1').style.display = 'none'; document.getElementById('p2').style.display = 'block'; page = 2; return; }
+  const r = document.querySelector('[name=region]:checked');
+  if (!r) { document.getElementById('msg').textContent = 'This question requires an answer.'; return; }
+  document.body.innerHTML = '<h2>Thank you for completing our survey! Your response has been recorded.</h2>';
+});
+</script>
+</body></html>

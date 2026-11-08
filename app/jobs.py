@@ -429,8 +429,9 @@ def _expire(s) -> int:
 
 ENTERED_RESULTS = {"entered", "unverified"}
 # "login": only signed-in members can enter; "widget": the entry is a Gleam-style widget; "wrongpage": the link goes
-# to the competition's rules, winners or sign-in page, not its entry form. All need you.
-MANUAL_RESULTS = {"captcha", "blocked", "tc_blocked", "needs_input", "login", "widget", "wrongpage"}
+# to the competition's rules, winners or sign-in page, not its entry form; "social": the page says you enter on
+# social media, in an app or offline (a QR code on a poster). All need you.
+MANUAL_RESULTS = {"captcha", "blocked", "tc_blocked", "needs_input", "login", "widget", "wrongpage", "social"}
 
 
 def run_entries(comp_ids: list[int] | None = None, force: bool = False) -> str:
@@ -515,7 +516,7 @@ def _urls_to_try(comp: Competition, blocked: set[str] | None = None) -> list[str
 BLOCK_MEMORY_DAYS = 21
 # Results that prove the site let compbot's browser load the page (whatever happened next).
 PAGE_LOADED_RESULTS = ["entered", "unverified", "dry_run_ok", "failed", "needs_input", "tc_blocked", "closed", "login",
-                       "widget", "wrongpage"]
+                       "widget", "wrongpage", "social"]
 
 
 def blocked_domains(s) -> set[str]:
@@ -1138,7 +1139,7 @@ def manual_category(c: Competition, last: EntryAttempt | None) -> str:
         return "blocked"
     if last.result == "login":
         return "login"
-    if last.result == "widget":
+    if last.result in ("widget", "social"):
         return "social"
     if last.result == "wrongpage":
         return "wronglink"

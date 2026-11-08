@@ -693,3 +693,33 @@ def test_jotform_terms_widget_in_its_own_frame_is_ticked(browser, fixture_server
     assert res.result == "entered", (res.message, res.details["fields"])
     widget = [f for f in res.details["fields"] if "(form widget)" in f["note"]]
     assert [(f["action"], f["ok"]) for f in widget] == [("check", True), ("uncheck", True)], widget
+
+def test_typed_in_lists_are_chosen_from(browser, fixture_server, profile):
+    res = browser.enter(f"{fixture_server}/combobox_select.html", Ctx(profile=profile), _settings(entry_mode="auto"),
+                        "cb1", {})
+    assert res.result == "entered", (res.message, res.details["fields"])
+    by = {f["label"]: f for f in res.details["fields"]}
+    assert by["Country of residence"]["source"] == "country" and by["Age"]["source"] == "age"
+    assert "Find your address (optional)" not in by or by["Find your address (optional)"]["action"] != "select"
+
+def test_pages_that_say_you_enter_elsewhere():
+    from app.entry.browser import SOCIAL_ENTRY_RE
+
+    for said in ["Comment on Facebook Post to Enter", "Download the app now!", "Find a poster, scan the QR code",
+                 "leave a comment on this Instagram post", "Enter via our Instagram page"]:
+        assert SOCIAL_ENTRY_RE.search(said), said
+    for said in ["Follow us on Facebook for more competitions", "Download our app for exclusive offers",
+                 "Share this page with friends", "Get the app on Google Play"]:
+        assert not SOCIAL_ENTRY_RE.search(said), said
+
+def test_second_page_while_the_first_stays_hidden(browser, fixture_server, profile):
+    res = browser.enter(f"{fixture_server}/paged_hidden.html", Ctx(profile=profile), _settings(entry_mode="auto"),
+                        "ph1", {})
+    assert res.result == "entered", (res.message, res.details["steps"], res.details["fields"])
+
+def test_tick_box_drawn_as_a_toggle_beside_a_hidden_input(browser, fixture_server, profile):
+    res = browser.enter(f"{fixture_server}/toggle_checkbox.html", Ctx(profile=profile), _settings(entry_mode="auto"),
+                        "tg1", {})
+    assert res.result == "entered", (res.message, res.details["fields"])
+    acts = [(f["label"], f["action"], f["ok"]) for f in res.details["fields"] if f["action"] in ("check", "uncheck")]
+    assert [(lb.split()[1], a, ok) for lb, a, ok in acts] == [("confirm", "check", True), ("am", "uncheck", True)], acts

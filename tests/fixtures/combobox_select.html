@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Win an apparel bundle</title>
+<style>.ctl{border:1px solid #888;padding:4px;margin:.3rem 0;position:relative} .menu{border:1px solid #444;background:#fff} .menu div{padding:3px;cursor:pointer}</style></head>
+<body>
+<!-- TaylorMade (react-select): each list is a text box (role=combobox, aria-autocomplete=list) whose choices appear in a
+     menu when it's clicked, with the choice shown beside the box. compbot typed into them and the site said "This field
+     is required". An address look-up box that only offers choices once you type stays a text box. -->
+<h1>Win a TaylorMade apparel bundle</h1>
+<form id="f">
+  <label for="fn">First name</label><input id="fn" name="fn" required>
+  <label for="country_of_residence">Country of residence</label>
+  <div class="ctl" data-for="country_of_residence"><span class="val">Please select</span><input id="country_of_residence" role="combobox" aria-autocomplete="list" aria-expanded="false"></div>
+  <label for="age">Age</label>
+  <div class="ctl" data-for="age"><span class="val">Please select</span><input id="age" role="combobox" aria-autocomplete="list" aria-expanded="false"></div>
+  <label for="lookup">Find your address (optional)</label>
+  <div class="ctl"><input id="lookup" role="combobox" aria-autocomplete="list" placeholder="Start typing your postcode"></div>
+  <button type="submit">ENTER NOW</button>
+  <p id="msg"></p>
+</form>
+<script>
+const lists = {country_of_residence: ['United Kingdom', 'France', 'Germany', 'Ireland'], age: ['18-25', '26-33', '34-41', '42-49', '50-57', '58-65', '66+']};
+const chosen = {};
+for (const ctl of document.querySelectorAll('.ctl[data-for]')) {
+  const id = ctl.dataset.for, input = ctl.querySelector('input');
+  const close = () => { const m = ctl.querySelector('.menu'); if (m) m.remove(); input.setAttribute('aria-expanded', 'false'); };
+  input.addEventListener('mousedown', () => {
+    if (ctl.querySelector('.menu')) return;
+    const m = document.createElement('div'); m.className = 'menu'; m.setAttribute('role', 'listbox');
+    m.innerHTML = lists[id].map(c => `<div role="option">${c}</div>`).join('');
+    m.addEventListener('mousedown', e => { const o = e.target.closest('[role=option]'); if (!o) return; e.preventDefault();
+      chosen[id] = o.textContent; ctl.querySelector('.val').textContent = o.textContent; input.value = ''; close(); });
+    ctl.appendChild(m); input.setAttribute('aria-expanded', 'true');
+  });
+  input.addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape') document.querySelectorAll('.menu').forEach(m => m.remove()); });
+document.getElementById('f').addEventListener('submit', e => {
+  e.preventDefault();
+  if (chosen.country_of_residence !== 'United Kingdom' || !chosen.age) { document.getElementById('msg').textContent = 'This field is required ' + JSON.stringify(chosen); return; }
+  document.body.innerHTML = '<h2>Thank you for entering!</h2><p>' + chosen.age + '</p>';
+});
+</script>
+</body></html>

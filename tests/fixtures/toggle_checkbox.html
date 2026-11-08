@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Pick a pair</title>
+<style>.checkboxContainer a{display:inline-block;width:18px;height:18px;border:1px solid #333;font-size:0} .checkboxContainer.checked a{background:#333}</style></head>
+<body>
+<!-- PromoNow (Wyke Farms, Ivy's Reserve): the terms "tick box" is a hidden input, a clickable <a> toggle and a label.
+     compbot didn't see it and the site said "Please tick to agree". -->
+<h1>Pick a pair</h1>
+<form id="ajaxForm" method="post" action="#">
+  <div class="field field_firstName"><div class="inputContainer"><label for="firstName">First Name<span class="mandatory">*</span></label>
+    <input placeholder="FIRST NAME" type="text" name="firstName" id="firstName"></div></div>
+  <div class="field field_email"><div class="inputContainer"><label for="email">Email<span class="mandatory">*</span></label>
+    <input type="email" name="email" id="email"></div></div>
+  <div class="field field_terms"><div class="inputContainer"><div class="checkboxContainer">
+    <input type="hidden" name="terms" id="terms" value="">
+    <a href="#"><i class="fa fa-check"></i>Checkbox</a>
+    <label for="terms">I confirm that I'm a resident of the UK, am 18 or older and agree to the <a href="/terms">terms &amp; conditions</a>.</label>
+  </div></div></div>
+  <div class="field field_optin"><div class="inputContainer"><div class="checkboxContainer">
+    <input type="hidden" name="optin" id="optin" value="">
+    <a href="#"><i class="fa fa-check"></i>Checkbox</a>
+    <label for="optin">I am happy for Wyke and their partners to send me marketing emails</label>
+  </div></div></div>
+  <button type="submit">PLAY</button>
+  <p id="msg"></p>
+</form>
+<script>
+for (const box of document.querySelectorAll('.checkboxContainer')) {
+  box.querySelector('a').addEventListener('click', e => { e.preventDefault(); const h = box.querySelector('input[type=hidden]');
+    h.value = h.value ? '' : '1'; box.classList.toggle('checked', !!h.value); });
+}
+document.getElementById('ajaxForm').addEventListener('submit', e => {
+  e.preventDefault();
+  if (document.getElementById('terms').value !== '1') { document.getElementById('msg').textContent = 'Please tick to agree'; return; }
+  if (document.getElementById('optin').value) { document.getElementById('msg').textContent = 'Marketing was ticked'; return; }
+  document.body.innerHTML = '<h2>Thanks for entering, good luck!</h2>';
+});
+</script>
+</body></html>

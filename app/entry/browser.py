@@ -89,6 +89,18 @@ const __cbVis = (el) => {
   return true;
 };
 const __cbTxt = (el) => (el ? (el.innerText || el.textContent || '') : '').replace(/\s+/g, ' ').trim();
+// Whether a field compbot filled is still on screen. A radio button or tick box drawn by the site (SurveyMonkey) hides
+// the real input: its option's row is what you see.
+const __cbShown = (e) => {
+  if (!e) return false;
+  if (__cbVis(e) || (e.labels && Array.from(e.labels).some(__cbVis)) || __cbVis(e.closest('label')) || __cbVis(e.parentElement)) return true;
+  if ((e.type === 'radio' || e.type === 'checkbox') && e.name) {
+    const scope = e.form || e.getRootNode();
+    return Array.from(scope.querySelectorAll('input')).filter(x => x.name === e.name).some(x =>
+      (x.labels && Array.from(x.labels).some(__cbVis)) || __cbVis(x.closest('li, [class*=option i], [class*=choice i], [class*=answer i]')));
+  }
+  return false;
+};
 // Web-component widgets (e.g. Viral Loops' <form-widget>) keep their buttons and entry form inside an open shadow
 // root, which document.querySelectorAll can't see. These search inside shadow roots too.
 const __cbAll = (root, sel) => {
@@ -307,6 +319,23 @@ JS_EXTRACT = "(prefix) => {\n" + JS_HELPERS + r"""
       for (const o of els) g.options.push({value: optText(o), text: optText(o), idx: markIdx(o)});
       fields.push(g);
     }
+    // A tick box made of a hidden input, a clickable toggle and a label (PromoNow's "play and win" games: Wyke Farms,
+    // Ivy's Reserve): <input type="hidden" id="terms"> <a href="#"><i class="fa fa-check"></i>Checkbox</a>
+    // <label for="terms">I confirm ... and agree to the terms</label>. Ticked by clicking the toggle.
+    for (const hid of __cbAll(root, 'input[type=hidden][id]')) {
+      const box = hid.parentElement;
+      if (!box || !/check/i.test(typeof box.className === 'string' ? box.className : '')) continue;
+      const lab = box.querySelector(`label[for="${CSS.escape(hid.id)}"]`);
+      const tog = Array.from(box.querySelectorAll('a, span, i, div, button')).find(t => vis(t) && !lab?.contains(t) && (t.tagName === 'A' || /check/i.test(typeof t.className === 'string' ? t.className : '')));
+      if (!lab || !tog || !vis(lab) || !txt(lab)) continue;
+      const field = box.closest('[class*=field], li, fieldset') || box;
+      const label = txt(lab).slice(0, 300);
+      const on = /^(1|true|on|yes|checked)$/i.test(hid.value || '') || /(^|\s)(checked|active|selected|ticked)(\s|$)/i.test(box.className);
+      fields.push({idx: markIdx(tog), tag: 'input', type: 'checkbox', name: hid.name || '', id: hid.id, label,
+        placeholder: '', autocomplete: '', aria: '', options: [], context: label, maxlength: null, checked: on,
+        required: /\*\s*$/.test(label) || !!field.querySelector('.mandatory, .required, [class*=mandatory i]') || /required|mandatory/i.test(typeof field.className === 'string' ? field.className : ''),
+        toggleFor: hid.id});
+    }
     const btns = __cbAll(root, 'button, input[type=submit], input[type=image], input[type=button], [role=button], a.button, a.btn, a[class*=button i], a[class*=btn i], a[class*=cta i]').filter(vis);
     let formId = '';
     if (root !== document.body) {
@@ -349,7 +378,7 @@ JS_MARK_SUBMIT = "(idx) => {\n" + JS_HELPERS + r"""
   const el = __cbOne(`[data-cb-idx="${idx}"]`);
   // The field just filled has gone (a one-question-at-a-time form moved on by itself, Typeform): the button now on
   // screen belongs to the next question, so don't take it for this one's. compbot looks for the new question instead.
-  const shown = e => vis(e) || (e.labels && Array.from(e.labels).some(vis)) || vis(e.closest('label')) || vis(e.parentElement);
+  const shown = __cbShown;
   if (el && !shown(el)) return null;
   const good = /^(enter|submit|send|sign ?up|subscribe|register|join|go|count me in|take part|enter now|enter competition|enter the (competition|draw|prize draw)|submit entry|enter draw|i'?m in|done|continue|next|confirm|win|enter to win|let'?s go|play|ok|start (the )?(game|quiz|playing|now))\b/i;
   const bad = /cancel|reset|back|close|log ?in|sign ?in|search|menu|cookie|accept all|reject|share|facebook|twitter|instagram|print|basket|cart/i;
@@ -968,11 +997,19 @@ LOGIN_WALL_RE = re.compile(
     # LoveReading: "Our free to enter prize draws are open to registered users. Registration is free and easy."
     r"\b(?:open|available) (?:only )?to registered (?:users|members|customers)\b|\bregistered (?:users|members) only\b",
     re.I)
+# A page with no form that says where you do enter instead: a social media post, an app, or a poster's QR code
+# (Toddle About: "Comment on Facebook Post to Enter"; Hits Radio: "Download the app now!"; Cadbury: "scan the QR code").
+SOCIAL_ENTRY_RE = re.compile(
+    r"\b(?:comment|like|share|reply|tag (?:a|your) friends?)\b[^.\n]{0,40}\b(?:on|under|to)\b[^.\n]{0,25}\b(?:facebook|"
+    r"instagram|tiktok|twitter|threads|x) (?:post|page|account|video|reel)\b|\bto enter[^.\n]{0,40}\b(?:facebook|instagram|"
+    r"tiktok)\b|\benter (?:via|on|through|in) (?:our |the )?(?:facebook|instagram|tiktok|app)\b|\bdownload (?:the|our) "
+    r"(?:[\w-]+ )?app (?:now|to (?:enter|play|take part))\b|\b(?:enter|entries|play) (?:only )?(?:via|in|through) (?:the|"
+    r"our) (?:[\w-]+ )?app\b|\bscan the qr code\b", re.I)
 # The site's own bot check turned the entry down after it was sent (seen in its message or its server's reply).
 CAPTCHA_REFUSAL_RE = re.compile(
     r"unable to verify (?:the )?re-?captcha|re-?captcha v?\d? ?(?:test|check|verification) failed|verify that you are "
     r"not a robot|failed to validate (?:the )?captcha|not a valid captcha|captcha (?:verification|validation|check) "
-    r"failed|could not verify your entry|invalid captcha|"
+    r"failed|could not (?:verify|confirm) your entry|invalid captcha|"
     # Formstack (The Times): "ERROR: The security code does not match." is its hidden reCAPTCHA saying no.
     r"security code (?:does not|doesn't|did not|didn't) match|(?:incorrect|invalid|wrong) (?:security|verification) "
     r"code", re.I)
@@ -1326,10 +1363,18 @@ JS_SEEN_IDX = "() => {\n" + JS_HELPERS + r"""
 }
 """
 # Whether a field compbot filled is still on screen (a one-question-at-a-time form moves on by itself).
+# A drawn tick box's state, read from its hidden input (or its box's class).
+JS_TOGGLE_STATE = "(id) => {\n" + JS_HELPERS + r"""
+  const hid = __cbOne('#' + CSS.escape(id));
+  if (!hid) return false;
+  const box = hid.parentElement;
+  return /^(1|true|on|yes|checked)$/i.test(hid.value || '') || !!(box && /(^|\s)(checked|active|selected|ticked)(\s|$)/i.test(box.className || ''));
+}
+"""
 JS_FIELD_SHOWN = "(idx) => {\n" + JS_HELPERS + r"""
-  const vis = __cbVis, e = __cbOne(`[data-cb-idx="${idx}"]`);
+  const e = __cbOne(`[data-cb-idx="${idx}"]`);
   if (!e) return false;
-  return vis(e) || (e.labels && Array.from(e.labels).some(vis)) || vis(e.closest('label')) || vis(e.parentElement);
+  return __cbShown(e);
 }
 """
 
@@ -1554,8 +1599,11 @@ def _required_fixes(container: dict, ai_records: list | None = None) -> list[tup
     note = "site said this was required"
     groups: dict[str, list[Field]] = defaultdict(list)
     for f in fields:
-        if f.tag == "input" and f.type == "checkbox" and f.name:
-            groups[f.name].append(f)
+        # Tick boxes answering one question share a name, or (TaylorMade's "What type of apparel are you interested
+        # in?", no names) the question above them.
+        key = f.name or (("q:" + normalise(f.context)[:120]) if f.context and len(normalise(f.label).split()) <= 4 else "")
+        if f.tag == "input" and f.type == "checkbox" and key:
+            groups[key].append(f)
     for fs in groups.values():
         if len(fs) < 2 or any(f.checked for f in fs):
             continue
@@ -1960,7 +2008,7 @@ def _to_fields(container: dict) -> list[Field]:
             autocomplete=f.get("autocomplete", ""),
             aria=f.get("aria", ""), required=bool(f.get("required")), options=f.get("options") or [],
             context=f.get("context", ""), maxlength=f.get("maxlength"), checked=bool(f.get("checked")),
-            picker=bool(f.get("picker")), link_inside=bool(f.get("linkInside")),
+            picker=bool(f.get("picker")), link_inside=bool(f.get("linkInside")), toggle_for=f.get("toggleFor") or "",
         ))
     return out
 
@@ -1974,25 +2022,32 @@ JS_ARIA_DROPDOWNS = "([prefix, formId]) => {\n" + JS_HELPERS + r"""
   const root = (formId && __cbOne(`[data-cb-form="${formId}"]`)) || document;
   const out = [];
   let n = 0;
-  for (const box of __cbAll(root, '[role=listbox][aria-owns], [role=combobox][aria-owns]')) {
-    if (!vis(box) || box.tagName === 'SELECT' || box.tagName === 'INPUT' || box.closest('[role=option]')) continue;
+  for (const box of __cbAll(root, '[role=listbox][aria-owns], [role=combobox][aria-owns], input[role=combobox][aria-autocomplete=list], input[role=combobox][aria-autocomplete=both]')) {
+    const isInput = box.tagName === 'INPUT';
+    if (!vis(box) || box.tagName === 'SELECT' || (isInput && box.type !== 'text' && box.type !== 'search' && box.type !== '') || box.closest('[role=option]')) continue;
+    if (box.closest('header, nav, footer, [role=navigation], [role=banner], [role=contentinfo]')) continue;  // a language picker
     const block = box.closest('.form-element-block, .form-group, .form-field, .field, li, fieldset') || box.parentElement;
     const lab = block && Array.from(block.querySelectorAll('label, legend, .form-element-label')).find(l => !box.contains(l) && txt(l));
     const label = (lab ? txt(lab) : '') || box.getAttribute('aria-label') || '';
     let idx = box.getAttribute('data-cb-idx');
     if (!idx) { idx = prefix + (n++); box.setAttribute('data-cb-idx', idx); }
     const cls = block && typeof block.className === 'string' ? block.className : '';
-    const req = /(^|\s)required(\s|$)/.test(cls) || box.getAttribute('aria-required') === 'true' || /\*\s*$/.test(label);
-    out.push({idx, label: label.slice(0, 300), shown: txt(box).slice(0, 300), owns: box.getAttribute('aria-owns') || '',
+    const req = /(^|\s)required(\s|$)/.test(cls) || box.getAttribute('aria-required') === 'true' || box.required || /\*\s*$/.test(label);
+    // A typed-in list (react-select) shows its choice beside the box, not in it.
+    const ctl = isInput ? (box.closest('[class*=control i], [class*=container i]') || box.parentElement) : box;
+    const shown = isInput ? (box.value || txt(ctl)) : txt(box);
+    out.push({idx, label: label.slice(0, 300), shown: shown.slice(0, 300), input: isInput,
+              owns: box.getAttribute('aria-owns') || box.getAttribute('aria-controls') || '',
               required: req, context: block ? txt(block).slice(0, 300) : ''});
   }
   return out;
 }
 """
-# The open pop-up's choices, marked "<box idx>_o<n>" in order (the same marks each time it's opened).
+# The open pop-up's choices, marked "<box idx>_o<n>" in order (the same marks each time it's opened). "*": the box
+# names no pop-up (react-select), so it's any choices showing.
 JS_ARIA_OPTIONS = "([idx, owns]) => {\n" + JS_HELPERS + r"""
   const vis = __cbVis, txt = __cbTxt;
-  const pop = owns ? (document.getElementById(owns) || __cbOne('#' + CSS.escape(owns))) : null;
+  const pop = owns && owns !== '*' ? (document.getElementById(owns) || __cbOne('#' + CSS.escape(owns))) : null;
   const opts = (pop ? __cbAll(pop, '[role=option]') : __cbAll(document, '[role=option]')).filter(o => vis(o));
   return opts.map((o, k) => { const oi = idx + '_o' + k; o.setAttribute('data-cb-idx', oi);
     return {idx: oi, text: txt(o).slice(0, 200), value: txt(o).slice(0, 200)}; });
@@ -2001,14 +2056,17 @@ JS_ARIA_OPTIONS = "([idx, owns]) => {\n" + JS_HELPERS + r"""
 
 
 def _aria_dropdowns(page, frame, container: dict, prefix: str) -> list[Field]:
-    """The form's drawn drop-down lists that still need a choice, with their choices (each opened, read, closed)."""
+    """The form's drawn drop-down lists that still need a choice, with their choices (each opened, read, closed).
+    A typed-in list (react-select: TaylorMade's "Country of residence") counts only if clicking it shows choices; one
+    that needs typing first (an address look-up) stays a text box."""
     out = []
     for b in _safe_eval(frame, JS_ARIA_DROPDOWNS, [prefix, container.get("formId") or ""], default=[]) or []:
+        owns = b.get("owns") or "*"
         opts: list = []
         try:
             frame.locator(f'[data-cb-idx="{b["idx"]}"]').first.click(timeout=3000)
             _pause(page, 0.5)
-            opts = _safe_eval(frame, JS_ARIA_OPTIONS, [b["idx"], b["owns"]], default=[]) or []
+            opts = _safe_eval(frame, JS_ARIA_OPTIONS, [b["idx"], owns], default=[]) or []
         except Exception as exc:  # noqa: BLE001
             log.debug("couldn't open drop-down %s: %s", b.get("label"), exc)
         finally:
@@ -2020,11 +2078,28 @@ def _aria_dropdowns(page, frame, container: dict, prefix: str) -> list[Field]:
         if not opts or any(o["text"] == shown for o in opts):
             continue  # nothing to choose from, or a choice is already made
         # Riddle shows the quiz question in the list itself until an answer is picked; the label just says "Quiz question".
-        label = shown if shown.endswith("?") else (b.get("label") or shown)
-        out.append(Field(idx=b["idx"], tag="select", type="select", label=clean_label(label),
-                         placeholder="" if label == shown else shown[:120], required=bool(b.get("required")),
-                         options=opts, context=b.get("context") or "", owns=b.get("owns") or ""))
+        if shown.endswith("?"):
+            label, placeholder = shown, ""
+        else:
+            label, placeholder = b.get("label") or "", shown[:120]
+        out.append(Field(idx=b["idx"], tag="select", type="select", label=clean_label(label), placeholder=placeholder,
+                         required=bool(b.get("required")), options=opts, context=b.get("context") or "", owns=owns))
     return out
+
+
+def _merge_dropdowns(fields: list[Field], drawn: list[Field]) -> list[Field]:
+    """Fields with the drawn drop-downs in: one that's also a text box (react-select's input) is a list, keeping the
+    text box's label, name and id ("Country of residence", id country_of_residence) when its own are missing."""
+    by_idx = {f.idx: f for f in fields}
+    for d in drawn:
+        f = by_idx.get(d.idx)
+        if f is not None:
+            d.label = d.label or f.label
+            d.name, d.id, d.aria = d.name or f.name, d.id or f.id, d.aria or f.aria
+            d.required = d.required or f.required
+            d.context = d.context or f.context
+    drawn_ids = {d.idx for d in drawn}
+    return [f for f in fields if f.idx not in drawn_ids] + drawn
 
 
 # Jotform's widget fields live in frames of their own inside the form (terms boxes at
@@ -2115,6 +2190,11 @@ def _apply(frame, f: Field, a: Action) -> bool:
             want = a.kind == "check"
             if f.checked == want:
                 return True
+            if f.toggle_for:
+                # A drawn tick box beside a hidden input (PromoNow): click the toggle, then read the input back.
+                loc.click(timeout=4000)
+                time.sleep(0.3)
+                return bool(_safe_eval(frame, JS_TOGGLE_STATE, f.toggle_for, default=want)) == want
             if f.link_inside:
                 # A drawn tick box (role=checkbox) with its words, links and all, inside the box: a real click on its
                 # middle can land on "Privacy Policy" and leave the page (Roborock). Tick the box itself.
@@ -2499,6 +2579,11 @@ class Browser:
                             "the competition's rules")
                     res.result = "wrongpage"
                     res.message = f"The link goes to {what}, not the entry form - find the entry form and enter it yourself"
+                elif SOCIAL_ENTRY_RE.search(text):
+                    m = SOCIAL_ENTRY_RE.search(text)
+                    res.result = "social"
+                    res.message = (f"The page says you enter elsewhere (\u201c{_sentence_at(text, m.start(), m.end())}\u201d)"
+                                   " - enter it yourself")
                 else:
                     res.result, res.message = "failed", "No entry form found on the page"
                 res.final_url = page.url
@@ -2545,8 +2630,8 @@ class Browser:
                 for _round in range(4):
                     fields = [f for f in _to_fields(container) if f.idx not in done_idx]
                     gen[0] += 1
-                    fields += [f for f in _aria_dropdowns(page, frame, container, f"g{gen[0]}d_")
-                               if f.idx not in done_idx]
+                    fields = _merge_dropdowns(fields, [f for f in _aria_dropdowns(page, frame, container, f"g{gen[0]}d_")
+                                                       if f.idx not in done_idx])
                     if not fields:
                         break
                     if any(f.type == "password" and "optional" not in f.desc for f in fields):
@@ -2653,6 +2738,12 @@ class Browser:
                     "email", "first_name", "full_name", "last_name")]
                 filled = [f.idx for f, a in plan_all if a.kind != "skip" and f.idx in cur]
                 submit_idx = (personal or filled or [sample_idx])[0]
+                if not personal and not filled and sample_idx:
+                    # Nothing filled on this page is in the form as re-read: measure from a box that's on screen, not
+                    # an earlier page's (SurveyMonkey keeps page 1 in the page, hidden, while page 2 shows).
+                    on_screen = [i for i in cur_ids + [f["idx"] for f in container.get("fields", [])]
+                                 if _safe_eval(frame, JS_FIELD_SHOWN, i, default=False)]
+                    submit_idx = on_screen[0] if on_screen else submit_idx
                 submit_label = _safe_eval(frame, JS_MARK_SUBMIT, submit_idx) if submit_idx else None
                 n_filled = sum(1 for _, a in plan_all if a.kind != "skip")
                 if not submit_label and n_filled and not _safe_eval(frame, JS_FIELD_SHOWN, submit_idx, default=True):

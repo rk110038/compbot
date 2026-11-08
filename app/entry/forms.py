@@ -37,6 +37,7 @@ class Field:
     picker: bool = False     # a read-only date box filled through its calendar widget
     link_inside: bool = False  # a drawn tick box with links inside it (ticked with a script click, see _apply)
     owns: str = ""           # a drawn drop-down list (role=listbox): the id of the pop-up holding its choices
+    toggle_for: str = ""     # a tick box drawn as a clickable toggle beside a hidden input (the input's id)
 
     @property
     def desc(self) -> str:
