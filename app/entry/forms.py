@@ -348,7 +348,18 @@ def detect_profile_key(f: Field) -> str | None:
         return ac_key
     if label_key:
         return label_key
-    return _key_from_text(d)
+    # The last part of the field's name says the most ("dwfrm_billing_billingAddress_country" is a country).
+    tail = _name_tail(f)
+    tail_key = (SPLIT_NAME.get(tail) or _key_from_text(tail)) if tail else None
+    return tail_key or _key_from_text(d)
+
+
+def _name_tail(f: Field) -> str:
+    for raw in (f.name, f.id):
+        parts = [p for p in re.split(r"[\[\]_.\-]+|(?<=[a-z])(?=[A-Z])", raw or "") if p]
+        if parts:
+            return normalise(parts[-1])
+    return ""
 
 
 def looks_like_question(f: Field) -> bool:
@@ -602,8 +613,10 @@ def map_choice(f: Field, ctx: Ctx) -> Action:
         if TERMS_RE.search(about) and not (MARKETING_RE.search(about) and not TERMS_RE.search(normalise(f.label))):
             return Action(kind, real[0].get("idx") or real[0].get("value"), source="rule", note="terms / consent")
     key = detect_profile_key(f)
-    if key is None and looks_like_country_list(real):
-        key = "country"  # a list of countries labelled only "Please choose" (EMP)
+    if looks_like_country_list(real):
+        # A list of countries is a country list, whatever its label or name: EMP's "Please choose" list is named
+        # dwfrm_billing_billingAddress_country, and "Address" made it address line 1 (then Austria was guessed).
+        key = "country"
     if key == "dob" and kind == "select":
         # One list of a date of birth split into three, labelled only "Date of Birth" (Johansens' Day list).
         key = dob_part_from_options(real) or key
@@ -664,7 +677,7 @@ def map_choice(f: Field, ctx: Ctx) -> Action:
         if looks_like_question(f):  # an unanswered quiz question - the AI may be able to help
             return Action("skip", note="question with no known answer")
         return Action("skip", note="optional choice")
-    if kind == "select" and not looks_like_question(f) and not ctx.question:
+    if kind == "select" and key is None and not looks_like_question(f) and not ctx.question:
         o = next((o for o in f.options if not is_placeholder_option(o)), None)
         if o:
             return Action(kind, o.get("idx") or o.get("value"), source="rule", note="first option (guess)")

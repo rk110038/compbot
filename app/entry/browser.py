@@ -1433,6 +1433,12 @@ def _same_form(a: frozenset, b: frozenset) -> bool:
 JS_MAIN_TEXT = r"""() => { const m = document.querySelector('main, article, [role=main]') || document.body;
   return m ? m.innerText.replace(/\n{3,}/g, '\n\n').slice(0, 12000) : ''; }"""
 AI_QUESTION_NOTES = ("question with no known answer", "required choice with no known answer")
+# A question about you or your taste ("Which The Light venue is your local cinema?", "WHICH LATTE ARE YOU?") has no
+# right answer for the second check to find, and it kept turning reasonable answers down.
+PREFERENCE_Q_RE = re.compile(
+    r"\byour (?:local|nearest|favou?rite|preferred|go-?to|ideal|dream|perfect)\b|\bwhich\b.{0,40}\bare you\b|"
+    r"\bwhat(?:'s|\u2019s| is) your (?:favou?rite|preferred)\b|\bwould you (?:most )?(?:like|prefer|choose|pick)\b|"
+    r"\bdo you (?:prefer|like|love)\b", re.I)
 WORD_LIMIT_RE = re.compile(r"(\d{1,3})\s*words?|(ten|fifteen|twenty|twenty[- ]five|thirty|fifty)\s*words?", re.I)
 WORD_NUMS = {"ten": 10, "fifteen": 15, "twenty": 20, "twenty five": 25, "twenty-five": 25, "thirty": 30, "fifty": 50}
 
@@ -1486,7 +1492,8 @@ def _ai_fill(page, frame, plan, settings: dict, comp_context: dict, details: dic
                     a = Action("unknown", note="AI only repeated the box's label")
                 out.append((f, a))
                 continue
-            if res and res["answer"] and res["confidence"] >= min_conf and settings.get("ai_double_check", True):
+            if (res and res["answer"] and res["confidence"] >= min_conf and settings.get("ai_double_check", True)
+                    and not PREFERENCE_Q_RE.search(question)):
                 check = llm.verify_answer(question, res["answer"], options, page_text, settings,
                                           web_results=res.get("web_results"))
                 if check:

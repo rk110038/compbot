@@ -410,3 +410,17 @@ def test_date_box_marked_with_a_minimum_age_is_your_birthday(profile):
               context="2 digit day, 2 digit month, 4 digit year Minimum age: 18")
     a = map_field(f, ctx(profile))
     assert (a.kind, a.value, a.source) == ("fill", "05-03-1980", "dob")
+
+def test_country_list_named_after_the_billing_address(profile):
+    # EMP: "Address" in the list's name made it address line 1, and with no question the first country was guessed.
+    opts = [{"text": "Please choose", "value": ""}] + [{"text": n, "value": n[:2].upper()} for n in
+                                                       ["Austria", "Belgium", "Bulgaria", "Croatia", "Cyprus",
+                                                        "Denmark", "France", "Germany", "United Kingdom"]]
+    f = Field("1", "select", "select", name="dwfrm_billing_billingAddress_country",
+              id="dwfrm_billing_billingAddress_country", label="Please choose", required=True, options=opts)
+    a = map_field(f, ctx(profile))
+    assert (a.kind, a.value, a.source) == ("select", "UN", "country")
+    # A text box named like that is the country too; its visible label still wins.
+    t = Field("2", "input", "text", name="dwfrm_billing_billingAddress_country", label="")
+    assert map_field(t, ctx(profile)).value == "United Kingdom"
+    assert map_field(Field("3", "input", "text", name="billingAddress_country", label="Town"), ctx(profile)).value == "Testville"

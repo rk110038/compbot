@@ -432,3 +432,19 @@ def test_settings_web_search_test_button(fake_ollama, fake_search, monkeypatch):
         monkeypatch.setattr(get_config(), "searxng_url", None)
         page = c.get("/settings", headers=h).text
         assert "Test web search" not in page and "Not set up" in page
+
+
+def test_questions_about_your_taste_skip_the_second_check(fake_ollama, fixture_server, profile):
+    # "Which The Light venue is your local cinema?": there's no right answer for the second check to find.
+    html = (open("tests/fixtures/ai_question.html", encoding="utf-8").read()
+            .replace("What colour is the watch case?", "What colour is your favourite watch dial?"))
+    open("tests/fixtures/ai_taste.html", "w", encoding="utf-8").write(html)
+    try:
+        with Browser() as b:
+            res = b.enter(f"{fixture_server}/ai_taste.html", Ctx(profile=profile), AI, "ai6", {})
+    finally:
+        import os
+        os.remove("tests/fixtures/ai_taste.html")
+    assert res.result == "entered", (res.message, res.details.get("ai"))
+    rec = res.details["ai"][0]
+    assert rec["used"] and rec["answer"] == "Gold" and "check" not in rec
