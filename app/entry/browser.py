@@ -1774,8 +1774,16 @@ def _await_enabled(page, loc) -> str | None:
     return "failed: the submit button stayed disabled (a required field probably wasn't recognised)"
 
 
-def _click_submit(page, frame) -> str:
-    """Click the marked submit button; cope with pop-ups/sticky bars covering it. Returns how it was pressed."""
+JS_FIELD_VALUE = "(idx) => {\n" + JS_HELPERS + r"""
+  const e = __cbOne(`[data-cb-idx="${idx}"]`);
+  return e && 'value' in e ? String(e.value || '') : null;
+}
+"""
+
+
+def _click_submit(page, frame, refill=None) -> str:
+    """Click the marked submit button; cope with pop-ups/sticky bars covering it. Returns how it was pressed.
+    `refill()` puts back boxes that emptied while pop-ups were being closed, and returns their labels."""
     loc = frame.locator('[data-cb-submit="1"]').first
     held = _await_enabled(page, loc)
     if held:
@@ -1785,6 +1793,8 @@ def _click_submit(page, frame) -> str:
         return "click"
     except Exception as exc:  # noqa: BLE001
         first_error = str(exc).splitlines()[0][:200]
+        # Playwright says what was in the way: "<div id="ccc-overlay"></div> ... intercepts pointer events".
+        cover = next((ln.strip() for ln in str(exc).splitlines() if "intercepts pointer events" in ln), "")
     try:
         page.keyboard.press("Escape")
     except Exception:  # noqa: BLE001
@@ -1794,14 +1804,18 @@ def _click_submit(page, frame) -> str:
         _safe_eval(fr, JS_CLOSE_POPUPS)
     _pause(page, 0.8)
     hidden = _safe_eval(frame, JS_UNCOVER, default=0)
+    # Warren James' form came back blank by now (its boxes emptied), so it was sent empty: fill them in again first.
+    refilled = refill() if refill else []
+    note = (" (hid a pop-up layer over the button)" if hidden else "") + (
+        f" (filled in {', '.join(refilled)[:120]} again: the boxes had emptied)" if refilled else "")
     try:
         loc.click(timeout=4000)
-        return "clicked after closing a pop-up" + (" (hid a pop-up layer over the button)" if hidden else "")
+        return "clicked after closing a pop-up" + note
     except Exception:  # noqa: BLE001
         pass
     if _safe_eval(frame, JS_CLICK_MARKED, default=False):
-        return "pressed directly (the button was covered by a pop-up)"
-    return f"failed: {first_error}"
+        return "pressed directly (the button was covered by a pop-up)" + note
+    return f"failed: {first_error}" + (f" - in the way: {cover[:200]}" if cover else "")
 
 
 def _click_sel(frame, selector: str, timeout: int = 4000) -> bool:
@@ -2989,7 +3003,15 @@ class Browser:
                 n_pages = len(context.pages)
                 sent_errors.clear()
                 watching[0] = True
-                how = _click_submit(page, frame)
+                def refill() -> list[str]:
+                    again = []
+                    for f, a in plan_all:
+                        if a.kind == "fill" and not f.picker and a.value and _safe_eval(
+                                frame, JS_FIELD_VALUE, f.idx, default=None) == "" and _apply(frame, f, a):
+                            again.append(f.human_label)
+                    return again
+
+                how = _click_submit(page, frame, refill)
                 if how.startswith("captcha"):
                     res.result, res.message = "captcha", f"{how[9:10].upper()}{how[10:]} - enter it yourself"[:500]
                     res.screenshot_before = _shot(page, cfg.screenshot_dir / f"{shot_prefix}_captcha.jpg")

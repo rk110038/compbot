@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Competition</title>
+<style>#ov { display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, .5); z-index: 50; }
+  #ov.open { display: block; } #ov .box { background: #fff; margin: 100px auto; width: 300px; padding: 20px; }</style></head>
+<body>
+<!-- Warren James: something came up over the button after the form was filled, and once it was closed the form came
+     back blank, so compbot's second press sent it empty ("Please enter your email address to continue"). -->
+<h1>WIN ME</h1>
+<form id="f" novalidate>
+  <label for="fn">First name</label><input id="fn" name="firstName">
+  <label for="em">Your email</label><input id="em" name="email" type="email">
+  <button type="submit">ENTER NOW</button>
+  <p id="msg"></p>
+</form>
+<div id="ov" class="popup-overlay" role="dialog"><div class="box">Sign up for 10% off!
+  <button type="button" aria-label="Close" id="x">&times;</button></div></div>
+<script>
+const f = document.getElementById('f'), ov = document.getElementById('ov');
+let shown = false;
+f.addEventListener('input', () => { if (!shown) { shown = true; setTimeout(() => ov.classList.add('open'), 300); } });
+const close = () => { if (ov.classList.contains('open')) { ov.classList.remove('open'); ov.style.display = 'none'; f.reset(); } };
+document.getElementById('x').addEventListener('click', close);
+document.addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
+f.addEventListener('submit', e => {
+  e.preventDefault();
+  if (!f.firstName.value || !f.email.value) { document.getElementById('msg').textContent = 'Please enter your email address to continue'; return; }
+  document.body.innerHTML = '<h2>Thank you for entering!</h2>';
+});
+</script>
+</body></html>

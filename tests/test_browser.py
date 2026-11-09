@@ -834,3 +834,9 @@ def test_button_waiting_for_a_phone_number_your_profile_lacks_needs_you(browser,
         res = browser.enter(f"{fixture_server}/disabled_until_phone.html", Ctx(profile=dict(profile, phone="")),
                             _settings(entry_mode=mode), f"dup_{mode}", {})
         assert res.result == "needs_input" and "profile has no phone" in res.message, (mode, res.result, res.message)
+
+def test_boxes_that_empty_while_a_pop_up_is_closed_are_filled_in_again(browser, fixture_server, profile):
+    res = browser.enter(f"{fixture_server}/blanked_form.html", Ctx(profile=profile), _settings(entry_mode="auto"),
+                        "blk", {})
+    assert res.result == "entered", (res.message, res.details["steps"])
+    assert any("filled in" in s and "again" in s for s in res.details["steps"]), res.details["steps"]
