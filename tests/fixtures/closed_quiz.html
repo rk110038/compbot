@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Test your F1 knowledge</title>
+<style>.modal { display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, .4); }
+  .modal.open { display: block; } .modal .box { background: #fff; margin: 200px auto; width: 400px; padding: 10px; }
+  #entry { display: none; } #entry.open { display: block; }</style></head>
+<body>
+<!-- DHL InMotion: once the competition has ended, "Start the quiz" opens a box headed "Closed" ("You've missed this
+     competition."), and compbot said "Played the quiz (0 questions answered) but no entry form appeared". The box is
+     in the page, hidden, while the competition is open too (?open). -->
+<h1>Test your F1 knowledge</h1>
+<p>For a chance to win fantastic prizes. Simply click on the button below and answer three quiz questions.</p>
+<button type="button" id="start">Start the quiz</button>
+<form id="entry">
+  <label for="fn">First name</label><input id="fn" name="firstName" required>
+  <label for="em">Email</label><input id="em" name="email" type="email" required>
+  <button type="submit">Enter now</button>
+</form>
+<div class="modal" id="closed" role="dialog"><div class="box"><header><h3>Closed</h3>
+  <p>You've missed this competition.</p></header></div></div>
+<script>
+const open = new URLSearchParams(location.search).has('open');
+document.getElementById('start').addEventListener('click', () =>
+  document.getElementById(open ? 'entry' : 'closed').classList.add('open'));
+document.getElementById('entry').addEventListener('submit', e => {
+  e.preventDefault(); document.body.innerHTML = '<h2>Thank you for entering!</h2>';
+});
+</script>
+</body></html>

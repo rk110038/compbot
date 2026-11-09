@@ -840,3 +840,12 @@ def test_boxes_that_empty_while_a_pop_up_is_closed_are_filled_in_again(browser, 
                         "blk", {})
     assert res.result == "entered", (res.message, res.details["steps"])
     assert any("filled in" in s and "again" in s for s in res.details["steps"]), res.details["steps"]
+
+def test_a_quiz_that_says_you_missed_the_competition_is_closed(browser, fixture_server, profile):
+    res = browser.enter(f"{fixture_server}/closed_quiz.html", Ctx(profile=profile), _settings(entry_mode="auto"),
+                        "cq", {})
+    assert res.result == "closed" and "You've missed this competition." in res.message, (res.result, res.message)
+    # The same box sits hidden in the page while the competition is open: it mustn't count then.
+    res = browser.enter(f"{fixture_server}/closed_quiz.html?open", Ctx(profile=profile),
+                        _settings(entry_mode="dry_run"), "cq_open", {})
+    assert res.result == "dry_run_ok", (res.result, res.message, res.details["steps"])

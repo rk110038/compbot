@@ -1013,7 +1013,10 @@ HARD_ERROR_RE = re.compile(r"\binvalid\b|not (?:a )?valid|something went wrong|p
 CLOSED_RE = re.compile(
     r"(?:competition|promotion|prize draw|giveaway|this comp\w*) (?:is |has )?(?:now )?(?:closed|ended|finished)|"
     r"no longer (?:accepting|open|available)|entries (?:are|have) (?:now )?closed|has now closed|this competition "
-    r"has expired", re.I)
+    r"has expired|"
+    # DHL InMotion: "Start the quiz" opens a box headed "Closed": "You've missed this competition."
+    r"you(?:['\u2019]ve| have)? missed (?:out on )?(?:this|the) (?:competition|comp|giveaway|prize draw|promotion|contest)",
+    re.I)
 # The link is a page about the competition (its rules, past winners) rather than its entry form: SheerLuxe's
 # /competition-winners, Future plc's /competition-rules/. Only said when there's no form on the page.
 WRONG_PAGE_PATH_RE = re.compile(
@@ -1447,12 +1450,19 @@ def _widget_host(page) -> str | None:
     return None
 
 
+def _closed_said(text: str) -> str | None:
+    """'Page says the competition has closed' with the page's own words, if the page says so."""
+    m = CLOSED_RE.search(text)
+    return f"Page says the competition has closed (\u201c{_sentence_at(text, m.start(), m.end())}\u201d)" if m else None
+
+
 def _why_not_enterable(page) -> tuple[str, str] | None:
     """(result, message) when the page itself says why it can't be entered here: closed, a giveaway widget, or a
     sign-in wall. None if it doesn't say."""
     text = _page_text(page)
-    if CLOSED_RE.search(text):
-        return "closed", "Page says the competition has closed"
+    closed = _closed_said(text)
+    if closed:
+        return "closed", closed
     widget = _widget_host(page)
     if widget:
         return "widget", (f"The entry is a {WIDGET_NAMES.get(widget, widget)} widget, which needs you to sign in or "
@@ -2733,8 +2743,9 @@ class Browser:
                 text = _page_text(page)
                 widget = _widget_host(page)
                 login = LOGIN_WALL_RE.search(text)
-                if CLOSED_RE.search(text):
-                    res.result, res.message = "closed", "Page says the competition has closed"
+                closed = _closed_said(text)
+                if closed:
+                    res.result, res.message = "closed", closed
                 elif quiz_summary is not None and QUIZ_FAIL_RE.search(text):
                     m = QUIZ_FAIL_RE.search(text)
                     res.result = "failed"
