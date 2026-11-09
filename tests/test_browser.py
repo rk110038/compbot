@@ -751,6 +751,23 @@ def test_radix_tick_box_is_ticked_by_its_button(browser, fixture_server, profile
     terms = next(f for f in res.details["fields"] if "Terms and Conditions" in f["label"])
     assert terms["action"] == "check" and terms["ok"], terms
 
+def test_bonus_entries_offer_after_sending_means_the_entry_went_in(browser, fixture_server, profile):
+    res = browser.enter(f"{fixture_server}/bonus_survey.html", Ctx(profile=profile), _settings(entry_mode="auto"),
+                        "bs1", {})
+    assert res.result == "entered" and "bonus entries" in res.message, (res.result, res.message, res.details["steps"])
+    assert res.details["steps"] == ["step 1: clicked 'ENTER NOW'"], res.details["steps"]
+
+def test_entering_that_opens_a_sign_in_page_needs_an_account_not_a_phone(browser, fixture_server, profile):
+    res = browser.enter(f"{fixture_server}/enter_free_login.html", Ctx(profile=dict(profile, phone="")),
+                        _settings(entry_mode="auto"), "efl", {})
+    assert res.result == "login", (res.result, res.message, res.details["steps"])
+    assert "clicked 'Enter For Free'" in res.details["steps"]
+
+def test_required_after_sending_and_no_phone_in_your_profile_needs_you(browser, fixture_server, profile):
+    res = browser.enter(f"{fixture_server}/mailchimp_phone.html", Ctx(profile=dict(profile, phone="")),
+                        _settings(entry_mode="auto"), "mcp", {})
+    assert res.result == "needs_input" and "profile has no phone" in res.message, (res.result, res.message)
+
 def test_drawn_drop_down_lists_are_chosen_from(browser, fixture_server, profile):
     res = browser.enter(f"{fixture_server}/aria_dropdown.html", Ctx(profile=profile, answers=["6"]),
                         _settings(entry_mode="auto"), "ad1", {})

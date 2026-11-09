@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Win a TaylorMade apparel bundle</title></head>
+<body>
+<!-- TaylorMade: once the entry is in, the next page offers "an extra ten (10) bonus entries" for a survey with
+     required "Select all that apply" questions. compbot took it for the entry's next page, couldn't finish the
+     survey, and called the entry failed (so it would have been entered again). -->
+<h1>Win a TaylorMade apparel bundle</h1>
+<form id="f">
+  <label>First name <input name="fn" required></label>
+  <label>Email <input type="email" name="em" required></label>
+  <label><input type="checkbox" name="tc" required> I can confirm I am 18 or older and agree to the Terms and Conditions</label>
+  <button type="submit">ENTER NOW</button>
+</form>
+<script>
+document.getElementById('f').addEventListener('submit', e => {
+  e.preventDefault();
+  document.body.innerHTML = '<h2>WANT 10 BONUS ENTIRES?</h2><p>Simply fill out the survey below for an extra ten (10) bonus entries into this prize draw.</p>'
+    + '<form id="s"><p>Which wedge brands do you currently play? (Select all that apply)</p>'
+    + '<label><input type="checkbox" name="w1"> TaylorMade</label><label><input type="checkbox" name="w2"> Ping</label>'
+    + '<label>Which driver brand do you play? <select name="d" required><option value="">Please select</option><option>TaylorMade</option><option>Ping</option></select></label>'
+    + '<button type="submit">SUBMIT</button><p id="m"></p></form>';
+  document.getElementById('s').addEventListener('submit', ev => { ev.preventDefault(); document.getElementById('m').textContent = 'This field is required'; });
+});
+</script>
+</body></html>

@@ -160,8 +160,9 @@ JS_EXTRACT = "(prefix) => {\n" + JS_HELPERS + r"""
   };
   const ctxText = (el) => { const up = n => n.parentElement || (n.getRootNode && n.getRootNode().host) || null; let n = up(el); for (let i = 0; i < 4 && n; i++) { const t = txt(n); if (t.length > 40) return t.slice(0, 400); n = up(n); } return ''; };
   // Contact Form 7's acceptance boxes keep the form's submit button disabled until they're ticked (unless "optional").
-  // Zoho Forms puts a hidden "Required" after the label ("Phone * Required"), so its asterisk isn't at the end.
-  const isReq = (el, label) => el.required || el.getAttribute('aria-required') === 'true' || /\*\s*$|\(required\)|\*\s*required\s*$/i.test(label || '') || (el.type === 'checkbox' && !!el.closest('.wpcf7-acceptance:not(.optional)'));
+  // Zoho Forms puts a hidden "Required" after the label ("Phone * Required"), so its asterisk isn't at the end;
+  // Mailchimp marks required boxes with class="required" (Total Golf Discount's phone number).
+  const isReq = (el, label) => el.required || el.getAttribute('aria-required') === 'true' || /\*\s*$|\(required\)|\*\s*required\s*$/i.test(label || '') || (el.type === 'checkbox' && !!el.closest('.wpcf7-acceptance:not(.optional)')) || /(^|\s)required(\s|$)/.test(typeof el.className === 'string' ? el.className : '');
   const CHROME = 'header, nav, footer, [role=banner], [role=navigation], [role=contentinfo], [role=search], #footer, .footer, [id*=site-footer i], [class*=site-footer i], [class*=page-footer i], [id*=page-footer i]';
   const choiceVis = (el) => vis(el) || (el.labels && Array.from(el.labels).some(vis)) || vis(el.closest('label')) || vis(el.parentElement);
   let counter = 0;
@@ -989,8 +990,10 @@ SUCCESS_RE = re.compile(
     # Google Forms: "Your response has been recorded".
     r"you(?:'ve| have) (?:now |successfully |been ){1,3}entered|(?:your|the) (?:form|entry|submission|response|answers?|"
     r"details) (?:has |have |was |were |is )?(?:been )?(?:successfully )?(?:received|recorded|submitted|sent)|"
-    # Referral widgets (Viral Loops, Gleam...) swap the form for "share your link for more entries" once you're in.
+    # Referral widgets (Viral Loops, Gleam...) swap the form for "share your link for more entries" once you're in;
+    # TaylorMade's next page offers "an extra ten (10) bonus entries" for a survey (only text new after sending counts).
     r"share (?:your|this) (?:unique |personal |referral )*link|(?:earn|get|unlock) (?:more|extra|bonus) entries|"
+    r"\b(?:extra|more) (?:\w+ )?(?:\(\d+\) )?bonus entr(?:y|ies)\b|\bwant (?:\w+ )?(?:extra |more )?bonus entr(?:y|ies)|"
     # Free Spin Daily's wheel, once spun: "You have won 10 entries".
     r"you(?:'ve| have) won (?:an?|one|two|three|four|five|ten|\d+) (?:extra |bonus )?entr(?:y|ies)\b|"
     # Contact Form 7's standard reply (Love It!): "Thank you for your message. It has been sent."
@@ -1057,7 +1060,7 @@ CAPTCHA_BUSY_RE = re.compile(r"captcha|verifying|checking (?:you|your browser)|a
 CAPTCHA_BUTTON_WAIT_S = 15  # how long a button held by a bot check gets to come free
 BUSY_WAIT_S = 20            # how long a "Sending..." button gets after the usual wait
 
-MAX_FORM_PAGES = 8  # multi-page forms and quizzes (one question per page)
+MAX_FORM_PAGES = 20  # multi-page forms and quizzes (one question per page: SurveyMonkey's Revive Retreats ran past 9)
 
 
 # --------------------------------------------------------------------------- helpers
@@ -2780,6 +2783,16 @@ class Browser:
                         res.result, res.message = "captcha", "Anti-spam check on the form (e.g. a sum) - enter manually"
                         res.screenshot_before = _shot(page, cfg.screenshot_dir / f"{shot_prefix}_captcha.jpg")
                         return res
+                    if unknown and ACCOUNT_URL_RE.search(page.url) and not ACCOUNT_URL_RE.search(url):
+                        # A click took us to the site's sign-in page (talkSPORT WIN's "Enter For Free" opens
+                        # /account/login asking for a mobile number to text a code to): that's an account to sign in
+                        # to, not a field missing from your profile.
+                        res.result = "login"
+                        res.message = ("Only signed-in members can enter (entering opens the site's sign-in page) - sign "
+                                       "in and enter it yourself")
+                        res.final_url = page.url
+                        res.screenshot_before = _shot(page, cfg.screenshot_dir / f"{shot_prefix}_login.jpg")
+                        return res
                     if unknown:
                         res.result = "needs_input"
                         res.message = "Couldn't fill: " + "; ".join(
@@ -3077,6 +3090,14 @@ class Browser:
                             best = (frame, cur, score)
                             continue
                     snippet = new_text[max(0, err.start() - 60): err.end() + 80].replace("\n", " ")
+                    missing = [(f, a) for f, a in plan_all if a.kind == "skip" and a.note.startswith("profile has no")]
+                    if missing and REQUIRED_ERR_RE.search(new_text):
+                        # The form wants something your profile doesn't have (Total Golf Discount's Mailchimp page only
+                        # says its phone number is required once you've sent it): that's yours to add, not a failure.
+                        res.result = "needs_input"
+                        res.message = ("Couldn't fill: " + "; ".join(f"{f.human_label} ({a.note})" for f, a in missing)
+                                       + f" - the form said \u201c{snippet.strip()[:160]}\u201d")[:900]
+                        return res
                     res.result, res.message = "failed", f"Form reported a problem: \u201c{snippet.strip()}\u201d" + (
                         f" - the site's server replied {server}" if server else "")
                     res.message = res.message[:900]
@@ -3098,8 +3119,10 @@ class Browser:
                 res.result, res.message = "failed", ("Submitted but nothing changed on the page" + (
                     f" - the site's server replied {server}" if server else ""))[:900]
                 return res
-            res.result = "failed" if dry_run else "unverified"
-            res.message = f"Gave up after {MAX_FORM_PAGES} form pages"
+            # Every step brought up another page and the last one is still waiting: nothing says the entry was sent.
+            res.result = "failed"
+            res.message = (f"The form still had more pages after {MAX_FORM_PAGES} (a long survey?) - nothing confirmed "
+                           "the entry was sent")
             return res
         except Exception as exc:  # noqa: BLE001
             log.exception("entry error for %s", url)

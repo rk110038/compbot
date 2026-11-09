@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>TGD Giveaway</title></head>
+<body>
+<!-- Total Golf Discount's Mailchimp page: nothing is marked required, and only once it's sent does it say the phone
+     number is ("This field is required."). compbot called the entry failed; it needs a phone number from you. -->
+<h1>Black November Giveaway</h1>
+<form id="f" novalidate>
+  <div class="field-wrapper"><label for="mc-EMAIL">Email Address</label><input type="text" name="EMAIL" id="mc-EMAIL"><div class="invalid-error"></div></div>
+  <div class="field-wrapper"><label for="mc-PHONE">Phone Number</label><input type="text" name="PHONE" id="mc-PHONE"><div class="invalid-error" id="perr"></div></div>
+  <div class="field-wrapper"><label for="mc-FNAME">First Name</label><input type="text" name="FNAME" id="mc-FNAME"><div class="invalid-error"></div></div>
+  <button type="submit">Subscribe To Enter</button>
+</form>
+<script>
+document.getElementById('f').addEventListener('submit', e => {
+  e.preventDefault();
+  if (!document.getElementById('mc-PHONE').value) { document.getElementById('perr').textContent = 'This field is required.'; return; }
+  document.body.innerHTML = '<h2>Thank you for subscribing!</h2>';
+});
+</script>
+</body></html>
