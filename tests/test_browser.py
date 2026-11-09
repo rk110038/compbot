@@ -828,3 +828,9 @@ def test_page_instructions_and_non_dates_are_not_answers():
     assert _not_an_answer("01/03/2027", f, q) is None and _not_an_answer("March 2027", f, q) is None
     k = Field("k", "input", "text", label="What is the name of the hotel?")
     assert _not_an_answer("Please enter your answer", k, k.label) and _not_an_answer("The Ritz", k, k.label) is None
+
+def test_button_waiting_for_a_phone_number_your_profile_lacks_needs_you(browser, fixture_server, profile):
+    for mode in ("auto", "dry_run"):
+        res = browser.enter(f"{fixture_server}/disabled_until_phone.html", Ctx(profile=dict(profile, phone="")),
+                            _settings(entry_mode=mode), f"dup_{mode}", {})
+        assert res.result == "needs_input" and "profile has no phone" in res.message, (mode, res.result, res.message)

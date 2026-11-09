@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Reader treat</title></head>
+<body>
+<!-- Muddy Stilettos: the button waits until every box is filled, telephone number included, and nothing is marked
+     required. compbot said "a required field probably wasn't recognised"; your profile has no phone number. -->
+<h1>Win a body sculpting course</h1>
+<form id="f">
+  <label for="name">Your name</label><input id="name" name="name">
+  <label for="em">Your email address</label><input id="em" name="emailaddress">
+  <label for="tel">Your telephone number</label><input id="tel" name="telephone">
+  <label><input type="checkbox" id="tc" name="tandcs"> I accept the Terms and Conditions</label>
+  <button type="submit" id="go" disabled>ENTER THE READER TREAT</button>
+</form>
+<script>
+const f = document.getElementById('f'), go = document.getElementById('go');
+const check = () => { go.disabled = !(f.name.value && f.emailaddress.value && f.telephone.value && f.tandcs.checked); };
+f.addEventListener('input', check); f.addEventListener('change', check);
+f.addEventListener('submit', e => { e.preventDefault(); document.body.innerHTML = '<h2>Thank you for entering!</h2>'; });
+</script>
+</body></html>

@@ -1548,6 +1548,15 @@ def _echoes_label(answer: str, f: Field) -> bool:
                                                                   f.aria) if x}
 
 
+def _missing_profile_note(plan: list) -> str | None:
+    """'Couldn't fill: Your telephone number (profile has no phone)' when compbot left boxes empty only because your
+    profile has no answer for them, else None: the form waiting on one of those is yours to finish."""
+    missing = [(f, a) for f, a in plan if a.kind == "skip" and a.note.startswith("profile has no")]
+    if not missing:
+        return None
+    return "Couldn't fill: " + "; ".join(f"{f.human_label} ({a.note})" for f, a in missing)
+
+
 # The page's own help text taken for an answer (BeMoto: "When does your Motorbike Insurance renew?" got "If you're not
 # sure on the exact date, you can use the first of the month.").
 HINT_ANSWER_RE = re.compile(r"^(?:if you|please\b|you (?:can|may|should|must|will|need)\b|enter\b|type\b|select\b|"
@@ -2932,6 +2941,9 @@ class Browser:
                         res.result, res.message = "captcha", f"Dry run: {held[9:]} - enter manually"
                     elif held:
                         res.result, res.message = "failed", f"Dry run: filled {n_filled} fields, but {held[8:]}"
+                        if "stayed disabled" in held and _missing_profile_note(plan_all):
+                            res.result = "needs_input"
+                            res.message = f"Dry run: {_missing_profile_note(plan_all)} - the submit button stayed disabled"
                     else:
                         res.result = "dry_run_ok"
                         res.message = (f"Dry run: filled {n_filled} fields; would press \u201c{submit_label}\u201d "
@@ -2963,6 +2975,10 @@ class Browser:
                     return res
                 if how.startswith("failed"):
                     res.result, res.message = "failed", f"Submit click failed: {how[7:]}"[:500]
+                    if "stayed disabled" in how and _missing_profile_note(plan_all):
+                        # Muddy Stilettos' button waits for "Your telephone number", which your profile doesn't have.
+                        res.result = "needs_input"
+                        res.message = f"{_missing_profile_note(plan_all)} - the submit button stayed disabled"[:900]
                     return res
                 if how != "click":
                     details["steps"].append(f"step {step}: submit {how}")
@@ -3115,13 +3131,12 @@ class Browser:
                             best = (frame, cur, score)
                             continue
                     snippet = new_text[max(0, err.start() - 60): err.end() + 80].replace("\n", " ")
-                    missing = [(f, a) for f, a in plan_all if a.kind == "skip" and a.note.startswith("profile has no")]
+                    missing = _missing_profile_note(plan_all)
                     if missing and REQUIRED_ERR_RE.search(new_text):
                         # The form wants something your profile doesn't have (Total Golf Discount's Mailchimp page only
                         # says its phone number is required once you've sent it): that's yours to add, not a failure.
                         res.result = "needs_input"
-                        res.message = ("Couldn't fill: " + "; ".join(f"{f.human_label} ({a.note})" for f, a in missing)
-                                       + f" - the form said \u201c{snippet.strip()[:160]}\u201d")[:900]
+                        res.message = (missing + f" - the form said \u201c{snippet.strip()[:160]}\u201d")[:900]
                         return res
                     res.result, res.message = "failed", f"Form reported a problem: \u201c{snippet.strip()}\u201d" + (
                         f" - the site's server replied {server}" if server else "")
