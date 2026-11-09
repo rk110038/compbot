@@ -651,3 +651,51 @@ def test_email_quiz_entries_are_never_sent_without_their_answers(monkeypatch):
     assert jobs._enter_email(cid, dict(DEFAULT_SETTINGS, entry_mode="auto"), {"first_name": "A"}) == "needs_input"
     c = _get(cid)
     assert c.status == "manual" and "needs answers" in c.status_reason
+
+def test_pacing_waits_only_between_entries_on_the_same_site():
+    w = jobs._pacing_wait
+    assert w("a.com", 100.0, {}, None, 30, 5) == 0  # the run's first entry
+    assert w("b.com", 100.0, {"a.com": 99.0}, 99.0, 30, 5) == 4  # another site: the short gap since the last entry
+    assert w("a.com", 100.0, {"a.com": 99.0}, 99.0, 30, 5) == 29  # back on a site: the full delay since then
+    assert w("a.com", 140.0, {"a.com": 99.0}, 139.0, 30, 5) == 4  # ...unless that was long enough ago
+
+
+def _paced_run(monkeypatch, by_site: bool) -> list[tuple[str, float]]:
+    """A queue run of three comps (site a, site b, site a again) with a 30 s delay; the wait before each entry."""
+    from app.db import get_settings, save_profile, save_settings
+    init_db()
+    with session_scope() as s:
+        saved = dict(get_settings(s))
+        for c in s.scalars(select(Competition).where(Competition.status == "queued")).all():
+            c.status = "skipped"  # other tests' leftovers aren't part of this run
+        save_profile(s, {"first_name": "Test", "last_name": "Person", "email": "t@example.com"})
+        save_settings(s, {**saved, "entry_mode": "auto", "daily_entry_cap": 100, "delay_min_seconds": 30,
+                          "delay_max_seconds": 30, "delay_same_site_only": by_site})
+    for t, u in (("pace-a1", "https://www.site-a.example/win1"), ("pace-b", "https://www.site-b.example/win"),
+                 ("pace-a2", "https://www.site-a.example/win2")):
+        _comp(f"{t}-{by_site}", [u])
+    waits: list[float] = []
+    seen: list[tuple[str, float]] = []
+    monkeypatch.setattr(jobs, "entries_today", lambda *a, **k: 0)
+    monkeypatch.setattr(jobs, "_wait", lambda name, secs: waits.append(secs))
+    monkeypatch.setattr(jobs, "_enter_web", lambda cid, url, settings, profile: seen.append(
+        (url, sum(waits))) or waits.clear() or "failed")
+    try:
+        jobs._enter()
+    finally:
+        with session_scope() as s:
+            save_settings(s, saved)
+    return seen
+
+
+def test_queue_run_keeps_the_delay_only_for_the_same_site(monkeypatch):
+    seen = _paced_run(monkeypatch, by_site=True)
+    assert [u for u, _ in seen] == ["https://www.site-a.example/win1", "https://www.site-b.example/win",
+                                    "https://www.site-a.example/win2"], seen
+    (_, before_a1), (_, before_b), (_, before_a2) = seen
+    assert before_a1 == 0 and 3 <= before_b <= 8 and 29 <= before_a2 <= 30, seen
+
+
+def test_queue_run_can_still_wait_after_every_competition(monkeypatch):
+    seen = _paced_run(monkeypatch, by_site=False)
+    assert [round(w) for _, w in seen] == [0, 30, 30], seen

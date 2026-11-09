@@ -155,7 +155,7 @@ Secrets and infrastructure go in environment variables (in the YAML). Everything
 | `TZ` | `Europe/London` | |
 | `DATA_DIR` | `/data` | |
 
-GUI settings include the daily entry cap (default 25; it counts successful entries, so blocked, failed or CAPTCHA attempts don't use it up, and a run keeps going until the queue is done or the cap is reached), delays between entries, retries, how to treat social and Gleam comps, skip keywords (e.g. `Glasgow, Leeds` for local-only prizes), minimum prize value, marketing opt-ins (newsletter comps always opt in, because that *is* the entry; third-party marketing is never ticked unless required), T&C respect, and auto-confirm links.
+GUI settings include the daily entry cap (default 25; it counts successful entries, so blocked, failed or CAPTCHA attempts don't use it up, and a run keeps going until the queue is done or the cap is reached), delays between entries (by default kept only between entries on the same site, with entries on different sites a few seconds apart; untick **Only wait between entries on the same site** to wait after every competition), retries, how to treat social and Gleam comps, skip keywords (e.g. `Glasgow, Leeds` for local-only prizes), minimum prize value, marketing opt-ins (newsletter comps always opt in, because that *is* the entry; third-party marketing is never ticked unless required), T&C respect, and auto-confirm links.
 
 ### AI helper (Ollama, runs on your NAS)
 
@@ -206,7 +206,7 @@ Then use **Settings → AI helper → Test web search**. Only the search words l
 * Your details live only in the SQLite database on your dataset.
 * The GUI requires a password. POSTs are checked for same-origin. Screenshots are only served to signed-in users.
 * Win emails are never auto-confirmed as wins: you confirm them. Emails that ask for fees, bank details or crypto are flagged as **scam suspect**. Genuine promoters never charge you to claim a prize.
-* compbot polls the MSE API once a day with a 1.5 s pause between pages, reads Competitions-Time and Competition Database (if switched on) a page every 2–2.5 s, never follows links a site's robots.txt asks bots to avoid, and spaces out entries (20–60 s by default).
+* compbot polls the MSE API once a day with a 1.5 s pause between pages, reads Competitions-Time and Competition Database (if switched on) a page every 2–2.5 s, never follows links a site's robots.txt asks bots to avoid, and spaces out entries: 20–60 s by default between entries on the same site, and 3–8 s between entries on different sites (or 20–60 s after every competition, if you untick **Only wait between entries on the same site**).
 * Links from forum posts and emails are untrusted. The browser, T&C fetches and confirmation clicks refuse private/LAN/loopback addresses, so a malicious link can't reach your NAS or home network.
 * With web look-ups on, the only thing sent out is the search words the AI writes for a competition question. The AI never sees your details, and search result pages aren't opened.
 * Entries that were submitted but showed no confirmation message are flagged **check entry**, with before/after screenshots, rather than silently counted.

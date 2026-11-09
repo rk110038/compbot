@@ -69,7 +69,8 @@ def test_live_status_says_what_happens_between_entries(tmp_path, monkeypatch):
     assert lock.acquire(blocking=False)  # as if an entry run were going
     try:
         with TestClient(app) as c:
-            assert "s apart (see Settings)" in c.get("/live", headers=H).text
+            page = c.get("/live", headers=H).text
+            assert "before going back to a site it has just entered on (see Settings)" in page  # pacing by site
             jobs._step("enter", "Waiting before the next competition", 40)
             b = c.get("/live/status", headers=H).json()["between"]
             assert b["what"] == "Waiting before the next competition" and 38 <= b["left"] <= 40

@@ -506,6 +506,23 @@ def _refusal_key(url: str) -> str:
     return "the magazine competition platform" if BOT_BLOCKED_URL_RE.search(url) else registrable_domain(url)
 
 
+# Between entries on different sites (and the sites of one competition): a short gap. The full delay
+# (delay_min_seconds..delay_max_seconds) is kept between entries on the same site when "delay_same_site_only" is on.
+OTHER_SITE_GAP_S = (3, 8)
+
+
+def _pacing_wait(site: str, now: float, last_at: dict[str, float], last_any: float | None, same_gap: float,
+                 other_gap: float) -> float:
+    """Seconds to wait before an entry on `site`: at least `other_gap` since the last entry anywhere, and at least
+    `same_gap` since the last entry on this site in this run."""
+    wait = 0.0
+    if last_any is not None:
+        wait = last_any + other_gap - now
+    if site in last_at:
+        wait = max(wait, last_at[site] + same_gap - now)
+    return max(0.0, wait)
+
+
 def _urls_to_try(comp: Competition, blocked: set[str] | None = None) -> list[str]:
     from .analyse import BOT_BLOCKED_URL_RE
 
@@ -615,6 +632,13 @@ def _enter(comp_ids: list[int] | None = None, force: bool = False) -> str:
         return f"Daily cap reached ({cap})"
     stats: dict[str, int] = {}
     errors_in_a_row, stopped = 0, ""
+    # Pacing: with "delay_same_site_only" (the default) the delay is kept between entries on the same site, and entries
+    # on different sites follow a few seconds apart; switched off, every competition is followed by the delay. A run
+    # of chosen competitions ("Run now") keeps its 2 s gaps either way.
+    lo, hi = sorted((int(settings.get("delay_min_seconds", 20)), int(settings.get("delay_max_seconds", 60))))
+    by_site = bool(settings.get("delay_same_site_only", True))
+    last_at: dict[str, float] = {}
+    last_any: float | None = None
 
     def spend(result: str) -> None:
         nonlocal budget, errors_in_a_row
@@ -670,14 +694,24 @@ def _enter(comp_ids: list[int] | None = None, force: bool = False) -> str:
                 break
             if _refusal_key(url) in refused:  # refused twice already, earlier in this competition's list
                 continue
-            if results:
-                pause = random.uniform(3, 8)
+            site = _refusal_key(url)
+            if by_site:
+                same_gap = 2 if comp_ids else random.uniform(lo, hi)
+                other_gap = 2 if comp_ids else random.uniform(*OTHER_SITE_GAP_S)
+                pause = _pacing_wait(site, time.monotonic(), last_at, last_any, same_gap, other_gap)
+                if pause:
+                    _step("enter", "Waiting before the next entry on this site" if site in last_at
+                          else "Waiting before the next site", pause)
+                    _wait("enter", pause)
+            elif results:
+                pause = random.uniform(*OTHER_SITE_GAP_S)
                 _step("enter", "Waiting before the next site", pause)
                 _wait("enter", pause)
-                if _should_stop("enter"):
-                    break
+            if _should_stop("enter"):
+                break
             _step("enter", "Starting the browser")
             results[url] = _enter_web(cid, url, settings, profile)
+            last_at[site] = last_any = time.monotonic()
             spend(results[url])
             if results[url] == "blocked":
                 key = _refusal_key(url)
@@ -690,9 +724,8 @@ def _enter(comp_ids: list[int] | None = None, force: bool = False) -> str:
         for u, r in results.items():
             if r in ENTERED_RESULTS:
                 entered_pages.setdefault(canonical_url(u), {})[cid] = closes_by_id.get(cid)
-        if n < len(comp_ids_ordered) and budget > 0 and errors_in_a_row < MAX_ERRORS_IN_A_ROW:
-            lo, hi = int(settings.get("delay_min_seconds", 20)), int(settings.get("delay_max_seconds", 60))
-            pause = random.uniform(min(lo, hi), max(lo, hi)) if not comp_ids else 2
+        if not by_site and n < len(comp_ids_ordered) and budget > 0 and errors_in_a_row < MAX_ERRORS_IN_A_ROW:
+            pause = random.uniform(lo, hi) if not comp_ids else 2
             _step("enter", "Waiting before the next competition", pause)
             _wait("enter", pause)
     summary = ", ".join(f"{v} {k}" for k, v in sorted(stats.items())) or "Nothing to enter"

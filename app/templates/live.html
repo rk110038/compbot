@@ -24,7 +24,7 @@
       <dt>Last result</dt><dd id="s-result">–</dd>
       <dt>Updated</dt><dd id="s-age">–</dd>
     </dl>
-    <p class="small muted" style="margin-top:12px">Competitions are spaced {{ settings.delay_min_seconds }}–{{ settings.delay_max_seconds }} s apart (see Settings), so expect pauses between them. Between entries this page says what compbot is waiting for.</p>
+    <p class="small muted" style="margin-top:12px">{% if settings.delay_same_site_only %}Entries on different sites follow a few seconds apart; compbot waits {{ settings.delay_min_seconds }}–{{ settings.delay_max_seconds }} s before going back to a site it has just entered on (see Settings).{% else %}Competitions are spaced {{ settings.delay_min_seconds }}–{{ settings.delay_max_seconds }} s apart (see Settings), so expect pauses between them.{% endif %} Between entries this page says what compbot is waiting for.</p>
   </div>
 </div>
 <script>

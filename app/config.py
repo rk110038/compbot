@@ -155,6 +155,7 @@ DEFAULT_SETTINGS: dict = {
     "play_quizzes": True,                # answer click-to-answer quizzes (tiles/buttons) that unlock the entry form
     "delay_min_seconds": 20,
     "delay_max_seconds": 60,
+    "delay_same_site_only": True,        # keep the delay between entries on the same site only (a few s otherwise)
     "skip_keywords": "",                 # comma-separated; titles containing any are skipped
     "min_prize_value": 0,                # skip comps whose stated prize value is below this (0 = off)
 }
