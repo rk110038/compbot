@@ -1548,6 +1548,23 @@ def _echoes_label(answer: str, f: Field) -> bool:
                                                                   f.aria) if x}
 
 
+# The page's own help text taken for an answer (BeMoto: "When does your Motorbike Insurance renew?" got "If you're not
+# sure on the exact date, you can use the first of the month.").
+HINT_ANSWER_RE = re.compile(r"^(?:if you|please\b|you (?:can|may|should|must|will|need)\b|enter\b|type\b|select\b|"
+                            r"choose\b|click\b|tap\b|note\b)|\bif you(?:'re| are) not sure\b|\byou can use\b", re.I)
+MONTH_WORD_RE = re.compile(r"\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b", re.I)
+
+
+def _not_an_answer(answer: str, f: Field, question: str) -> str | None:
+    """Why an AI answer for a box to type into isn't an answer at all, else None."""
+    if HINT_ANSWER_RE.search(answer.strip()):
+        return "the answer is the page's own instructions, not an answer"
+    if (re.match(r"\s*when\b", question, re.I) or f.type == "date") and not (
+            re.search(r"\d", answer) or MONTH_WORD_RE.search(answer)):
+        return "a date was asked for and the answer isn't one"
+    return None
+
+
 def _page_context(page, frame) -> str:
     text = _safe_eval(page.main_frame, JS_MAIN_TEXT, default="") or ""
     if frame is not page.main_frame:  # form inside an embed: its own text matters too
@@ -1589,6 +1606,14 @@ def _ai_fill(page, frame, plan, settings: dict, comp_context: dict, details: dic
                 details.setdefault("ai", []).append(record)
                 if a.kind == "unknown":
                     a = Action("unknown", note="AI only repeated the box's label")
+                out.append((f, a))
+                continue
+            why_not = _not_an_answer(res["answer"], f, question) if res and res["answer"] and not options else None
+            if why_not:
+                record.update(used=False, reason=why_not)
+                details.setdefault("ai", []).append(record)
+                if a.kind == "unknown":
+                    a = Action("unknown", note=f"AI had no answer ({why_not})")
                 out.append((f, a))
                 continue
             if (res and res["answer"] and res["confidence"] >= min_conf and settings.get("ai_double_check", True)

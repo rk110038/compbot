@@ -452,3 +452,13 @@ def test_quiz_question_naming_a_profile_detail_is_still_a_quiz(profile):
     assert map_field(Field("2", "select", "select", label="Which county do you live in?", options=counties),
                      ctx(profile)).value == "Berkshire"
     assert map_field(Field("3", "input", "text", label="What is your email address?"), ctx(profile)).source == "email"
+
+def test_saying_you_follow_them_on_social_media_is_yours_to_tick(profile):
+    # BeMoto: "I confirm that I follow BeMoto on Facebook" was ticked as if it were terms to agree to.
+    req = Field("s", "input", "checkbox", label="I confirm that I follow BeMoto on Facebook", required=True)
+    a = map_field(req, ctx(profile))
+    assert (a.kind, a.note) == ("unknown", "asks you to confirm you follow them on social media"), a
+    opt = Field("s2", "input", "checkbox", label="I have liked the Instagram page")
+    assert map_field(opt, ctx(profile)).kind == "skip"
+    terms = Field("t", "input", "checkbox", label="I confirm that I have read the terms and conditions", required=True)
+    assert map_field(terms, ctx(profile)).kind == "check"

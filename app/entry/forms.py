@@ -190,6 +190,11 @@ OPTOUT_RE = re.compile(
 THIRD_PARTY_RE = re.compile(r"third ?part|partners|carefully selected|other (companies|brands)|associated brands|sister|"
                             r"\bsponsors?\b|(transfer|pass|passing|share|sharing|disclos\w*) (of |on )?(my |your )?"
                             r"(personal )?(data|details|information) (to|with)\b")
+# A box saying you follow / like the brand on social media (BeMoto: "I confirm that I follow BeMoto on Facebook") is a
+# statement about you, not terms to agree to: compbot doesn't follow anyone, so it's yours to tick.
+SOCIAL_CLAIM_RE = re.compile(
+    r"\bi (?:confirm (?:that )?i |have |do |already )?(?:follow|followed|like|liked|subscribe to|subscribed to)\b.{0,60}"
+    r"\b(?:facebook|instagram|twitter|tiktok|youtube|threads|linkedin|pinterest|on x|social media|socials)\b")
 # A box that opens by asking whether you'd like marketing is an opt-in, whatever boilerplate follows (Purina's ends
 # "You confirm that you are over 18 years old", which on its own reads like an eligibility box).
 OPTIN_LEAD_RE = re.compile(
@@ -600,6 +605,9 @@ def map_checkbox(f: Field, ctx: Ctx) -> Action:
         # "How would you like to hear from us?  [ ] Email  [ ] SMS ..." - for newsletter comps email *is* the entry.
         want = ctx.want_marketing and label in ("e mail", "email", "by email", "by e mail")
         return Action("check" if want else "skip", source="rule", note="contact channel")
+    if SOCIAL_CLAIM_RE.search(label):
+        return Action("unknown" if f.required else "skip", source="rule",
+                      note="asks you to confirm you follow them on social media")
     is_terms, is_mkt, optout = bool(TERMS_RE.search(d)), bool(MARKETING_RE.search(d)), bool(OPTOUT_RE.search(d))
     if is_mkt and is_terms and not TERMS_CORE_RE.search(d):
         is_terms = False  # "I agree that my details may be used for future communication by email" is marketing

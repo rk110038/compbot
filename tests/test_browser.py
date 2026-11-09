@@ -816,3 +816,15 @@ def test_tick_box_drawn_as_a_toggle_beside_a_hidden_input(browser, fixture_serve
     assert res.result == "entered", (res.message, res.details["fields"])
     acts = [(f["label"], f["action"], f["ok"]) for f in res.details["fields"] if f["action"] in ("check", "uncheck")]
     assert [(lb.split()[1], a, ok) for lb, a, ok in acts] == [("confirm", "check", True), ("am", "uncheck", True)], acts
+
+def test_page_instructions_and_non_dates_are_not_answers():
+    from app.entry.browser import _not_an_answer
+    from app.entry.forms import Field
+
+    f = Field("d", "input", "text", label="When does your Motorbike Insurance renew?*")
+    q = f.label
+    assert _not_an_answer("If you're not sure on the exact date, you can use the first of the month.", f, q)
+    assert _not_an_answer("Sometime next year", f, q)
+    assert _not_an_answer("01/03/2027", f, q) is None and _not_an_answer("March 2027", f, q) is None
+    k = Field("k", "input", "text", label="What is the name of the hotel?")
+    assert _not_an_answer("Please enter your answer", k, k.label) and _not_an_answer("The Ritz", k, k.label) is None
