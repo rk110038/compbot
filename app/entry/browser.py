@@ -1538,6 +1538,19 @@ PREFERENCE_Q_RE = re.compile(
     r"\byour (?:local|nearest|favou?rite|preferred|go-?to|ideal|dream|perfect)\b|\bwhich\b.{0,40}\bare you\b|"
     r"\bwhat(?:'s|\u2019s| is) your (?:favou?rite|preferred)\b|\bwould you (?:most )?(?:like|prefer|choose|pick)\b|"
     r"\bdo you (?:prefer|like|love)\b", re.I)
+# Facts about your life the AI can only make up: income, work, family, pets, home, car, insurance, which companies you
+# use, whether you follow or subscribe. SurveyMonkey's Revive Retreats survey asked "What is your total household
+# income?" and the AI answered "Under £20,000" (100% sure). These never go to the AI: a required one comes to you.
+PERSONAL_FACT_Q_RE = re.compile(
+    r"\b(?:household |annual |your )?(?:income|salary|earnings)\b|\bemployment status\b|\boccupation\b|"
+    r"\bjob title\b|\b(?:marital|relationship) status\b|\bdo you have (?:any |a |an )?(?:children|kids|grandchildren|"
+    r"pets?|cats?|dogs?|car|vehicle|mortgage|pension)\b|\bhow many (?:children|kids|pets|people live|cars)\b|"
+    r"\b(?:are you|do you)\b.{0,30}\b(?:home ?owner|own your (?:home|house)|rent|renting|tenant)\b|"
+    r"\b(?:insurance|mot|contract|policy|subscription)\b.{0,30}\b(?:renew|due|expire|end)s?\b|"
+    r"\bwhen (?:does|is|do) your\b|\bwhich (?:bank|energy (?:supplier|provider)|mobile network|broadband|"
+    r"supermarket)\b.{0,30}\b(?:use|with|are you)\b|\bare you (?:a|an) (?:\w+ ){0,4}(?:member|subscriber|"
+    r"follower|customer|reader)\b|\b(?:have|did) you (?:ever )?(?:attended|bought|purchased|stayed|visited|been)\b",
+    re.I)
 WORD_LIMIT_RE = re.compile(r"(\d{1,3})\s*words?|(ten|fifteen|twenty|twenty[- ]five|thirty|fifty)\s*words?", re.I)
 WORD_NUMS = {"ten": 10, "fifteen": 15, "twenty": 20, "twenty five": 25, "twenty-five": 25, "thirty": 30, "fifty": 50}
 
@@ -1605,6 +1618,14 @@ def _ai_fill(page, frame, plan, settings: dict, comp_context: dict, details: dic
                 page_text = _page_context(page, frame)
             options = [o.get("text", "") for o in f.options if not is_placeholder_option(o)] if f.options else None
             question = f.human_label if len(f.human_label) > 6 else (f.context[:300] or f.human_label)
+            if PERSONAL_FACT_Q_RE.search(question):
+                # A fact about your life (income, job, family, pets, home...): the AI could only make it up.
+                details.setdefault("ai", []).append({"question": question[:200], "options": (options or [])[:12],
+                                                     "used": False, "reason": "a question about you - not asked"})
+                if a.kind == "unknown":
+                    a = Action("unknown", note="a question about you that compbot won't guess")
+                out.append((f, a))
+                continue
             res = llm.answer_with_lookup(question, options, page_text, comp_context, settings, min_conf)
             record = {"question": question[:200], "options": (options or [])[:12]}
             if res:

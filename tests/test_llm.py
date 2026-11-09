@@ -458,3 +458,35 @@ def test_doubted_ai_answer_is_used_when_the_form_insists(fake_ollama, fixture_se
     assert res.result == "entered", (res.message, res.details["steps"])
     assert any("site said fields were required" in s for s in res.details["steps"])
     assert any(f["source"] == "ai" and "second check doubted" in f["note"] for f in res.details["fields"])
+
+def test_facts_about_your_life_are_never_asked_of_the_ai(fake_ollama, fixture_server, profile, monkeypatch):
+    # SurveyMonkey's Revive Retreats survey: "What is your total household income?" got "Under £20,000" (100% sure).
+    html = (open("tests/fixtures/ai_question.html", encoding="utf-8").read()
+            .replace("What colour is the watch case?", "What is your total household income?"))
+    open("tests/fixtures/ai_income.html", "w", encoding="utf-8").write(html)
+    asked = []
+    real = llm.answer_with_lookup
+    monkeypatch.setattr(llm, "answer_with_lookup", lambda q, *a, **k: asked.append(q) or real(q, *a, **k))
+    try:
+        with Browser() as b:
+            res = b.enter(f"{fixture_server}/ai_income.html", Ctx(profile=profile), AI, "ai_inc", {})
+    finally:
+        import os
+        os.remove("tests/fixtures/ai_income.html")
+    assert res.result == "needs_input" and "a question about you" in res.message, (res.result, res.message)
+    assert asked == [], asked  # never put to the AI to answer
+    assert res.details["ai"][0]["reason"] == "a question about you - not asked"
+
+
+def test_which_questions_are_about_your_life():
+    from app.entry.browser import PERSONAL_FACT_Q_RE as R
+
+    for q in ["What is your total household income?", "How would you describe your employment status?",
+              "Do you have a cat?", "Do you have any children under 5?", "When does your Motorbike Insurance renew?",
+              "Are you a Muddy Stilettos newsletter subscriber?", "Have you ever attended a weekend retreat before?",
+              "Are you a homeowner or do you rent?", "What is your occupation?"]:
+        assert R.search(q), q
+    for q in ["What colour is the watch case?", "Which band was Harry Judd a member of?",
+              "In which year did Interlagos first host a Formula 1 race?", "Which latte are you?",
+              "What does Lymph & Sculpt Body Sculpting combine?"]:
+        assert not R.search(q), q
