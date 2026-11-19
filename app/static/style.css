@@ -113,6 +113,27 @@ textarea { width: 100%; min-height: 70px; }
 .quote { border-left: 3px solid var(--gold); background: var(--grey-bg); border-radius: 0 6px 6px 0; padding: 4px 10px; margin: 6px 0; max-width: 640px; }
 .quote mark, .post mark { background: var(--gold-bg); color: inherit; padding: 0; border-radius: 2px; }
 .warn-text { color: var(--amber); }
+/* Inbox: which competition an email is about (compbot's guesses, then a search box over everything you entered). */
+td.decide { min-width: 290px; max-width: 400px; }
+.linker { display: grid; gap: 5px; margin-bottom: 8px; }
+.linker details[open] { display: grid; gap: 5px; }
+.guess { display: flex; gap: 8px; align-items: flex-start; padding: 5px 8px; border: 1px solid var(--line); border-radius: 8px;
+  cursor: pointer; }
+.guess:hover { border-color: var(--accent); }
+.guess:has(input:checked) { border-color: var(--accent); background: var(--blue-bg); }
+.guess input { margin: 3px 0 0; flex: none; }
+.guess > span { display: flex; flex-direction: column; min-width: 0; word-break: break-word; }
+.guess-title { font-weight: 600; }
+.guess-why { color: var(--muted); }
+.guess[hidden], .find-results[hidden] { display: none; }
+.linker .find { width: 100%; }
+.find-results { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); max-height: 260px; overflow-y: auto;
+  padding: 3px; }
+.find-item { display: flex; flex-direction: column; align-items: flex-start; width: 100%; text-align: left; border: 0;
+  background: none; color: var(--text); font: inherit; padding: 5px 8px; border-radius: 6px; cursor: pointer; }
+.find-item:hover, .find-item:focus { background: var(--grey-bg); outline: none; }
+.find-note { padding: 5px 8px; }
+form.verdict { max-width: 560px; }
 .shots { display: flex; gap: 10px; flex-wrap: wrap; }
 .shots a img { width: 220px; border: 1px solid var(--line); border-radius: 6px; display: block; }
 .attempt { border-top: 1px solid var(--line); padding: 10px 0; }

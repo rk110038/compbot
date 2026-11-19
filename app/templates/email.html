@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import badge with context %}
+{% from "_macros.html" import badge, linker, linker_script with context %}
 {% block title %}{{ (e.subject or 'Email')[:60] }}{% endblock %}
 {% block content %}
 {% set gl = gmail_link(e) %}
@@ -14,6 +14,8 @@
     <dt>Competition</dt><dd>{% if c %}<a href="/competitions/{{ c.id }}">{{ c.prize or c.title }}</a>
       {% if c.last_entered_at or c.entered_at %}<span class="small muted">entered {{ (c.last_entered_at or c.entered_at) | local('%d %b %Y') }}</span>{% endif %}
       {% if x.match %}<div class="small muted">Matched: {{ x.match | join('; ') }}</div>{% endif %}
+      {% elif g.tick %}<span class="muted">Not linked yet. Check the best guess compbot has ticked under Your verdict.</span>
+      {% elif e.category == 'possible_win' and g.guesses %}<span class="warn-text">Not sure which entry this is: pick one under Your verdict, and check it's genuine</span>
       {% elif e.category == 'possible_win' %}<span class="warn-text">No entry of yours matches it: check it's genuine</span>
       {% else %}<span class="muted">not matched</span>{% endif %}</dd>
     {% if e.action %}<dt>Action</dt><dd>{{ e.action }}</dd>{% endif %}
@@ -28,16 +30,16 @@
 </div>
 <div class="card" style="margin-bottom:14px">
   <h2>Your verdict</h2>
-  <form method="post" action="/inbox/{{ e.id }}/action" class="actions">
-    <select name="competition_id" style="max-width:260px">
-      <option value="">{{ 'Keep match' if c else 'Link to…' }}</option>
-      {% for rc in recent %}<option value="{{ rc.id }}">{{ (rc.prize or rc.title)[:60] }}</option>{% endfor %}
-    </select>
+  <form method="post" action="/inbox/{{ e.id }}/action" class="verdict">
+    {{ linker(e, c, g) }}
+    <div class="actions">
     <button class="btn small green" name="action" value="confirm_win">🏆 It's a win</button>
     <button class="btn small" name="action" value="not_win">Not a win</button>
     <button class="btn small" name="action" value="loss">Loss</button>
     <button class="btn small" name="action" value="link">Link</button>
+    </div>
   </form>
 </div>
 <p class="small muted">Score {{ e.score }}{% if e.signals %} · {{ e.signals | join(' · ') }}{% endif %}</p>
+{{ linker_script() }}
 {% endblock %}

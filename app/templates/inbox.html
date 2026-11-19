@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import badge, pager with context %}
+{% from "_macros.html" import badge, pager, linker, linker_script with context %}
 {% block title %}Inbox{% endblock %}
 {% block content %}
 <h1>Inbox</h1>
@@ -10,10 +10,11 @@
 </div>
 <div class="card" style="padding:0">
 <table>
-  <tr><th>Received</th><th>From / subject</th><th>Class</th><th>Competition</th><th></th></tr>
+  <tr><th>Received</th><th>From / subject</th><th>Class</th><th>Competition</th><th>Your verdict</th></tr>
   {% for e in rows %}
   {% set c = comps.get(e.competition_id) if e.competition_id else None %}
   {% set x = why[e.id] %}
+  {% set g = guesses[e.id] %}
   {% set gl = gmail_link(e) %}
   <tr id="email-{{ e.id }}">
     <td class="nowrap small">{{ e.received_at | local }}<div class="muted">{{ e.folder | folder_label }}</div></td>
@@ -27,18 +28,19 @@
     <td class="small">{% if c %}<a href="/competitions/{{ c.id }}">{{ (c.prize or c.title)[:60] }}</a>
       {% if c.last_entered_at or c.entered_at %}<div class="muted">entered {{ (c.last_entered_at or c.entered_at) | local('%d %b') }}</div>{% endif %}
       {% if x.match %}<div class="muted">Matched: {{ x.match | join('; ') }}</div>{% endif %}
+      {% elif g.tick %}<span class="muted">Not linked yet. Check the best guess compbot has ticked under Your verdict.</span>
+      {% elif e.category == 'possible_win' and g.guesses %}<span class="warn-text">Not sure which entry this is: pick one, and check it's genuine</span>
       {% elif e.category == 'possible_win' %}<span class="warn-text">No entry of yours matches it: check it's genuine</span>
       {% else %}<span class="muted">not matched</span>{% endif %}</td>
-    <td>
-      <form method="post" action="/inbox/{{ e.id }}/action" class="actions">
-        <select name="competition_id" style="max-width:200px">
-          <option value="">{{ 'Keep match' if c else 'Link to…' }}</option>
-          {% for rc in recent %}<option value="{{ rc.id }}">{{ (rc.prize or rc.title)[:60] }}</option>{% endfor %}
-        </select>
+    <td class="decide">
+      <form method="post" action="/inbox/{{ e.id }}/action">
+        {{ linker(e, c, g) }}
+        <div class="actions">
         <button class="btn small green" name="action" value="confirm_win">🏆 It's a win</button>
         <button class="btn small" name="action" value="not_win">Not a win</button>
         <button class="btn small" name="action" value="loss">Loss</button>
         <button class="btn small" name="action" value="link">Link</button>
+        </div>
       </form>
     </td>
   </tr>
@@ -46,4 +48,5 @@
 </table>
 </div>
 {{ pager(page, pages) }}
+{{ linker_script() }}
 {% endblock %}

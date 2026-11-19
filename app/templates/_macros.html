@@ -28,3 +28,96 @@
 </div>
 {% endif %}
 {%- endmacro %}
+
+{# Which competition an email is about, inside the email's form (its buttons send the one ticked): compbot's guesses,
+   with a clear favourite ticked for you, then "keep" / "don't link", then a box to find any other entry by typing.
+   Needs linker_script() once on the page. #}
+{% macro linker(e, c, g) -%}
+<div class="linker">
+  {% if c %}<details><summary class="small">Wrong competition? Change it</summary>{% endif %}
+  {% if g.guesses %}<div class="small muted">{{ 'Best guess, ticked for you:' if g.tick else 'Best guess:' if g.confident and not c else 'Could be:' }}</div>
+  {% elif not c %}<div class="small muted">None of the {{ g.pool }} competitions you entered in the last {{ match_days }} days looks like it.</div>{% endif %}
+  {% for x in g.guesses %}{% set gc = x.comp %}{% set when = gc.last_entered_at or gc.entered_at %}{% set site = comp_site(gc) %}
+  <label class="guess"><input type="radio" name="competition_id" value="{{ gc.id }}"{{ ' checked' if loop.first and g.tick }}>
+    <span><span class="guess-title">{{ gc.prize or gc.title }}</span>
+      <span class="small muted">{% if when %}entered {{ when | local('%d %b') }}{% endif %}{% if when and site %} · {% endif %}{{ site }}</span>
+      {% if x.reasons %}<span class="small guess-why">{{ x.reasons | join('; ') }}</span>{% endif %}</span></label>
+  {% endfor %}
+  <label class="guess picked" hidden><input type="radio" name="competition_id" value="">
+    <span><span class="guess-title"></span><span class="small muted"></span></span></label>
+  <label class="guess"><input type="radio" name="competition_id" value=""{{ ' checked' if not g.tick }}>
+    <span>{% if c %}Keep it linked to {{ c.prize or c.title }}{% else %}Don't link it to a competition{% endif %}</span></label>
+  <input type="search" class="find" placeholder="Find another entry: type a word or two" autocomplete="off"
+         aria-label="Find another competition you entered">
+  <div class="find-results" hidden></div>
+  {% if c %}</details>{% endif %}
+</div>
+{%- endmacro %}
+
+{% macro linker_script() -%}
+<script>
+(function () {
+  // "Find another entry": as you type, lists the competitions you've entered with those words; choosing one ticks it.
+  const brief = c => [c.entered && 'entered ' + c.entered, c.site].filter(Boolean).join(' \u00b7 ');
+  const results = box => box.querySelector('.find-results');
+  const close = box => { const l = results(box); l.hidden = true; l.replaceChildren(); };
+  const note = (box, text) => {
+    const l = results(box), d = document.createElement('div');
+    d.className = 'small muted find-note'; d.textContent = text; l.replaceChildren(d); l.hidden = false;
+  };
+  const pick = (box, c) => {
+    const p = box.querySelector('.picked'), r = p.querySelector('input');
+    r.value = String(c.id);
+    p.querySelector('.guess-title').textContent = c.label;
+    p.querySelector('.small').textContent = brief(c);
+    p.hidden = false;
+    r.checked = true;
+    box.querySelector('.find').value = '';
+    close(box);
+  };
+  const show = (box, found, q) => {
+    if (!found.length) return note(box, 'Nothing you\u2019ve entered has \u201c' + q + '\u201d in its title or site.');
+    const l = results(box);
+    l.replaceChildren(...found.map(c => {
+      const b = document.createElement('button'), t = document.createElement('span'), m = document.createElement('span');
+      b.type = 'button'; b.className = 'find-item';
+      t.textContent = c.label; m.className = 'small muted'; m.textContent = brief(c);
+      b.append(t, m);
+      b.addEventListener('click', () => pick(box, c));
+      return b;
+    }));
+    l.hidden = false;
+  };
+  const timers = new WeakMap();
+  document.addEventListener('input', e => {
+    const input = e.target.closest('.linker .find');
+    if (!input) return;
+    const box = input.closest('.linker'), q = input.value.trim();
+    box.classList.add('dirty');  // you're choosing: the page won't refresh itself under you
+    clearTimeout(timers.get(input));
+    if (q.length < 2) return close(box);
+    timers.set(input, setTimeout(() => {
+      fetch('/inbox/find-comp?q=' + encodeURIComponent(q), {credentials: 'same-origin'})
+        .then(r => r.ok ? r.json() : Promise.reject(r.status))
+        .then(d => { if (input.value.trim() === q) show(box, d.results || [], q); })
+        .catch(() => note(box, 'Couldn\u2019t search just now: reload the page and try again.'));
+    }, 200));
+  });
+  document.addEventListener('change', e => { const box = e.target.closest('.linker'); if (box) box.classList.add('dirty'); });
+  // Enter picks the first match (rather than sending the form), arrows move through the list, Escape closes it.
+  document.addEventListener('keydown', e => {
+    const input = e.target.closest('.linker .find'), item = e.target.closest('.linker .find-item');
+    if (!input && !item) return;
+    const box = (input || item).closest('.linker'), first = box.querySelector('.find-item');
+    if (e.key === 'Escape') { close(box); if (item) box.querySelector('.find').focus(); return; }
+    if (input && e.key === 'Enter') { e.preventDefault(); if (first) first.click(); return; }
+    if (input && e.key === 'ArrowDown' && first) { e.preventDefault(); first.focus(); return; }
+    if (item && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+      e.preventDefault();
+      const next = e.key === 'ArrowDown' ? item.nextElementSibling : item.previousElementSibling;
+      (next || (e.key === 'ArrowUp' ? box.querySelector('.find') : item)).focus();
+    }
+  });
+})();
+</script>
+{%- endmacro %}

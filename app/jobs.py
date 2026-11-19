@@ -10,6 +10,7 @@ from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import or_, select
+from sqlalchemy.orm import defer
 
 from . import llm
 from .analyse import COMP_URL_HINT, NEEDS_ANSWERS_RE, NON_ENTRY_URL_HINT, Analysis, apply_analysis, analyse, \
@@ -926,6 +927,19 @@ def run_inbox() -> str:
 
 
 EMAIL_TEXT_KEPT = 5000  # characters of each email's text kept for the Inbox (the rest is a click away in Gmail)
+MATCH_DAYS = 200  # an email can be about a competition you entered (last) up to this many days before
+
+
+def entered_comps(s, days: int | None = MATCH_DAYS, light: bool = False) -> list:
+    """Competitions you've entered: the ones an email can be about (by default, entered in the last MATCH_DAYS).
+    light: without each one's (long) forum post, for pages that only show titles."""
+    stmt = select(Competition).where(or_(Competition.status == "entered", Competition.entry_count > 0))
+    if days:
+        stmt = stmt.where(or_(Competition.last_entered_at.is_(None),
+                              Competition.last_entered_at >= utcnow() - timedelta(days=days)))
+    if light:
+        stmt = stmt.options(defer(Competition.body_text))
+    return list(s.scalars(stmt).all())
 
 
 def forget_own_alerts() -> int:
@@ -1010,11 +1024,8 @@ def _inbox() -> str:
         last = get_state(s, "inbox_last_run")
         gui_url = get_state(s, "gui_url")
         known = set(s.scalars(select(Email.message_id)).all())
-        cutoff = utcnow() - timedelta(days=200)
         # Detached snapshot of entered comps for matching (expire_on_commit=False keeps attributes loaded).
-        comps = list(s.scalars(select(Competition).where(
-            or_(Competition.status == "entered", Competition.entry_count > 0),
-            or_(Competition.last_entered_at.is_(None), Competition.last_entered_at >= cutoff))).all())
+        comps = entered_comps(s)
     started = utcnow()
     since = inbox.default_since(datetime.fromisoformat(last) if last else None)
     _progress["inbox"] = "Connecting to Gmail"

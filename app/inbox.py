@@ -3,18 +3,23 @@ from __future__ import annotations
 
 import email
 import hashlib
+import heapq
 import imaplib
 import logging
+import math
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header, make_header
 from email.utils import parseaddr, parsedate_to_datetime
+from types import SimpleNamespace
 from urllib.parse import quote
 
 from bs4 import BeautifulSoup
 
 from .analyse import registrable_domain
+from .dedup import money_amounts, title_tokens
 
 log = logging.getLogger("compbot.inbox")
 
@@ -354,6 +359,204 @@ def explain(subject: str, text: str, from_domain: str, comp=None, category: str 
         if words:
             ex.match.append(f"both mention {_quoted(words, 5)}")
     return ex
+
+
+# --------------------------------------------------------------------------- guessing the competition
+
+# Anyone can send from these, so a shared one says nothing about which competition an email is about.
+FREEMAIL = {"gmail.com", "googlemail.com", "hotmail.com", "hotmail.co.uk", "outlook.com", "live.com", "live.co.uk",
+            "msn.com", "yahoo.com", "yahoo.co.uk", "icloud.com", "me.com", "aol.com", "aol.co.uk", "btinternet.com",
+            "sky.com", "virginmedia.com", "protonmail.com", "proton.me", "gmx.com", "mail.com"}
+# Site names too general to say two sites belong to the same brand ("mail" is in "dailymail", "comps" in "ukcomps").
+GENERIC_LABELS = {"mail", "email", "news", "info", "comp", "comps", "competition", "competitions", "prize", "prizes",
+                  "winner", "winners", "shop", "store", "online", "service", "services", "group", "official",
+                  "media", "marketing", "promo", "promos", "promotions", "offers", "rewards", "club", "home"}
+GUESS_MIN = 1.5               # a weaker guess isn't worth showing
+SURE_MIN, SURE_LEAD = 4.0, 1.5  # ticked for you only when this strong and this far ahead of the next one
+
+
+@dataclass
+class Guess:
+    comp: object
+    score: float
+    reasons: list[str]
+
+
+@dataclass
+class Guesses:
+    guesses: list[Guess] = field(default_factory=list)
+    confident: bool = False  # the first is a clear favourite
+    pool: int = 0            # how many competitions you entered were considered
+    tick: bool = False       # the Inbox ticks the favourite for you (set by the page: it depends on the email)
+
+
+def _plain(text: str) -> str:
+    """Lower case without accents or apostrophes ("Café Nolan’s" -> "cafe nolans"), for typing to find a comp."""
+    t = unicodedata.normalize("NFKD", text or "")
+    return "".join(ch for ch in t if not unicodedata.combining(ch)).lower().replace("'", "").replace("\u2019", "")
+
+
+def _site_label(domain: str) -> str:
+    return (domain or "").split(".", 1)[0]
+
+
+def comp_site(c) -> str:
+    """The competition's own site (its promoter, else its first entry page's), to tell similar prizes apart."""
+    if c.promoter_domain and c.promoter_domain not in FREEMAIL:
+        return c.promoter_domain
+    return next((d for d in (registrable_domain(u) for u in (c.entry_urls or [])) if d and d not in FREEMAIL), "")
+
+
+def _same_brand(a: str, b: str) -> bool:
+    """kraftheinz / heinz, heinz (heinz.com) / heinz (heinz.co.uk): one site's name inside the other's."""
+    if len(a) < 4 or len(b) < 4 or a in GENERIC_LABELS or b in GENERIC_LABELS:
+        return False
+    return a in b or b in a
+
+
+class CompIndex:
+    """The competitions you entered, indexed so the Inbox can guess which one an email is about, and find one from a
+    few typed words.
+
+    A guess weighs up, for each competition:
+      * the sender: the competition's own site (kraftheinz.com for heinz.com counts too, as a brand's other site);
+        a site shared by many of your entries (a competition platform) counts for less;
+      * the words both use, rare ones counting most ("Heinz" says more than "voucher"); words in the subject or the
+        sender's name count most, then the opening lines (where the prize is usually named), then the rest;
+      * the same £ amount; and, to break ties, how recently you entered.
+    Competitions first entered after the email arrived can't be what it's about. To stay quick with thousands of
+    entries, each word's rarity is worked out once, and the reasons are only written for the guesses shown.
+    Different £ amounts don't rule a
+    competition out: an email names the prize you won ("a £50 Heinz to Home voucher"), the listing its top prize
+    ("Win a £250 Honest Burgers voucher ... or Heinz to Home vouchers").
+    """
+
+    def __init__(self, comps: list):
+        self.comps = list(comps)
+        self._tok: dict[int, set[str]] = {}
+        self._money: dict[int, set[int]] = {}
+        self._doms: dict[int, set[str]] = {}
+        self._hay: dict[int, tuple[str, ...]] = {}
+        self._by_word: dict[str, list] = {}
+        self._by_domain: dict[str, list] = {}
+        for c in self.comps:
+            k = id(c)
+            self._tok[k] = {w for w in title_tokens(c.title) | title_tokens(c.prize) if not w.isdigit()}
+            self._money[k] = money_amounts(c.title) | money_amounts(c.prize)
+            self._doms[k] = {d for d in _comp_domains(c) if d not in FREEMAIL}
+            self._hay[k] = tuple(dict.fromkeys(re.findall(
+                r"[a-z0-9]+", _plain(f"{c.title or ''} {c.prize or ''} {' '.join(sorted(self._doms[k]))}"))))
+            for w in self._tok[k]:
+                self._by_word.setdefault(w, []).append(c)
+            for d in self._doms[k]:
+                self._by_domain.setdefault(d, []).append(c)
+        n = len(self.comps)
+        top = max(math.log((n + 1) / 1.5), 0.1)
+        # 0-1: 1 for a word only one competition uses, near 0 for one most of them use.
+        self._rarity = {w: max(0.05, min(1.0, math.log((n + 1) / (len(cs) + 0.5)) / top))
+                        for w, cs in self._by_word.items()}
+        # Words a sender's site name might contain ("heinz" in kraftheinz.com): long, and rare enough to mean something.
+        self._name_words = [w for w, r in self._rarity.items() if len(w) >= 4 and r >= 0.6]
+
+    def _rare(self, word: str) -> float:
+        return self._rarity.get(word, 1.0)
+
+    def _site_weight(self, domain: str) -> float:
+        return min(1.0, 3 / max(len(self._by_domain.get(domain, ())), 1))
+
+    @staticmethod
+    def _when(c) -> datetime | None:
+        return getattr(c, "last_entered_at", None) or getattr(c, "entered_at", None)
+
+    def rank(self, subject: str, text: str, from_domain: str = "", from_name: str = "",
+             received_at: datetime | None = None, limit: int = 3, exclude: int | None = None) -> Guesses:
+        head = {w for w in title_tokens(f"{subject or ''} {from_name or ''}") if not w.isdigit()}
+        lead = {w for w in title_tokens((text or "")[:800]) if not w.isdigit()}
+        words = head | lead | {w for w in title_tokens((text or "")[:4000]) if not w.isdigit()}
+        # Each word's worth: rarer counts more; the subject and sender's name most, then the opening lines.
+        worth = {w: self._rarity[w] * (1.25 if w in head else 1.0 if w in lead else 0.6)
+                 for w in words if w in self._rarity}
+        sender = "" if (from_domain or "") in FREEMAIL else (from_domain or "")
+        slabel = _site_label(sender)
+        ctx = SimpleNamespace(
+            worth=worth, words=set(worth), amounts=money_amounts(f"{subject or ''} {(text or '')[:2000]}"),
+            sender=sender, ref=received_at or datetime.now(timezone.utc).replace(tzinfo=None),
+            brand_sites={d for d in self._by_domain if _same_brand(slabel, _site_label(d))} if slabel else set(),
+            named_words={w for w in self._name_words if w in slabel} if slabel else set())
+
+        # Every competition sharing a word or a site is scored, common words included: one that shares only "gift
+        # voucher" can still be the runner-up that stops a guess counting as a clear favourite.
+        cands = {id(c): c for w in worth for c in self._by_word[w]}
+        for d in {sender} | ctx.brand_sites:
+            cands.update({id(c): c for c in self._by_domain.get(d, ())})
+        for w in ctx.named_words:
+            cands.update({id(c): c for c in self._by_word[w]})
+
+        scored: list[tuple[float, datetime, int]] = []
+        for k, c in cands.items():
+            if exclude is not None and getattr(c, "id", None) == exclude:
+                continue
+            first = getattr(c, "entered_at", None) or self._when(c)
+            if received_at and first and first > received_at + timedelta(days=1):
+                continue  # entered after the email came: it can't be about this one
+            scored.append((self._score(k, c, ctx)[0], self._when(c) or datetime.min, k))
+        best = heapq.nlargest(max(limit, 2), scored)
+        top = [Guess(cands[k], round(s, 2), self._score(k, cands[k], ctx, explain=True)[1])
+               for s, _, k in best[:limit] if s >= GUESS_MIN]
+        sure = bool(top) and top[0].score >= SURE_MIN and (len(best) < 2 or best[0][0] - best[1][0] >= SURE_LEAD)
+        return Guesses(top, sure, len(self.comps))
+
+    def _score(self, k: int, c, ctx, explain: bool = False) -> tuple[float, list[str]]:
+        """How likely the email is about competition c, and (only when asked, as it's slower) why in words."""
+        score, reasons = 0.0, []
+        doms, sender = self._doms[k], ctx.sender
+        brand = sorted(doms & ctx.brand_sites) if ctx.brand_sites else []
+        if sender and sender in doms:
+            score += 3 * self._site_weight(sender)
+            if explain:
+                reasons.append(f"it's from the competition's site ({sender})")
+        elif brand:
+            score += 2 * self._site_weight(brand[0])
+            if explain:
+                reasons.append(f"the sender, {sender}, looks like the competition's site ({brand[0]})")
+        shared = self._tok[k] & ctx.words
+        money = self._money[k] & ctx.amounts
+        if shared:
+            score += min(3 * sum(ctx.worth[w] for w in shared), 6.0)
+        if money:
+            score += 1.0
+        if explain and (shared or money):
+            said = [f"\u201c{w}\u201d" for w in sorted(shared, key=lambda w: (-self._rare(w), w))[:5]]
+            reasons.append(f"both mention {', '.join(said + ([f'£{min(money):,}'] if money else []))}")
+        if ctx.named_words and not (sender in doms or brand):
+            # A comp with no site of its own (found on a listing site) can still be named by the sender.
+            named = sorted(self._tok[k] & ctx.named_words, key=lambda w: (-self._rare(w), w))
+            if named:
+                score += 1.5 * self._rare(named[0])
+                if explain:
+                    reasons.append(f"the sender, {sender}, has \u201c{named[0]}\u201d in its name")
+        when = self._when(c)
+        if when:  # ties go to the more recent entry
+            score += 0.3 * max(0.0, 1 - abs((ctx.ref - when).days) / 120)
+        return score, reasons
+
+    def search(self, query: str, limit: int = 20) -> list:
+        """Competitions whose title, prize or site has every typed word (or the start of it), fullest match first,
+        then most recently entered. "#123" finds competition 123."""
+        q = (query or "").strip()
+        if m := re.fullmatch(r"#\s*(\d+)", q):
+            return [c for c in self.comps if getattr(c, "id", None) == int(m.group(1))][:1]
+        terms = list(dict.fromkeys(re.findall(r"[a-z0-9]+", _plain(q).replace("\u00a3", " "))))
+        if not terms:
+            return []
+        found = []
+        for c in self.comps:
+            hay = self._hay[id(c)]
+            if all(any(w.startswith(t) for w in hay) for t in terms):
+                whole = sum(t in hay for t in terms)
+                found.append((whole, self._when(c) or datetime.min, c))
+        found.sort(key=lambda t: (t[0], t[1]), reverse=True)
+        return [c for _, _, c in found[:limit]]
 
 
 def gmail_link(message_id: str, account: str | None = None) -> str | None:

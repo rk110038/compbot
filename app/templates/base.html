@@ -92,8 +92,8 @@ document.addEventListener('click', e => {
   navigator.clipboard.writeText(el.dataset.copy).then(() => { el.classList.add('copied'); setTimeout(() => el.classList.remove('copied'), 1200); });
 });
 {% if running and not no_autoreload %}
-// Refresh while a job runs, but not while the menu is open.
-(function wait() { setTimeout(() => document.querySelector('header.top.nav-open') ? wait() : location.reload(), 15000); })();
+// Refresh while a job runs, but not while the menu is open or you're choosing an email's competition.
+(function wait() { setTimeout(() => document.querySelector('header.top.nav-open, .linker.dirty') ? wait() : location.reload(), 15000); })();
 {% endif %}
 </script>
 </body>

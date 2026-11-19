@@ -143,6 +143,8 @@ templates.env.globals["version"] = __version__
 templates.env.globals["static_v"] = STATIC_V
 templates.env.globals["cfg"] = cfg
 templates.env.globals["gmail_link"] = lambda e: inbox.gmail_link(e.message_id, cfg.gmail_address)
+templates.env.globals["comp_site"] = inbox.comp_site
+templates.env.globals["match_days"] = jobs.MATCH_DAYS
 
 
 def _qs(request: Request, **changes) -> str:
@@ -540,19 +542,59 @@ def inbox_view(request: Request, category: str = "possible_win", page: int = 1):
         rows = s.scalars(stmt.order_by(Email.received_at.desc().nulls_last(), Email.id.desc())
                          .offset((page - 1) * 50).limit(50)).all()
         counts = dict(s.execute(select(Email.category, func.count(Email.id)).group_by(Email.category)).all())
-        recent = s.scalars(select(Competition).where(or_(Competition.status == "entered", Competition.entry_count > 0))
-                           .order_by(Competition.entered_at.desc()).limit(300)).all()
-        comps = {c.id: c for c in recent}
+        pool = jobs.entered_comps(s, light=True)
+        comps = {c.id: c for c in pool}
         for r in rows:
             if r.competition_id and r.competition_id not in comps:
                 comps[r.competition_id] = s.get(Competition, r.competition_id)
         why = {r.id: _explain(r, comps.get(r.competition_id)) for r in rows}
+        guesses = _guesses(rows, pool)
     return render(request, "inbox.html", rows=rows, category=category, counts=counts, cats=EMAIL_CATS,
-                  comps=comps, recent=recent, why=why, page=page, pages=max(1, (total + 49) // 50), total=total)
+                  comps=comps, guesses=guesses, why=why, page=page, pages=max(1, (total + 49) // 50), total=total)
 
 
 def _explain(e: Email, comp: Competition | None) -> inbox.Explanation:
     return inbox.explain(e.subject, e.snippet, e.from_domain, comp, e.category, e.signals)
+
+
+def _guesses(emails: list[Email], pool: list[Competition]) -> dict[int, inbox.Guesses]:
+    """For each email, the competitions you entered that it's most likely about (other than the one it's linked to).
+    A clear favourite is ticked for you only on a possible win or a loss that isn't linked yet: elsewhere (promos,
+    confirmations) a ticked guess could ride along with a button pressed for another reason."""
+    idx = inbox.CompIndex(pool)
+    out = {}
+    for e in emails:
+        g = idx.rank(e.subject, e.snippet, e.from_domain, e.from_name, e.received_at, exclude=e.competition_id)
+        g.tick = g.confident and not e.competition_id and e.category in ("possible_win", "loss")
+        out[e.id] = g
+    return out
+
+
+def _brief(c: Competition) -> dict:
+    when = c.last_entered_at or c.entered_at
+    return {"id": c.id, "label": (c.prize or c.title or "")[:300], "entered": _local(when, "%d %b %Y") if when else "",
+            "site": inbox.comp_site(c)}
+
+
+_find_cache: dict = {}
+
+
+def _find_index(s) -> inbox.CompIndex:
+    """Everything you've ever entered, indexed for the search box; rebuilt only when a competition has changed, not
+    on every keystroke."""
+    entered = or_(Competition.status == "entered", Competition.entry_count > 0)
+    key = tuple(s.execute(select(func.count(Competition.id), func.max(Competition.updated_at)).where(entered)).one())
+    if _find_cache.get("key") != key:
+        _find_cache.update(key=key, idx=inbox.CompIndex(jobs.entered_comps(s, days=None, light=True)))
+    return _find_cache["idx"]
+
+
+@app.get("/inbox/find-comp")
+def find_comp(q: str = ""):
+    """The Inbox's "find another entry" box: competitions you've entered (ever) that have the typed words."""
+    with session_scope() as s:
+        found = _find_index(s).search(q[:100])
+        return {"results": [_brief(c) for c in found]}
 
 
 @app.get("/inbox/{eid}", response_class=HTMLResponse)
@@ -563,9 +605,8 @@ def email_view(request: Request, eid: int):
         if not e:
             raise HTTPException(404)
         comp = s.get(Competition, e.competition_id) if e.competition_id else None
-        recent = s.scalars(select(Competition).where(or_(Competition.status == "entered", Competition.entry_count > 0))
-                           .order_by(Competition.entered_at.desc()).limit(300)).all()
-    return render(request, "email.html", e=e, c=comp, x=_explain(e, comp), recent=recent,
+        guesses = _guesses([e], jobs.entered_comps(s, light=True))[e.id]
+    return render(request, "email.html", e=e, c=comp, x=_explain(e, comp), g=guesses,
                   kept=jobs.EMAIL_TEXT_KEPT)
 
 
@@ -584,8 +625,10 @@ def inbox_action(request: Request, eid: int, action: str = Form(...), competitio
             msg = "Win confirmed" + (f" for {c.title[:60]}" if c else " (link it to a competition to track the prize)")
         elif action == "not_win":
             e.category, e.reviewed = "other", True
-            if c and c.outcome == "possible_win":
-                c.outcome = "pending"
+            # Only the competition this email made a possible win, never a guess that happened to be ticked.
+            linked = s.get(Competition, e.competition_id) if e.competition_id else None
+            if linked and linked.outcome == "possible_win":
+                linked.outcome = "pending"
             msg = "Marked as not a win"
         elif action == "loss":
             e.category, e.reviewed, e.competition_id = "loss", True, cid
