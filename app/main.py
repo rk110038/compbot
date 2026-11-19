@@ -402,11 +402,14 @@ def competition_action(request: Request, cid: int, action: str = Form(...), note
             msg = "Thanks - entry confirmed"
         elif action == "won":
             c.outcome, c.won_at, c.outcome_note = "won", utcnow(), note or c.outcome_note
+            _settle_win_emails(s, cid, "won")
             msg = "Congratulations! Marked as won"
         elif action == "lost":
             c.outcome, c.outcome_note = "lost", note or "Marked lost by you"
             msg = "Marked as lost"
         elif action == "pending":
+            if c.outcome == "possible_win":
+                _settle_win_emails(s, cid, "other")  # "Not a win" on the Wins page
             c.outcome, c.outcome_note = "pending", ""
         elif action == "skip":
             c.status, c.status_reason = "skipped", "Skipped by you"
@@ -528,7 +531,14 @@ def manual_queue(request: Request, method: str = "", reason: str = ""):
 
 # --------------------------------------------------------------------------- inbox
 
-EMAIL_CATS = ["possible_win", "loss", "confirm", "entry_ack", "scam_suspect", "promo", "other"]
+EMAIL_CATS = ["possible_win", "won", "loss", "confirm", "entry_ack", "scam_suspect", "promo", "other"]
+
+
+def _settle_win_emails(s, comp_id: int, category: str) -> None:
+    """Your verdict on a possible win files the emails that suggested it ("won", or "other" if it wasn't one), so
+    they leave the Inbox's possible-win tab."""
+    for e in s.scalars(select(Email).where(Email.competition_id == comp_id, Email.category == "possible_win")).all():
+        e.category, e.reviewed = category, True
 
 
 @app.get("/inbox", response_class=HTMLResponse)
@@ -619,9 +629,10 @@ def inbox_action(request: Request, eid: int, action: str = Form(...), competitio
         cid = int(competition_id) if competition_id.strip().isdigit() else e.competition_id
         c = s.get(Competition, cid) if cid else None
         if action == "confirm_win":
-            e.category, e.reviewed, e.competition_id = "possible_win", True, cid
+            e.category, e.reviewed, e.competition_id = "won", True, cid
             if c:
                 c.outcome, c.won_at, c.outcome_note = "won", utcnow(), f"Win email: {e.subject[:200]}"
+                _settle_win_emails(s, c.id, "won")  # the same win's other emails (a copy in Spam, a reminder)
             msg = "Win confirmed" + (f" for {c.title[:60]}" if c else " (link it to a competition to track the prize)")
         elif action == "not_win":
             e.category, e.reviewed = "other", True

@@ -149,3 +149,39 @@ def test_inbox_guesses_the_competition_and_finds_others_by_typing():
         assert r.status_code == 303
     with session_scope() as s:
         assert s.get(Email, eid).competition_id == hid and s.get(Competition, hid).outcome == "won"
+        assert s.get(Email, eid).category == "won"
+    with TestClient(app) as client:
+        assert f'id="email-{eid}"' not in client.get("/inbox?category=possible_win", headers=H).text
+        won_tab = client.get("/inbox?category=won", headers=H).text
+        assert f'id="email-{eid}"' in won_tab and ">won (" in won_tab
+
+
+def test_a_win_you_confirm_leaves_the_possible_win_tab():
+    from app.db import Competition, Email, init_db, session_scope
+    from app.main import app
+    init_db()
+    with session_scope() as s:
+        comps = [Competition(source="test", source_id=f"settle-{i}", thread_url="x", title=f"Win prize {i}",
+                             method="web_form", status="entered", entry_count=1, outcome=o)
+                 for i, o in enumerate(["possible_win", "possible_win", "won"])]
+        s.add_all(comps)
+        s.flush()
+        mails = [Email(message_id=f"<settle-{i}@x>", subject=f"You won {i}", category="possible_win",
+                       competition_id=cid, reviewed=rev)
+                 for i, (cid, rev) in enumerate([(comps[0].id, False), (comps[1].id, False), (comps[2].id, True),
+                                                 (None, True), (None, False)])]
+        s.add_all(mails)
+        s.flush()
+        cids, eids = [c.id for c in comps], [e.id for e in mails]
+    # Already confirmed before "won" existed: filed under it when compbot starts.
+    init_db()
+    with session_scope() as s:
+        assert [s.get(Email, i).category for i in eids[2:]] == ["won", "won", "possible_win"]
+    # The Wins page's buttons file the emails behind a possible win too.
+    with TestClient(app) as client:
+        for cid, action in [(cids[0], "won"), (cids[1], "pending")]:
+            client.post(f"/competitions/{cid}/action", data={"action": action},
+                        headers={**H, "Origin": "http://testserver"}, follow_redirects=False)
+    with session_scope() as s:
+        assert [s.get(Email, i).category for i in eids[:2]] == ["won", "other"]
+        assert all(s.get(Email, i).reviewed for i in eids[:2])

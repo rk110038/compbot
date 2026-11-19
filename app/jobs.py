@@ -974,9 +974,10 @@ def forget_own_alerts() -> int:
     return len(rows)
 
 
-def _win_alert(m, c, comp, email_id: int, gui_url: str | None) -> tuple[str, str, str | None]:
+def _win_alert(m, c, comp, email_id: int, gui_url: str | None, guesses=None) -> tuple[str, str, str | None]:
     """(subject, text, link) for a possible-win alert. It says what the email was - who sent it, its subject, when,
-    and the sentence that says you've won - and which entry it looks like, so it makes sense without opening compbot."""
+    and the sentence that says you've won - and which entry it looks like (or, when compbot can't tell, the entries
+    it could be), so it makes sense without opening compbot."""
     from . import inbox
 
     cfg = get_config()
@@ -996,6 +997,11 @@ def _win_alert(m, c, comp, email_id: int, gui_url: str | None) -> tuple[str, str
                      + (f" (entered {entered.day} {entered:%b %Y})" if entered else ""))
         if ex.match:
             lines.append(f"  because {' and '.join(ex.match)}")
+    elif guesses and guesses.guesses:
+        lines.append("compbot isn't sure which of your entries it's about. It could be:")
+        for x in guesses.guesses:
+            lines.append(f"  - {x.comp.prize or x.comp.title}" + (f" ({'; '.join(x.reasons)})" if x.reasons else ""))
+        lines.append("Check it's genuine, then pick the right one in compbot's Inbox.")
     else:
         lines.append("It doesn't match a competition compbot knows you entered, so check it's genuine.")
     if ex.why:
@@ -1026,6 +1032,7 @@ def _inbox() -> str:
         known = set(s.scalars(select(Email.message_id)).all())
         # Detached snapshot of entered comps for matching (expire_on_commit=False keeps attributes loaded).
         comps = entered_comps(s)
+    index = inbox.CompIndex(comps)
     started = utcnow()
     since = inbox.default_since(datetime.fromisoformat(last) if last else None)
     _progress["inbox"] = "Connecting to Gmail"
@@ -1042,7 +1049,7 @@ def _inbox() -> str:
         if m.message_id in known or m.own:
             continue
         known.add(m.message_id)
-        c = inbox.classify(m, comps)
+        c = inbox.classify(m, comps, index)
         if llm.enabled(settings) and settings.get("llm_for_email") and (c.score >= 1 or c.competition_id):
             verdict = llm.classify_email(m.from_addr, m.subject, m.text, titles.get(c.competition_id), settings)
             if verdict and verdict.get("category") in {"possible_win", "loss", "confirm", "entry_ack", "promo",
@@ -1068,7 +1075,9 @@ def _inbox() -> str:
                 log_event(s, "inbox", f"Possible win: '{m.subject}' from {m.from_addr}{where}", "success",
                           comp.id if comp else None)
                 try:
-                    alert = _win_alert(m, c, comp, email_id, gui_url)
+                    guesses = None if comp else index.rank(m.subject, m.text, m.from_domain, m.from_name,
+                                                           m.received_at)
+                    alert = _win_alert(m, c, comp, email_id, gui_url, guesses)
                 except Exception as exc:  # noqa: BLE001 - never lose the email over its alert's wording
                     log.warning("possible-win alert text failed: %s", exc)
                     alert = (f"Possible win: {m.subject}"[:180], f"From: {m.from_addr}\nSubject: {m.subject}\n{where}"

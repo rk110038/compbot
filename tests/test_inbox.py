@@ -190,9 +190,12 @@ def test_a_competition_entered_after_the_email_is_not_a_guess():
 
     from app.inbox import CompIndex
 
-    later = [_entered(1, "Win 1 of 2 Gruffalo Party Bags", days_ago=-3)]
+    later = [_entered(1, "Win 1 of 2 Gruffalo Party Bags", days_ago=-10)]
     assert not CompIndex(later).rank("Gruffalo party bags", "You won", "", "", datetime(2026, 11, 18)).guesses
     assert CompIndex(later).rank("Gruffalo party bags", "You won", "", "", None).guesses  # date unknown: allowed
+    # Marked "I've entered it" a few days after the email came: still a guess.
+    soon = [_entered(1, "Win 1 of 2 Gruffalo Party Bags", days_ago=-3)]
+    assert CompIndex(soon).rank("Gruffalo party bags", "You won", "", "", datetime(2026, 11, 18)).guesses
 
 
 def test_typing_a_few_words_finds_an_entry():
@@ -230,3 +233,59 @@ def test_a_runner_up_sharing_only_common_words_still_stops_a_tick():
     pool = filler + [_entered(1, "Win a £100 gift voucher for the family"), _entered(2, "Win a £100 gift voucher")]
     g = CompIndex(pool).rank("You've won a £100 family gift voucher", "Congratulations.", "rewards-mailer.com")
     assert [x.comp.id for x in g.guesses[:2]] == [1, 2] and not g.confident
+
+
+# --------------------------------------------------------------------------- linking an email as it arrives
+
+def test_arriving_email_is_linked_to_a_clear_favourite_or_its_own_sites_entry():
+    m = _mail("Consumer Services UK & I <consumercare@kraftheinz.com>", "You've won a £50 Voucher for Heinz to Home",
+              HEINZ)
+    c = classify(m, ENTERED)
+    assert c.competition_id == 50 and "matches comp #50" in c.signals[0]
+    x = explain(m.subject, m.text, m.from_domain, ENTERED[-2], c.category, c.signals)
+    assert x.match[0] == "the sender, kraftheinz.com, looks like the competition's site (heinz.com)"
+    # Three "£250 voucher" entries fit equally: left for you to pick.
+    assert classify(_mail("Prizes <prizes@vouchers.example>", "You won a £250 voucher",
+                          "Congratulations, your £250 voucher is on its way."), ENTERED).competition_id is None
+    # A confirmation from the competition's own site names no prize, and is still linked (so its link is clicked).
+    conf = _mail("Fall-Line <hello@fall-line.co.uk>", "Please confirm your subscription", "Click the link below.")
+    assert classify(conf, COMPS).competition_id == 2
+    # Anyone can send from gmail.com: it isn't the site of a competition entered by emailing a gmail address.
+    by_mail = [SimpleNamespace(id=7, title="Win a hamper", prize="", entry_urls=[], promoter_domain=None,
+                               email_to="comps@gmail.com")]
+    assert classify(_mail("Jo <jo@gmail.com>", "Hello", "Congratulations on your new job!"), by_mail).competition_id is None
+
+
+def test_an_unlinked_win_alert_lists_the_entries_it_could_be():
+    from app.inbox import CompIndex
+    from app.jobs import _win_alert
+
+    m = _mail("Prizes <prizes@vouchers.example>", "You won a £250 voucher",
+              "Congratulations, your £250 voucher is on its way.")
+    c = classify(m, ENTERED)
+    g = CompIndex(ENTERED).rank(m.subject, m.text, m.from_domain, m.from_name, m.received_at)
+    _, text, _ = _win_alert(m, c, None, 1, None, g)
+    assert "compbot isn't sure which of your entries it's about. It could be:" in text
+    assert "  - Win a £250 voucher to spend on fine wine at Squelch (both mention \u201cvoucher\u201d, £250)" in text
+    _, text, _ = _win_alert(m, c, None, 1, None, None)
+    assert "It doesn't match a competition compbot knows you entered" in text
+
+
+def test_a_confirmation_from_a_site_with_two_entries_goes_to_the_latest():
+    site = "https://www.countryandtownhouse.com/win/"
+    comps = [_entered(60, "Win a Herbelin watch", urls=[site + "herbelin"], days_ago=3),
+             _entered(61, "Win a Mulberry bag", urls=[site + "mulberry"], days_ago=0)]
+    conf = _mail("Comps <comps@countryandtownhouse.com>", "Please confirm your entry", "Click the link below.")
+    assert classify(conf, comps).competition_id == 61
+    assert classify(conf, list(reversed(comps))).competition_id == 61
+
+
+def test_the_senders_own_entry_beats_a_prize_its_email_advertises():
+    comps = ENTERED + [_entered(80 + i, f"Win a family {w}") for i, w in enumerate(f"thing{j}" for j in range(40))] + [
+        _entered(80, "Win a family spa break", urls=["https://www.goodtoknow.co.uk/win/spa"], days_ago=0),
+        _entered(81, "Win a Ninja Foodi MAX Dual Zone air fryer", urls=["https://www.ninjakitchen.co.uk/win"],
+                 days_ago=45)]
+    conf = _mail("Goodto <competitions@goodtoknow.co.uk>", "Please confirm your entry",
+                 "Thanks for entering our family competition. Click the link below to confirm. More chances to win "
+                 "this week: a Ninja Foodi MAX Dual Zone air fryer")
+    assert classify(conf, comps).competition_id == 80

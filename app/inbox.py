@@ -161,10 +161,6 @@ def parse_message(raw: bytes, folder: str, own_addr: str | None = None) -> Parse
     )
 
 
-def _prize_tokens(text: str) -> set[str]:
-    return {w for w in re.findall(r"[a-z0-9£']{3,}", (text or "").lower()) if w not in STOP}
-
-
 def _comp_domains(c) -> set[str]:
     domains = {registrable_domain(u) for u in (c.entry_urls or [])} | {c.promoter_domain or ""}
     if c.email_to:
@@ -173,20 +169,21 @@ def _comp_domains(c) -> set[str]:
     return domains
 
 
-def match_competition(m: ParsedMail, comps: list) -> tuple[object | None, float]:
-    """comps: Competition rows the user has entered. Returns best (comp, score)."""
-    hay = (m.subject + " " + m.text[:4000]).lower()
-    hay_tokens = set(re.findall(r"[a-z0-9£']{3,}", hay))
-    best, best_score = None, 0.0
-    for c in comps:
-        score = 0.0
-        if m.from_domain and m.from_domain in _comp_domains(c):
-            score += 3
-        overlap = _prize_tokens(c.prize or c.title) & hay_tokens
-        score += min(len(overlap) * 0.6, 3)
-        if score > best_score:
-            best, best_score = c, score
-    return (best, best_score) if best_score >= 2.4 else (None, best_score)
+def match_competition(m: ParsedMail, comps: list, index: "CompIndex | None" = None) -> tuple[object | None, float]:
+    """The competition you entered that a newly arrived email is about, to link it to: the likeliest of your entries
+    from the sender's own site (not a free email address), as before; with none, compbot's guess when it's a clear
+    favourite (the one the Inbox would tick for you). Returns (comp or None, score).
+
+    The sender's own site comes first because its emails often advertise its other prizes ("Thanks for entering our
+    family competition... more chances to win an air fryer"): a strong match on one of those is still not the entry
+    this confirmation is for. The email's date doesn't rule an entry out here: it has only just arrived, and you may
+    press "I've entered it" after the confirmation email comes."""
+    g = (index if index is not None else CompIndex(comps)).rank(m.subject, m.text, m.from_domain, m.from_name,
+                                                                 None, limit=1)
+    pick = g.from_site or (g.guesses[0] if g.confident else None)
+    if pick:
+        return pick.comp, pick.score
+    return None, (g.guesses[0].score if g.guesses else 0.0)
 
 
 def _found(res: list[re.Pattern], *texts: str) -> list[str]:
@@ -203,7 +200,8 @@ def _found(res: list[re.Pattern], *texts: str) -> list[str]:
     return out
 
 
-def classify(m: ParsedMail, comps: list) -> Classification:
+def classify(m: ParsedMail, comps: list, index: "CompIndex | None" = None) -> Classification:
+    """index: comps already indexed (once per Gmail check, rather than once per email)."""
     subject, body = m.subject, m.text[:6000]
     signals: list[str] = []
 
@@ -225,7 +223,7 @@ def classify(m: ParsedMail, comps: list) -> Classification:
     conf = hits(CONFIRM_RES, subject + " " + body[:3000])
     ack = hits(ACK_RES, subject + " " + body[:2000])
     scam = hits(SCAM_RES, subject + " " + body)
-    comp, match_score = match_competition(m, comps)
+    comp, match_score = match_competition(m, comps, index)
 
     win_score = 2.5 * len(win_s) + 1.5 * len(win_b) - 1.0 * len(promo) - 3 * len(loss)
     if comp:
@@ -341,7 +339,7 @@ def explain(subject: str, text: str, from_domain: str, comp=None, category: str 
             ex.why.append(f"it says {_quoted(wins)}")
         if scams and category != "scam_suspect":
             ex.why.append(f"but it also mentions {_quoted(scams)}, which are scam warning signs")
-        if promos and category == "possible_win":
+        if promos and category in ("possible_win", "won"):
             ex.why.append(f"it also reads a bit like marketing ({_quoted(promos, 2)})")
         quote_from = scams + wins if category == "scam_suspect" else wins + scams + losses
     for sig in signals or []:
@@ -351,8 +349,12 @@ def explain(subject: str, text: str, from_domain: str, comp=None, category: str 
                           else f"the AI check filed it as {sig[4:].split(' ')[0].replace('_', ' ')}")
     ex.quote_before, ex.quote_hit, ex.quote_after = _sentence(text, quote_from)
     if comp is not None:
-        if from_domain and from_domain in _comp_domains(comp):
+        doms = _comp_domains(comp) - FREEMAIL
+        brand = sorted(d for d in doms if _same_brand(_site_label(from_domain), _site_label(d))) if from_domain else []
+        if from_domain and from_domain in doms:
             ex.match.append(f"it's from the competition's site ({from_domain})")
+        elif from_domain not in FREEMAIL and brand:
+            ex.match.append(f"the sender, {from_domain}, looks like the competition's site ({brand[0]})")
         hay = set(re.findall(r"[a-z0-9£']{3,}", (subject + " " + text[:4000]).lower()))
         words = [w for w in dict.fromkeys(re.findall(r"[a-z0-9£']{3,}", (comp.prize or comp.title or "").lower()))
                  if w not in STOP and w in hay]
@@ -373,6 +375,9 @@ GENERIC_LABELS = {"mail", "email", "news", "info", "comp", "comps", "competition
                   "media", "marketing", "promo", "promos", "promotions", "offers", "rewards", "club", "home"}
 GUESS_MIN = 1.5               # a weaker guess isn't worth showing
 SURE_MIN, SURE_LEAD = 4.0, 1.5  # ticked for you only when this strong and this far ahead of the next one
+# An entry first made this long after an email's date can't be what it's about. Not less: you may press "I've
+# entered it" in the manual queue days after entering, and some senders date an email when they wrote it.
+ENTERED_AFTER = timedelta(days=7)
 
 
 @dataclass
@@ -388,6 +393,7 @@ class Guesses:
     confident: bool = False  # the first is a clear favourite
     pool: int = 0            # how many competitions you entered were considered
     tick: bool = False       # the Inbox ticks the favourite for you (set by the page: it depends on the email)
+    from_site: Guess | None = None  # the likeliest of your entries from the sender's own site, if any
 
 
 def _plain(text: str) -> str:
@@ -492,19 +498,24 @@ class CompIndex:
         for w in ctx.named_words:
             cands.update({id(c): c for c in self._by_word[w]})
 
-        scored: list[tuple[float, datetime, int]] = []
+        scored: list[tuple[float, datetime, int, int]] = []
         for k, c in cands.items():
             if exclude is not None and getattr(c, "id", None) == exclude:
                 continue
             first = getattr(c, "entered_at", None) or self._when(c)
-            if received_at and first and first > received_at + timedelta(days=1):
-                continue  # entered after the email came: it can't be about this one
-            scored.append((self._score(k, c, ctx)[0], self._when(c) or datetime.min, k))
+            if received_at and first and first > received_at + ENTERED_AFTER:
+                continue  # entered well after the email came: it can't be about this one
+            # Ties go to the most recent entry (a confirmation email follows the entry just made), then the newest.
+            scored.append((self._score(k, c, ctx)[0], self._when(c) or datetime.min, getattr(c, "id", 0) or 0, k))
         best = heapq.nlargest(max(limit, 2), scored)
         top = [Guess(cands[k], round(s, 2), self._score(k, cands[k], ctx, explain=True)[1])
-               for s, _, k in best[:limit] if s >= GUESS_MIN]
+               for s, _, _, k in best[:limit] if s >= GUESS_MIN]
         sure = bool(top) and top[0].score >= SURE_MIN and (len(best) < 2 or best[0][0] - best[1][0] >= SURE_LEAD)
-        return Guesses(top, sure, len(self.comps))
+        site = max((t for t in scored if sender and sender in self._doms[t[3]]), default=None)
+        from_site = None
+        if site:
+            from_site = Guess(cands[site[3]], round(site[0], 2), self._score(site[3], cands[site[3]], ctx, True)[1])
+        return Guesses(top, sure, len(self.comps), from_site=from_site)
 
     def _score(self, k: int, c, ctx, explain: bool = False) -> tuple[float, list[str]]:
         """How likely the email is about competition c, and (only when asked, as it's slower) why in words."""

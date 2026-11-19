@@ -318,7 +318,21 @@ def init_db(url: str | None = None) -> None:
     Base.metadata.create_all(_engine)
     _add_missing_columns(_engine)
     _backfill_listings(_engine)
+    _file_confirmed_wins(_engine)
     _SessionLocal = sessionmaker(bind=_engine, expire_on_commit=False)
+
+
+def _file_confirmed_wins(engine) -> None:
+    """Emails you confirmed as wins used to stay under "possible win" in the Inbox: file them under "won". That's the
+    ones whose competition is won, and the ones you confirmed without linking a competition (reviewed, unlinked:
+    nothing else in the Inbox marks a possible win reviewed and leaves it there)."""
+    from sqlalchemy import text
+
+    with engine.begin() as conn:
+        conn.execute(text(
+            "UPDATE emails SET category = 'won', reviewed = 1 WHERE category = 'possible_win' AND ("
+            "(reviewed = 1 AND competition_id IS NULL) OR "
+            "competition_id IN (SELECT id FROM competitions WHERE outcome = 'won'))"))
 
 
 def _backfill_listings(engine) -> None:
