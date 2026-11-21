@@ -10,7 +10,7 @@
     {% if c.is_daily %}<span class="badge">daily</span>{% endif %}
     {% if c.is_multi %}<span class="badge">{{ c.entry_urls|length }} sites</span>{% endif %}
     {% if c.needs_review %}<span class="badge b-warn">check entry</span>{% endif %}
-    <div class="small muted">{{ c.status_reason[:140] }}</div></td>
+    <div class="small muted">{% set site = comp_site(c) %}{{ site }}{% if site and c.status_reason %} · {% endif %}{{ c.status_reason[:140] }}</div></td>
   <td class="nowrap">{{ c.closes_label }}<div class="small muted">{{ c.closes_on | days_left }}</div></td>
   <td class="hide-sm">{{ badge(c.method) }}</td>
   <td>{{ badge(c.status) }}</td>

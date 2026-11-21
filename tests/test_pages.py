@@ -185,3 +185,80 @@ def test_a_win_you_confirm_leaves_the_possible_win_tab():
     with session_scope() as s:
         assert [s.get(Email, i).category for i in eids[:2]] == ["won", "other"]
         assert all(s.get(Email, i).reviewed for i in eids[:2])
+
+
+def _comp(i, title, urls=(), closes=None, status="manual"):
+    from datetime import date
+    from types import SimpleNamespace
+    return SimpleNamespace(id=i, title=title, prize=re.sub(r"^E: \S+ (\(MD\) )?", "", title),
+                           entry_urls=list(urls), promoter_domain=None, status=status,
+                           closes_on=closes or date(2026, 11, 21))
+
+
+def test_closing_soon_shows_one_row_per_prize_with_its_sites():
+    from datetime import date
+
+    from app.main import closing_rows
+    hb = "tickets_to_south_east_homebuilding__renovating_show"
+    comps = [
+        _comp(216, "E: 21/11 (MD) Win tickets to South East Homebuilding & Renovating Show in Farnborough",
+              [f"https://comps.marieclaire.co.uk/competition/{hb}_marieclaire/123703.php"]),
+        _comp(220, "E: 21/11 (MD) Win tickets to South East Homebuilding & Renovating Show + an e-book x10, Farnborough",
+              [f"https://competitions.goodto.com/competition/{hb}_goodtoknow/123700.php",
+               f"https://comps.pickmypostcode.com/competition/{hb}_pickmypostcode/123704.php"]),
+        _comp(231, "E: 21/11 (MD) Win tickets to South East Homebuilding & Renovating Show",
+              [f"https://comps.trustedreviews.com/competition/{hb}_trustedreviews/123707.php"], status="queued"),
+        _comp(240, "E: 21/11 (MD) Win 6 Months' Worth of Bio&Me x Bowel Cancer UK Breakfasts",
+              ["https://comps.celebsnow.co.uk/competition/x/1.php", "https://comps.whatsontv.co.uk/competition/x/2.php"]),
+        _comp(247, "E: 21/11 Win a family ticket to see Beauty and the Beast at Leatherhead Theatre",
+              ["https://vantagepointmag.co.uk/a"]),
+        _comp(251, "E: 21/11 Win a family ticket to see Beauty and the Beast at Godalming", ["https://vantagepointmag.co.uk/b"]),
+        _comp(300, "E: 21/11 Win a £100 Dobbies Garden Centre gift voucher", ["https://a.example/1"]),
+        _comp(301, "E: 21/11 Win a £200 Dobbies Garden Centre gift voucher", ["https://b.example/1"]),
+        _comp(2388, "E: 21/11 Win £50"),
+        _comp(2389, "E: 21/11 Win £50"),
+        _comp(3000, "E: 22/11 Win tickets to South East Homebuilding & Renovating Show", ["https://c.example/1"],
+              closes=date(2026, 11, 22)),
+    ]
+    rows = closing_rows(comps)
+    show = rows[0]
+    assert show["name"] == "Win tickets to South East Homebuilding & Renovating Show"
+    assert show["note"] == "3 listings on 4 sites" and show["statuses"] == ["manual", "queued"]
+    assert show["href"] == "/competitions?sort=closing&ids=216,220,231"
+    assert rows[1]["note"] == "On 2 sites" and rows[1]["href"] == "/competitions/240"
+    assert [r["note"] for r in rows[2:4]] == ["vantagepointmag.co.uk"] * 2  # different shows stay apart
+    assert [r["href"] for r in rows[4:6]] == ["/competitions/300", "/competitions/301"]  # different £ amounts
+    assert [r["href"] for r in rows[6:8]] == ["/competitions/2388", "/competitions/2389"] and rows[6]["note"] == ""
+    assert len(rows) == 8  # the 22 Nov show is another round, and there's no room left for it
+    # Once the card is full, more listings of a prize already shown still join its row.
+    late = _comp(3001, "E: 21/11 (MD) Win tickets to South East Homebuilding & Renovating Show",
+                 ["https://comps.stuff.tv/competition/x/9.php"])
+    assert closing_rows(comps[:10] + [late])[0]["note"] == "4 listings on 5 sites"
+
+
+def test_competitions_page_lists_the_listings_picked_on_the_dashboard_and_win_rate_counts_every_entry():
+    from sqlalchemy import func, or_, select
+
+    from app.db import Competition, init_db, session_scope
+    from app.main import app
+    init_db()
+    with session_scope() as s:
+        picked = [Competition(source="test", source_id=f"ids-{i}", thread_url="x", title=f"Win a picked lamp {i}",
+                              method="web_form", status="manual", entry_urls=[f"https://lamp{i}.example/win"])
+                  for i in range(2)]
+        other = Competition(source="test", source_id="ids-other", thread_url="x", title="Win a picked lamp 9",
+                            method="web_form", status="entered", entry_count=1, outcome="won")
+        s.add_all(picked + [other])
+        s.flush()
+        a, b, o = picked[0].id, picked[1].id, other.id
+    with TestClient(app) as client:
+        page = client.get(f"/competitions?ids={a},{b}&sort=closing", headers=H).text
+        assert f'href="/competitions/{a}"' in page and f'href="/competitions/{b}"' in page
+        assert f'href="/competitions/{o}"' not in page and f'name="ids" value="{a},{b}"' in page
+        assert "lamp0.example" in page  # each row names its site
+        dash = client.get("/", headers=H).text
+    with session_scope() as s:
+        entered = s.scalar(select(func.count(Competition.id)).where(
+            or_(Competition.status == "entered", Competition.entry_count > 0)))
+        won = s.scalar(select(func.count(Competition.id)).where(Competition.outcome == "won"))
+    assert f"{100 * won / entered:.1f}%" in dash and f"{won} won of {entered} entered" in dash

@@ -23,7 +23,8 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.exc import OperationalError
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from . import __version__, inbox, jobs
+from . import __version__, dedup, inbox, jobs
+from .analyse import registrable_domain
 from .config import DEFAULT_PROFILE, DEFAULT_SETTINGS, get_config
 from .db import (
     DISK_BUSY_MESSAGE,
@@ -250,6 +251,53 @@ def healthz():
 
 # --------------------------------------------------------------------------- dashboard
 
+CLOSING_ROWS = 8
+
+
+def closing_rows(comps, limit: int = CLOSING_ROWS) -> list[dict]:
+    """The dashboard's "Closing soon" rows from comps sorted by closing date: one row per prize, naming its sites.
+    MSE posts an (MD) giveaway once per batch of magazine sites, each site its own entry, so one prize can be ten
+    competitions closing the same day. Two count as the same prize when they close the same day, every word of one
+    title (3 or more) is in the other, and they don't name different £ amounts."""
+    rows: list[dict] = []
+    for c in comps:
+        toks, money = dedup.title_tokens(c.title), dedup.money_amounts(c.title)
+        row = None
+        if len(toks) >= 3:
+            row = next((r for r in rows if r["closes_on"] == c.closes_on and len(r["core"]) >= 3
+                        and (r["core"] <= toks or toks <= r["core"])
+                        and not (money and r["money"] and not money & r["money"])), None)
+        if row is None:
+            if len(rows) >= limit:
+                if c.closes_on != rows[-1]["closes_on"]:
+                    break  # later comps can't join a row any more
+                continue
+            row = {"closes_on": c.closes_on, "core": toks, "money": set(), "comps": []}
+            rows.append(row)
+        else:
+            row["core"] &= toks
+        row["money"] |= money
+        row["comps"].append(c)
+    out = []
+    for r in rows:
+        group = r["comps"]
+        sites: list[str] = []
+        for c in group:
+            doms = [d for d in dict.fromkeys(registrable_domain(u) for u in (c.entry_urls or [])) if d]
+            sites += [d for d in (doms or [inbox.comp_site(c)]) if d and d not in sites]
+        first = min(group, key=lambda c: len(c.prize or c.title))
+        on = f"{len(sites)} sites" if len(sites) > 1 else "".join(sites)
+        if len(group) > 1:
+            href = "/competitions?sort=closing&ids=" + ",".join(str(c.id) for c in group)
+            note = f"{len(group)} listings" + (f" on {on}" if on else "")
+        else:
+            href = f"/competitions/{first.id}"
+            note = f"On {on}" if len(sites) > 1 else on
+        out.append({"name": first.prize or first.title, "href": href, "note": note, "closes_on": r["closes_on"],
+                    "statuses": list(dict.fromkeys(c.status for c in group))})
+    return out
+
+
 @app.get("/", response_class=HTMLResponse)
 def dashboard(request: Request):
     today = jobs.today_local()
@@ -274,8 +322,7 @@ def dashboard(request: Request):
                                .where(EntryAttempt.mode == "manual", EntryAttempt.result == "entered")) or 0,
             "won_value": s.scalar(select(func.sum(Competition.prize_value)).where(Competition.outcome == "won")) or 0,
         }
-        decided = stats["won"] + stats["lost"]
-        stats["win_rate"] = f"{100 * stats['won'] / decided:.1f}%" if decided else "–"
+        stats["win_rate"] = f"{100 * stats['won'] / stats['entered']:.1f}%" if stats["entered"] else "–"
         since = utcnow() - timedelta(days=29)
         rows = s.execute(select(func.date(EntryAttempt.started_at), func.count(EntryAttempt.id))
                          .where(EntryAttempt.started_at >= since,
@@ -288,9 +335,9 @@ def dashboard(request: Request):
         last_runs = {}
         for name in ("discover", "enter", "inbox", "maintenance"):
             last_runs[name] = s.scalars(select(JobRun).where(JobRun.job == name).order_by(JobRun.id.desc())).first()
-        closing = s.scalars(select(Competition).where(Competition.status.in_(["queued", "manual"]),
-                                                      Competition.closes_on >= today)
-                            .order_by(Competition.closes_on).limit(8)).all()
+        closing = closing_rows(s.scalars(select(Competition).where(Competition.status.in_(["queued", "manual"]),
+                                                                   Competition.closes_on >= today)
+                                         .order_by(Competition.closes_on, Competition.id).limit(300)).all())
         possible = s.scalars(select(Competition).where(Competition.outcome == "possible_win")).all()
         events = s.scalars(select(Event).order_by(Event.id.desc()).limit(15)).all()
         methods = s.execute(select(Competition.method, func.count(Competition.id)).group_by(Competition.method)).all()
@@ -338,10 +385,13 @@ METHODS = ["web_form", "email", "social", "widget", "account", "vote", "magazine
 
 @app.get("/competitions", response_class=HTMLResponse)
 def competitions(request: Request, status: str = "", method: str = "", outcome: str = "", q: str = "",
-                 sort: str = "posted", review: str = "", source: str = "", page: int = 1):
+                 sort: str = "posted", review: str = "", source: str = "", ids: str = "", page: int = 1):
     page = max(1, page)
+    ids = ",".join(re.findall(r"\d+", ids)[:500])
     with session_scope() as s:
         stmt = select(Competition)
+        if ids:
+            stmt = stmt.where(Competition.id.in_([int(x) for x in ids.split(",")]))
         if review:
             stmt = stmt.where(Competition.needs_review.is_(True))
         if status:
@@ -363,7 +413,7 @@ def competitions(request: Request, status: str = "", method: str = "", outcome: 
     pages = max(1, (total + 49) // 50)
     return render(request, "competitions.html", rows=rows, total=total, page=page, pages=pages,
                   f={"status": status, "method": method, "outcome": outcome, "q": q, "sort": sort, "review": review,
-                     "source": source},
+                     "source": source, "ids": ids},
                   statuses=STATUSES, outcomes=OUTCOMES, methods=METHODS, sources=SOURCE_LABELS)
 
 

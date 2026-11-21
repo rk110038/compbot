@@ -50,7 +50,7 @@
       <div><a href="/competitions/{{ c.id }}"><b>{{ c.prize or c.title }}</b></a> {{ badge(c.method) }}
         {% if why %}<span class="badge b-manual">{{ categories[why].label }}</span>{% endif %}
         {% for t in c.tags %}<span class="badge">{{ t }}</span>{% endfor %}</div>
-      <div class="small muted">Closes {{ c.closes_label }} ({{ c.closes_on | days_left }}) · {{ c.status_reason[:300] }}</div>
+      <div class="small muted">{% set site = comp_site(c) %}{% if site %}{{ site }} · {% endif %}Closes {{ c.closes_label }} ({{ c.closes_on | days_left }}) · {{ c.status_reason[:300] }}</div>
       {% if c.answers %}<div style="margin-top:6px">Answer{{ 's' if c.answers|length > 1 }}: {% for ans in c.answers %}<span class="copy" data-copy="{{ ans }}">{{ ans }}</span> {% endfor %}</div>{% endif %}
       {% if c.email_to %}<div style="margin-top:4px">Email: <span class="copy" data-copy="{{ c.email_to }}">{{ c.email_to }}</span>{% if c.email_subject %} · subject <span class="copy" data-copy="{{ c.email_subject }}">{{ c.email_subject }}</span>{% endif %}</div>{% endif %}
       {% if a and a.screenshot_before %}<details><summary class="small">Last attempt screenshot</summary><a href="/screenshots/{{ a.screenshot_before }}" target="_blank"><img src="/screenshots/{{ a.screenshot_before }}" style="max-width:420px;border-radius:6px" loading="lazy"></a></details>{% endif %}

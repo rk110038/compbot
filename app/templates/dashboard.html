@@ -16,7 +16,7 @@
   <div class="card stat"><div class="label">Manual queue</div><div class="value amber"><a href="/manual">{{ stats.manual }}</a></div></div>
   <div class="card stat"><div class="label">Won</div><div class="value gold">{{ stats.won }}</div>{% if stats.won_value %}<div class="small muted">£{{ '{:,.0f}'.format(stats.won_value) }} of prizes</div>{% endif %}</div>
   <div class="card stat"><div class="label">Lost</div><div class="value">{{ stats.lost }}</div><div class="small muted">{{ stats.pending }} awaiting result</div></div>
-  <div class="card stat"><div class="label">Win rate</div><div class="value">{{ stats.win_rate }}</div></div>
+  <div class="card stat"><div class="label">Win rate</div><div class="value">{{ stats.win_rate }}</div>{% if stats.entered %}<div class="small muted">{{ stats.won }} won of {{ stats.entered }} entered</div>{% endif %}</div>
   {% if stats.review %}<div class="card stat"><div class="label">Entries to check</div><div class="value amber"><a href="/competitions?review=1">{{ stats.review }}</a></div><div class="small muted">submitted, no confirmation seen</div></div>{% endif %}
 </div>
 
@@ -33,9 +33,9 @@
       <h2>Closing soon (not yet entered)</h2>
       <table>
         <tr><th>Competition</th><th>Closes</th><th>Status</th></tr>
-        {% for c in closing %}
-        <tr><td><a href="/competitions/{{ c.id }}">{{ c.prize or c.title }}</a></td>
-          <td class="nowrap">{{ c.closes_on | days_left }}</td><td>{{ badge(c.status) }}</td></tr>
+        {% for r in closing %}
+        <tr><td><a href="{{ r.href }}">{{ r.name }}</a>{% if r.note %}<div class="small muted">{{ r.note }}</div>{% endif %}</td>
+          <td class="nowrap">{{ r.closes_on | days_left }}</td><td>{% for st in r.statuses %}{{ badge(st) }} {% endfor %}</td></tr>
         {% else %}<tr><td colspan="3" class="muted">Nothing waiting.</td></tr>{% endfor %}
       </table>
     </div>

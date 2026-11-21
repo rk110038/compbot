@@ -17,8 +17,9 @@
     <option value="{{ k }}" {{ 'selected' if f.sort == k }}>{{ l }}</option>{% endfor %}
   </select>
   <label class="check" style="padding:0"><input type="checkbox" name="review" value="1" {{ 'checked' if f.review }}> Needs checking</label>
+  {% if f.ids %}<input type="hidden" name="ids" value="{{ f.ids }}"><span class="small muted">Only the listings picked on the dashboard</span>{% endif %}
   <button class="btn">Filter</button>
-  {% if f.q or f.status or f.method or f.outcome or f.review or f.source %}<a href="/competitions">Clear</a>{% endif %}
+  {% if f.q or f.status or f.method or f.outcome or f.review or f.source or f.ids %}<a href="/competitions">Clear</a>{% endif %}
 </form>
 <div class="card" style="padding:0">
 <table>
